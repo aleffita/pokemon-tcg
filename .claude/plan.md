@@ -1,22 +1,39 @@
 # Pokémon TCG MLX Migration — Complete Implementation Plan
 
-> **Goal:** Migrate Mikaelzinho from PyTorch to MLX with full semantic correctness, Phases A–F. All work modifies existing files in-place. Git preserves history — no fear of rewriting.
+> **Goal:** Migrate Mikaelzinho from PyTorch to MLX with full semantic correctness, Phases A–F + end-to-end pipeline.
 
 ---
+
+## Progress Tracker
+
+| Phase | Status | Commits | Tests |
+|-------|--------|---------|-------|
+| Pre-Flight | ✅ Done | 1 | — |
+| A — Canonical Contract | ✅ Done | 5 | 10/10 |
+| B — Semantic P0 Fixes | ✅ Done | 2 | 7/7 |
+| C — FP16-Native Trainer | ✅ Done | 1 | 7/7 |
+| D — Data & Shapes | ✅ Done | 1 | 11/11 |
+| E — Inference Semantics | ⬜ Pending | — | — |
+| F — Minimal Recurrence | ⬜ Pending | — | — |
+| Pipeline — Build + Train | ⬜ Pending | — | — |
+| Submission | ⬜ Pending | — | — |
 
 ## Execution Rules
 
-1. **Modify existing files.** `rl/policy_mlx.py`, `scripts/bc/bc_train_mlx.py`, `agent/main.py` are edited in-place at each phase. No parallel trainers, no "v2" copies.
-2. **One new module allowed:** `rl/token_schema.py` (canonical token-type IDs — genuinely new architectural concern).
-3. **Tests go in `scripts/validate/`** — the existing validation directory. One file per phase: `test_phase_a.py`, `test_phase_b.py`, etc. Plus targeted files for specific fixes.
-4. **Synthetic data generator** is a reusable script `scripts/validate/make_synthetic_data.py`, not a fixture framework.
-5. **Sequential agents on `develop` branch.** Each agent commits, next agent starts from that commit.
-6. **`uv run` for everything.** No raw `python`/`python3`.
-7. **Smoke test after every task:** the agent runs the relevant validation before committing.
+1. **Modify existing files.** `rl/policy_mlx.py`, `scripts/bc/bc_train_mlx.py`, `agent/main.py` are edited in-place. No parallel trainers, no "v2" copies.
+2. **Tests go in `scripts/validate/`**.
+3. **Sequential agents on `develop` branch.** Each agent commits, next starts from that commit.
+4. **`uv run` for everything.** No raw `python`/`python3`.
+5. **Use real data only.** No synthetic mocks. Smoke tests limit volume via `configs/smoke.json` (`max_episodes`, `max_rows`).
+6. **Config hierarchy:** CLI args > `--config` file > `configs/train_config.json` > hardcoded defaults.
+7. **Entrypoints:** `tcg-data`, `tcg-build-bc`, `tcg-build-daily`, `tcg-train`, `tcg-evaluate`, `tcg-tournament`, `tcg-submission`.
+8. **No PyTorch fallback** in agent or trainer. MLX-only.
+9. **No sys.path hacks** (except Kaggle sandbox compat in `agent/main.py`).
+10. **Consult wikifita** for project context and uv best practices.
 
 ---
 
-## Pre-Flight: Branch + Environment
+## Pre-Flight: Branch + Environment ✅
 
 **Agent 0 — Branch Init**
 - Create `develop` from `main`
@@ -27,7 +44,7 @@
 
 ---
 
-## Phase A — Canonical Contract
+## Phase A ✅ — Canonical Contract
 
 ### A.1 — Token Schema Module
 
@@ -91,7 +108,7 @@
 
 ---
 
-## Phase B — Semantic P0 Fixes
+## Phase B ✅ — Semantic P0 Fixes
 
 ### B.1 — Additive Attention Mask
 
@@ -171,7 +188,7 @@
 
 ---
 
-## Phase C — FP16-Native Trainer
+## Phase C ✅ — FP16-Native Trainer
 
 ### C.1 — Remove FP16→FP32 Round-Trip
 
@@ -246,7 +263,7 @@
 
 ---
 
-## Phase D — Data and Shapes
+## Phase D ✅ — Data and Shapes
 
 ### D.1 — Option Bucket Compaction
 
@@ -294,7 +311,7 @@
 
 ---
 
-## Phase E — Inference Semantics
+## Phase E ⬜ — Inference Semantics
 
 ### E.1 — Complete Logs in Agent
 
@@ -342,7 +359,7 @@
 
 ---
 
-## Phase F — Minimal Recurrence
+## Phase F ⬜ — Minimal Recurrence
 
 ### F.1 — Memory API in Model
 
@@ -392,7 +409,7 @@
 
 ---
 
-## Final — Smoke Training
+## Final ⬜ — Smoke Training
 
 **Agent FINAL**
 
