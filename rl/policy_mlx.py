@@ -107,12 +107,14 @@ class TokenTransformerMLX(nn.Module):
         self.card_emb: nn.Embedding = nn.Embedding(vocab_size + 1, d_model)
 
         # Static card features (optional)
+        # Stored as numpy — invisible to nn.Module's parameter tree, so the
+        # optimizer will never touch these domain-data tables.
         self.static_proj: nn.Linear | None = None
-        self.card_feat: mx.array | None = None
+        self._card_feat_np: np.ndarray | None = None
         if card_feat is not None:
             _f = np.zeros((vocab_size + 1, card_feat.shape[1]), dtype=np.float32)
             _f[:card_feat.shape[0]] = card_feat
-            self.card_feat = mx.array(_f)
+            self._card_feat_np = _f
             self.static_proj = nn.Linear(card_feat.shape[1], d_model)
 
         # Structured action head (verb-conditioned scoring)
@@ -161,7 +163,10 @@ class TokenTransformerMLX(nn.Module):
             self.value_atoms: int = int(value_atoms)
             self.value_vmax: float = float(value_vmax)
             self.value_head: nn.Linear = nn.Linear(v_in, self.value_atoms)
-            self.atom_support: mx.array = mx.linspace(-value_vmax, value_vmax, value_atoms)
+            # Stored as numpy — invisible to optimizer, domain constant
+            self._atom_support_np: np.ndarray = np.linspace(
+                -value_vmax, value_vmax, value_atoms, dtype=np.float32
+            )
         else:
             self.value_head: nn.Linear = nn.Linear(v_in, 1)
 
@@ -174,9 +179,10 @@ class TokenTransformerMLX(nn.Module):
 
     def _static(self, ids: mx.array) -> mx.array:
         """Static card features projection. Returns zeros if disabled."""
-        if self.static_proj is None:
+        if self.static_proj is None or self._card_feat_np is None:
             return mx.zeros((*ids.shape, self.d))
-        return self.static_proj(self.card_feat[ids])
+        # Convert from numpy at lookup time — avoids training the domain table
+        return self.static_proj(mx.array(self._card_feat_np[np.asarray(ids)]))
 
     def _card_emb(self, ids: mx.array) -> mx.array:
         """Embed with padding_idx=0 semantics: id=0 returns zero vector."""
@@ -458,7 +464,12 @@ class TokenTransformerMLX(nn.Module):
             v_in = extra[0]
         else:
             v_in = mx.concatenate([cls_out, pooled], axis=-1)
-        value = self.value_head(v_in).squeeze(-1)  # [B]
+        if self.value_categorical:
+            atom_logits = self.value_head(v_in)  # [B, n_atoms]
+            probs = mx.softmax(atom_logits, axis=-1)
+            value = (probs * mx.array(self._atom_support_np)).sum(axis=-1)  # [B]
+        else:
+            value = self.value_head(v_in).squeeze(-1)  # [B]
 
         # Full logits: [B, N_ACTIONS]
         logits = mx.concatenate([opt_logits, submit_logit], axis=-1)
@@ -476,6 +487,10 @@ class TokenTransformerMLX(nn.Module):
             v_in = extra[0]
         else:
             v_in = mx.concatenate([cls_out, pooled], axis=-1)
+        if self.value_categorical:
+            atom_logits = self.value_head(v_in)
+            probs = mx.softmax(atom_logits, axis=-1)
+            return (probs * mx.array(self._atom_support_np)).sum(axis=-1)
         return self.value_head(v_in).squeeze(-1)
 
     def get_action_and_value(

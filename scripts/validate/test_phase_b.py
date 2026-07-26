@@ -212,24 +212,30 @@ def test_padding_idx_zero():
 # ---------------------------------------------------------------------------
 
 def test_static_tables_unchanged():
-    """Run one optimizer step and verify card_feat can be restored.
+    """Run one optimizer step and verify card_feat is NOT in the parameter tree.
 
-    card_feat is domain data (immutable buffer). MLX treats mx.array module
-    attributes as trainable parameters, so the optimizer updates card_feat.
-    The checkpoint must preserve the original card_feat. This test verifies
-    that card_feat can be round-tripped: save original, run step, restore.
+    card_feat is domain data (immutable buffer). B.4 fix stores it as numpy
+    (invisible to nn.Module), so the optimizer must never touch it.
     """
     ct = get_card_table()
     model = build_token_net_mlx(ct, CANONICAL_CFG)
 
-    if model.card_feat is None:
+    if model._card_feat_np is None:
         print("  SKIP: static tables disabled in this config")
         return
 
-    # Snapshot card_feat
-    orig_feat = np.array(model.card_feat)
+    # Snapshot the numpy backing array
+    orig_feat = model._card_feat_np.copy()
 
-    # One forward-backward-update
+    # Verify card_feat is NOT in model.parameters()
+    params = dict(nn.utils.tree_flatten(model.parameters()))
+    for key in params:
+        assert "card_feat" not in key, (
+            f"card_feat found in parameters under key '{key}' — "
+            f"should be numpy-backed, not a trainable parameter"
+        )
+
+    # Run one forward-backward-update
     tmpdir = _make_synthetic_dir()
     try:
         ob, yb = _load_batch(tmpdir, BATCH_SIZE)
@@ -243,20 +249,18 @@ def test_static_tables_unchanged():
         optimizer.update(model, grads)
         mx.eval(model.parameters())
 
-        # card_feat was updated by optimizer (known MLX limitation)
-        new_feat = np.array(model.card_feat)
-        max_diff = np.abs(orig_feat - new_feat).max()
-        # Restore card_feat (simulates checkpoint restore of immutable buffer)
-        model.card_feat = mx.array(orig_feat)
-        mx.eval(model.card_feat)
-
-        restored_feat = np.array(model.card_feat)
-        restore_diff = np.abs(orig_feat - restored_feat).max()
-        assert restore_diff < 1e-7, (
-            f"card_feat failed to restore: diff={restore_diff}"
+        # card_feat must be unchanged (it's numpy, optimizer can't touch it)
+        after_feat = model._card_feat_np
+        max_diff = np.abs(orig_feat - after_feat).max()
+        assert max_diff < 1e-10, (
+            f"card_feat changed by optimizer despite being numpy-backed: diff={max_diff}"
         )
-        print(f"  PASS: card_feat round-trip OK "
-              f"(changed_by_optimizer={max_diff:.2e}, restored_diff={restore_diff:.2e})")
+        # Verify _static() still works (numpy → mx.array conversion)
+        ids = mx.array([[1, 5, 0]], dtype=mx.int32)
+        static_out = model._static(ids)
+        mx.eval(static_out)
+        assert np.all(np.isfinite(np.asarray(static_out))), "_static() returned non-finite"
+        print(f"  PASS: card_feat immutable (diff after optimizer={max_diff:.2e})")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -349,6 +353,76 @@ def test_backward_finite():
 
 
 # ---------------------------------------------------------------------------
+# Test 7: Categorical value head returns scalar in [-vmax, vmax]
+# ---------------------------------------------------------------------------
+
+def test_categorical_value():
+    """Build model with value_categorical=True, verify value is scalar in [-vmax, vmax]."""
+    cfg = dict(CANONICAL_CFG)
+    cfg["value_categorical"] = True
+    cfg["value_atoms"] = 51
+    cfg["value_vmax"] = 1.0
+
+    ct = get_card_table()
+    model = build_token_net_mlx(ct, cfg)
+    model.eval()
+
+    # Verify atom_support is numpy-backed (not in parameters)
+    assert model._atom_support_np is not None, "atom_support should be numpy-backed"
+    params = dict(nn.utils.tree_flatten(model.parameters()))
+    for key in params:
+        assert "atom_support" not in key, (
+            f"atom_support found in parameters under key '{key}' — "
+            f"should be numpy-backed, not a trainable parameter"
+        )
+
+    # Verify shape: linspace(-vmax, vmax, n_atoms)
+    as_np = model._atom_support_np
+    assert as_np.shape == (51,), f"atom_support shape {as_np.shape}, expected (51,)"
+    assert abs(as_np[0] - (-1.0)) < 1e-6, f"atom_support[0]={as_np[0]}, expected -1.0"
+    assert abs(as_np[-1] - 1.0) < 1e-6, f"atom_support[-1]={as_np[-1]}, expected 1.0"
+
+    tmpdir = _make_synthetic_dir()
+    try:
+        ob, yb = _load_batch(tmpdir, BATCH_SIZE)
+
+        # Forward: logits_value
+        logits, value = model.logits_value(ob)
+        value_np = np.asarray(value)
+        assert value.shape == (BATCH_SIZE,), (
+            f"categorical value shape {value.shape}, expected ({BATCH_SIZE},)"
+        )
+        assert np.all(np.isfinite(value_np)), (
+            f"categorical value non-finite: nan={np.isnan(value_np).sum()}"
+        )
+        assert np.all(value_np >= -cfg["value_vmax"] - 0.01), (
+            f"categorical value below -vmax: min={value_np.min()}"
+        )
+        assert np.all(value_np <= cfg["value_vmax"] + 0.01), (
+            f"categorical value above +vmax: max={value_np.max()}"
+        )
+
+        # Forward: get_value (must also return scalar expectation)
+        v2 = model.get_value(ob)
+        v2_np = np.asarray(v2)
+        assert v2.shape == (BATCH_SIZE,), (
+            f"get_value shape {v2.shape}, expected ({BATCH_SIZE},)"
+        )
+        assert np.all(np.isfinite(v2_np)), "get_value non-finite"
+        assert np.all(v2_np >= -cfg["value_vmax"] - 0.01), (
+            f"get_value below -vmax: min={v2_np.min()}"
+        )
+        assert np.all(v2_np <= cfg["value_vmax"] + 0.01), (
+            f"get_value above +vmax: max={v2_np.max()}"
+        )
+
+        print(f"  PASS: categorical value scalar in [-1, 1] "
+              f"range=[{value_np.min():.4f}, {value_np.max():.4f}]")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -359,6 +433,7 @@ ALL_TESTS = [
     ("static_tables_unchanged", test_static_tables_unchanged),
     ("forward_finite", test_forward_finite),
     ("backward_finite", test_backward_finite),
+    ("categorical_value", test_categorical_value),
 ]
 
 

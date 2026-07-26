@@ -372,9 +372,10 @@ def main() -> None:
             lg, _ = model.logits_value(ob)
             lg_np = np.asarray(lg)
             yb_np = np.asarray(yb)
-            # Cross-entropy loss manually
-            log_probs = np.log(np.clip(lg_np[np.arange(len(yb_np)), yb_np], 1e-8, 1.0))
-            vloss += float(-log_probs.mean()) * len(yb_np)
+            # Proper cross-entropy: -(logit[label] - logsumexp(logits))
+            logsumexp = np.logaddexp.reduce(lg_np, axis=1)
+            ce = -(lg_np[np.arange(len(yb_np)), yb_np] - logsumexp)
+            vloss += float(ce.mean()) * len(yb_np)
             tot += len(yb_np)
             top3 = np.argsort(-lg_np, axis=1)[:, :3]
             correct = (np.argmax(lg_np, axis=1) == yb_np)
