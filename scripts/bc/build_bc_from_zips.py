@@ -4,7 +4,7 @@ Streams episode json straight out of .zip files (no full unzip), processes them 
 reuses the OFF-BY-ONE-FIXED rows_from_episode from build_bc_dataset.py (so the label fix + the
 self-validating tripwire apply unchanged).
 
-BATCH PROCESSING: episodes are processed in fixed-size batches (BC_FLUSH, default 200). Each
+BATCH PROCESSING: episodes are processed in fixed-size batches (bc_flush, default 200). Each
 batch submits only its episodes to the Pool, collects all results, flushes to a numbered shard
 directory, and frees memory BEFORE the next batch starts. This bounds peak RAM to one batch of
 results (~30k rows) regardless of total dataset size.
@@ -15,10 +15,9 @@ at episode 4000 (shard 20) can be resumed by re-running the same command; shards
 and only the remaining episodes are processed.
 
   uv run tcg-build-bc OUT ZIP1 [ZIP2 ...]
-Env: BC_WORKERS     (default 8),  BC_CAP_EPS (default 0 = all),
-     BC_FLUSH       (default 200 episodes per batch/shard),
-     BC_EP_TIMEOUT  (default 60s per episode).
+  uv run tcg-build-bc --config configs/smoke.json OUT ZIP1 [ZIP2 ...]
 """
+import argparse
 import os
 import sys
 import json
@@ -38,13 +37,26 @@ if _PROJECT_ROOT not in sys.path:
 _argv = sys.argv
 sys.argv = [_argv[0]]
 from scripts.bc import build_bc_dataset as B   # B.rows_from_episode (off-by-one fixed), B.enc
+from rl.train_config import load_config
 sys.argv = _argv
 
-OUT = sys.argv[1]
-ZIPS = sys.argv[2:]
-WORKERS = int(os.environ.get("BC_WORKERS", "8"))
-CAP = int(os.environ.get("BC_CAP_EPS", "0"))
-FLUSH = int(os.environ.get("BC_FLUSH", "200"))
+
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Build BC dataset from zipped Kaggle replay archives"
+    )
+    p.add_argument("out", help="Output directory or .npz file")
+    p.add_argument("zips", nargs="+", help="Zip file(s) containing replay episodes")
+    p.add_argument("--config", default=None, help="Path to JSON config file")
+    p.add_argument("--workers", type=int, default=None,
+                   help="Number of worker processes (default: config or 8)")
+    p.add_argument("--max-episodes", type=int, default=None,
+                   help="Max episodes to process (0 = all, default: config or 0)")
+    p.add_argument("--flush", type=int, default=None,
+                   help="Episodes per batch/shard (default: config or 200)")
+    p.add_argument("--ep-timeout", type=float, default=None,
+                   help="Seconds per episode before timeout (default: config or 60)")
+    return p.parse_args()
 
 
 def _job(arg):
@@ -191,6 +203,27 @@ def _merge_shards(shard_dir, out_path, n_shards):
 # ---------------------------------------------------------------------------
 
 def main():
+    args = parse_args()
+    OUT = args.out
+    ZIPS = args.zips
+
+    # Load config: CLI > config file > defaults
+    cli = {}
+    if args.workers is not None:
+        cli["bc_workers"] = args.workers
+    if args.max_episodes is not None:
+        cli["max_episodes"] = args.max_episodes
+    if args.flush is not None:
+        cli["bc_flush"] = args.flush
+    if args.ep_timeout is not None:
+        cli["bc_ep_timeout"] = args.ep_timeout
+    cfg = load_config(cli_overrides=cli, config_path=args.config)
+
+    WORKERS = cfg.bc_workers
+    CAP = cfg.max_episodes
+    FLUSH = cfg.bc_flush
+    TIMEOUT = float(cfg.bc_ep_timeout)
+
     tasks = []
     for zp in ZIPS:
         with zipfile.ZipFile(zp) as z:
@@ -205,7 +238,6 @@ def main():
 
     int_keys = set(B.enc.int_keys)
     shard_dir = (OUT.rstrip(".npz") if OUT.endswith(".npz") else OUT) + "_shards"
-    TIMEOUT = float(os.environ.get("BC_EP_TIMEOUT", "60"))
 
     # ---- RESUME: count already-completed shards ----
     resumed = 0

@@ -1,0 +1,15 @@
+{
+  "max_episodes": 10,
+  "max_rows": 1000,
+  "epochs": 1,
+  "batch_size": 32,
+  "slab_rows": 500,
+  "accum_steps": 1,
+  "val_frac": 0.1,
+  "d_model": 128,
+  "nhead": 4,
+  "nlayers": 3,
+  "static": true,
+  "split_heads": true,
+  "seed": 0
+}

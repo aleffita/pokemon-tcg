@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_CONFIG_PATH = "config.json"
+DEFAULT_CONFIG_PATH = "configs/train_config.json"
 
 # Fields that map to different CLI flag names
 _FIELD_TO_FLAG = {
@@ -33,6 +33,11 @@ _FIELD_TO_FLAG = {
     "kaggle_competition": "kaggle-competition",
     "slab_rows": "slab-rows",
     "val_frac": "val-frac",
+    "bc_workers": "workers",
+    "bc_flush": "flush",
+    "bc_ep_timeout": "ep-timeout",
+    "max_episodes": "max-episodes",
+    "max_rows": "max-rows",
 }
 
 
@@ -73,6 +78,15 @@ class TrainConfig:
     kaggle_competition: str = "pokemon-tcg-ai-battle"
     kaggle_episodes_prefix: str = "kaggle/pokemon-tcg-ai-battle-episodes"
 
+    # BC pipeline build
+    bc_workers: int = 8
+    bc_flush: int = 200  # episodes per batch/shard
+    bc_ep_timeout: int = 60  # seconds per episode
+
+    # Training constraints (0 = all)
+    max_episodes: int = 0  # 0 = all episodes (for smoke testing)
+    max_rows: int = 0  # 0 = all rows (for smoke testing)
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -81,10 +95,10 @@ class TrainConfig:
 
 
 def get_default_config_path() -> str:
-    """Find config.json walking up from CWD toward project root.
+    """Find configs/train_config.json walking up from CWD toward project root.
 
-    Walks up from os.getcwd() looking for a ``config.json`` file.
-    Returns the first one found, or the bare name ``config.json``
+    Walks up from os.getcwd() looking for ``configs/train_config.json``.
+    Returns the first one found, or the bare name ``configs/train_config.json``
     (CWD relative) if none is discovered.
     """
     current = Path.cwd()
@@ -145,7 +159,7 @@ def load_config(
     cli_overrides: dict[str, Any] | None = None,
     config_path: str | None = None,
 ) -> TrainConfig:
-    """Build a TrainConfig with the hierarchy: CLI > JSON > defaults.
+    """Build a TrainConfig with the hierarchy: CLI > specified config > CWD config.json > defaults.
 
     Parameters
     ----------
@@ -153,9 +167,9 @@ def load_config(
         Argument dict from argparse or similar. Unrecognised keys are
         ignored so that extra flags don't break config loading.
     config_path:
-        Path to a JSON config file.  When *None* the file is located
-        by :func:`get_default_config_path`.  If the file does not exist
-        the defaults are used unchanged.
+        Path to a JSON config file (--config). When None, falls back to
+        searching for configs/train_config.json walking up from CWD.
+        If the file does not exist the defaults are used unchanged.
     """
     resolved_path = config_path or get_default_config_path()
     json_overrides: dict[str, Any] = {}
@@ -178,7 +192,7 @@ def load_config(
     return TrainConfig(**kwargs)
 
 
-def save_config(cfg: TrainConfig, path: str = "config.json") -> None:
+def save_config(cfg: TrainConfig, path: str = "configs/train_config.json") -> None:
     """Persist a TrainConfig to a JSON file."""
     with open(path, "w") as fh:
         fh.write(cfg.to_json())

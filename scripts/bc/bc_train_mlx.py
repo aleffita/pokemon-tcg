@@ -27,6 +27,7 @@ from rl.encoder.encoding import TokenEncoder
 from rl.encoder.enc_constants import OPT_WK
 from rl.policy_mlx import build_token_net_mlx
 from rl.lr_schedule import lr_at
+from rl.train_config import load_config
 
 WK_LO, WK_HI = OPT_WK, OPT_WK + 3
 
@@ -43,37 +44,106 @@ def read_rows(arr: np.ndarray, start: int, stop: int) -> np.ndarray:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("data", help=".npz or DIRECTORY of per-key .npy files")
-    p.add_argument("--d-model", type=int, default=128,
+    p.add_argument("data", nargs="?", default=None,
+                   help=".npz or DIRECTORY of per-key .npy files")
+    p.add_argument("--config", default=None, help="Path to JSON config file")
+    p.add_argument("--d-model", type=int, default=None,
                    help="Transformer hidden dim (128=~1M, 256=~3.5M params)")
-    p.add_argument("--nhead", type=int, default=4)
-    p.add_argument("--nlayers", type=int, default=3)
-    p.add_argument("--ff", type=int, default=256, help="FFN width (default 4*d_model)")
-    p.add_argument("--static", action="store_true")
-    p.add_argument("--split-heads", action="store_true")
-    p.add_argument("--structured", action="store_true")
-    p.add_argument("--zero-wouldko", action="store_true")
-    p.add_argument("--dedup", action="store_true")
-    p.add_argument("--epochs", type=int, default=10)
-    p.add_argument("--batch", type=int, default=128)
-    p.add_argument("--accum-steps", type=int, default=1,
+    p.add_argument("--nhead", type=int, default=None)
+    p.add_argument("--nlayers", type=int, default=None)
+    p.add_argument("--ff", type=int, default=None, help="FFN width (default 4*d_model)")
+    p.add_argument("--static", action="store_true", default=None)
+    p.add_argument("--split-heads", action="store_true", default=None)
+    p.add_argument("--structured", action="store_true", default=None)
+    p.add_argument("--zero-wouldko", action="store_true", default=None)
+    p.add_argument("--dedup", action="store_true", default=None)
+    p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--batch", type=int, default=None)
+    p.add_argument("--accum-steps", type=int, default=None,
                    help="Gradient accumulation microbatches (default=1, no accumulation)")
-    p.add_argument("--compile", action="store_true", help="mx.compile the loss function")
-    p.add_argument("--prefetch", action="store_true",
+    p.add_argument("--compile", action="store_true", default=None, help="mx.compile the loss function")
+    p.add_argument("--prefetch", action="store_true", default=None,
                    help="Prefetch next slab on CPU while GPU trains (stream overlap)")
-    p.add_argument("--lr", type=float, default=5e-4)
-    p.add_argument("--lr-schedule", choices=["cosine", "linear", "none"], default="cosine")
-    p.add_argument("--warmup-steps", type=int, default=1500)
-    p.add_argument("--lr-min-ratio", type=float, default=0.1)
-    p.add_argument("--max-grad-norm", type=float, default=1.0)
-    p.add_argument("--val-frac", type=float, default=0.1)
-    p.add_argument("--slab-rows", type=int, default=32768)
-    p.add_argument("--log-interval", type=int, default=100,
+    p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--lr-schedule", choices=["cosine", "linear", "none"], default=None)
+    p.add_argument("--warmup-steps", type=int, default=None)
+    p.add_argument("--lr-min-ratio", type=float, default=None)
+    p.add_argument("--max-grad-norm", type=float, default=None)
+    p.add_argument("--val-frac", type=float, default=None)
+    p.add_argument("--slab-rows", type=int, default=None)
+    p.add_argument("--log-interval", type=int, default=None,
                    help="Print training stats every N steps")
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--out", default="model/checkpoint/bc_best_mlx.pkl")
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--out", default=None)
     p.add_argument("--resume", default=None)
+    p.add_argument("--max-rows", type=int, default=None,
+                   help="Max training rows (0 = all, default: config or 0)")
     a = p.parse_args()
+
+    # Load config: CLI > config file > defaults
+    cli = {}
+    if a.d_model is not None:
+        cli["d_model"] = a.d_model
+    if a.nhead is not None:
+        cli["nhead"] = a.nhead
+    if a.nlayers is not None:
+        cli["nlayers"] = a.nlayers
+    if a.ff is not None:
+        cli["ff_dim"] = a.ff
+    if a.static is not None:
+        cli["static"] = a.static
+    if a.split_heads is not None:
+        cli["split_heads"] = a.split_heads
+    if a.structured is not None:
+        cli["structured"] = a.structured
+    if a.epochs is not None:
+        cli["epochs"] = a.epochs
+    if a.batch is not None:
+        cli["batch_size"] = a.batch
+    if a.accum_steps is not None:
+        cli["accum_steps"] = a.accum_steps
+    if a.lr is not None:
+        cli["lr"] = a.lr
+    if a.lr_schedule is not None:
+        cli["lr_schedule"] = a.lr_schedule
+    if a.warmup_steps is not None:
+        cli["warmup_steps"] = a.warmup_steps
+    if a.lr_min_ratio is not None:
+        cli["lr_min_ratio"] = a.lr_min_ratio
+    if a.max_grad_norm is not None:
+        cli["max_grad_norm"] = a.max_grad_norm
+    if a.val_frac is not None:
+        cli["val_frac"] = a.val_frac
+    if a.slab_rows is not None:
+        cli["slab_rows"] = a.slab_rows
+    if a.seed is not None:
+        cli["seed"] = a.seed
+    if a.max_rows is not None:
+        cli["max_rows"] = a.max_rows
+    cfg = load_config(cli_overrides=cli, config_path=a.config)
+
+    # Apply config values (config defaults > hardcoded defaults for flags)
+    a.d_model = a.d_model if a.d_model is not None else cfg.d_model
+    a.nhead = a.nhead if a.nhead is not None else cfg.nhead
+    a.nlayers = a.nlayers if a.nlayers is not None else cfg.nlayers
+    a.ff = a.ff if a.ff is not None else cfg.ff_dim
+    a.static = a.static if a.static is not None else cfg.static
+    a.split_heads = a.split_heads if a.split_heads is not None else cfg.split_heads
+    a.structured = a.structured if a.structured is not None else cfg.structured
+    a.epochs = a.epochs if a.epochs is not None else cfg.epochs
+    a.batch = a.batch if a.batch is not None else cfg.batch_size
+    a.accum_steps = a.accum_steps if a.accum_steps is not None else cfg.accum_steps
+    a.lr = a.lr if a.lr is not None else cfg.lr
+    a.lr_schedule = a.lr_schedule if a.lr_schedule is not None else cfg.lr_schedule
+    a.warmup_steps = a.warmup_steps if a.warmup_steps is not None else cfg.warmup_steps
+    a.lr_min_ratio = a.lr_min_ratio if a.lr_min_ratio is not None else cfg.lr_min_ratio
+    a.max_grad_norm = a.max_grad_norm if a.max_grad_norm is not None else cfg.max_grad_norm
+    a.val_frac = a.val_frac if a.val_frac is not None else cfg.val_frac
+    a.slab_rows = a.slab_rows if a.slab_rows is not None else cfg.slab_rows
+    a.seed = a.seed if a.seed is not None else cfg.seed
+    a.out = a.out or "model/checkpoint/bc_best_mlx.pkl"
+    a.max_rows = a.max_rows if a.max_rows is not None else cfg.max_rows
+    a.log_interval = a.log_interval or 100
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     os.makedirs("model/bc_model", exist_ok=True)
@@ -90,6 +160,12 @@ def main() -> None:
         z = np.load(a.data)
         d = {k: z[k] for k in z.files}
     N = int(d["__labels__"].shape[0])
+
+    # Apply max_rows limit (for smoke testing)
+    if a.max_rows and a.max_rows > 0:
+        N = min(N, a.max_rows)
+        print(f"[bc-train-mlx] limited to {a.max_rows} rows (max_rows={a.max_rows})", flush=True)
+
     labels = read_rows(d["__labels__"], 0, N)
     keys = [k for k in d if k not in ("__labels__", "__is_attack__", "__group__")]
     obs_np = {k: d[k] for k in keys}

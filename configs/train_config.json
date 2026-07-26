@@ -6,7 +6,6 @@
   "static": true,
   "split_heads": true,
   "structured": false,
-  "scratch_registers": 4,
   "epochs": 10,
   "batch_size": 128,
   "accum_steps": 1,
@@ -16,12 +15,9 @@
   "lr_min_ratio": 0.1,
   "max_grad_norm": 1.0,
   "seed": 0,
-  "data_dir": "data/bc_data",
-  "replay_zip_dir": "data/bc_replay_zip",
   "slab_rows": 32768,
   "val_frac": 0.1,
-  "checkpoint_dir": "model/checkpoint",
-  "model_dir": "model/bc_model",
-  "kaggle_competition": "pokemon-tcg-ai-battle",
-  "kaggle_episodes_prefix": "kaggle/pokemon-tcg-ai-battle-episodes"
+  "bc_workers": 8,
+  "max_episodes": 0,
+  "max_rows": 0
 }
