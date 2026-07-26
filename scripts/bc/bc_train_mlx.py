@@ -42,86 +42,86 @@ def read_rows(arr: np.ndarray, start: int, stop: int) -> np.ndarray:
     return flat.reshape((stop - start,) + arr.shape[1:])
 
 
+def _bool_arg(s: str) -> bool:
+    """Parse 'true'/'false'/'1'/'0'/'yes'/'no' for boolean CLI args."""
+    return s.lower() in ("true", "1", "yes")
+
+
 def main() -> None:
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(
+        description="BC trainer — MLX Metal GPU. All fields overridable via CLI or config JSON.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Config hierarchy: CLI args > --config file > configs/train_config.json > defaults",
+    )
     p.add_argument("data", nargs="?", default=None,
                    help=".npz or DIRECTORY of per-key .npy files")
     p.add_argument("--config", default=None, help="Path to JSON config file")
-    p.add_argument("--d-model", type=int, default=None,
-                   help="Transformer hidden dim (128=~1M, 256=~3.5M params)")
+    # Architecture
+    p.add_argument("--d-model", type=int, default=None)
     p.add_argument("--nhead", type=int, default=None)
     p.add_argument("--nlayers", type=int, default=None)
     p.add_argument("--ff", type=int, default=None, help="FFN width (default 4*d_model)")
-    p.add_argument("--static", action="store_true", default=None)
-    p.add_argument("--split-heads", action="store_true", default=None)
-    p.add_argument("--structured", action="store_true", default=None)
-    p.add_argument("--zero-wouldko", action="store_true", default=None)
-    p.add_argument("--dedup", action="store_true", default=None)
+    p.add_argument("--static", type=_bool_arg, default=None, metavar="true|false",
+                   help="Static card features (default: config or true)")
+    p.add_argument("--split-heads", type=_bool_arg, default=None, metavar="true|false",
+                   help="Dedicated value/submit heads")
+    p.add_argument("--structured", type=_bool_arg, default=None, metavar="true|false",
+                   help="Verb-conditioned action head")
+    p.add_argument("--scratch-registers", type=int, default=None,
+                   help="Number of scratch/workspace tokens (default: config or 4)")
+    p.add_argument("--value-atoms", type=int, default=None,
+                   help="Categorical value head atom count")
+    p.add_argument("--value-vmax", type=float, default=None,
+                   help="Categorical value head max absolute value")
+    # Training
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--batch", type=int, default=None)
     p.add_argument("--accum-steps", type=int, default=None,
-                   help="Gradient accumulation microbatches (default=1, no accumulation)")
-    p.add_argument("--compile", action="store_true", default=None, help="mx.compile the loss function")
-    p.add_argument("--prefetch", action="store_true", default=None,
-                   help="Prefetch next slab on CPU while GPU trains (stream overlap)")
+                   help="Gradient accumulation microbatches")
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--lr-schedule", choices=["cosine", "linear", "none"], default=None)
     p.add_argument("--warmup-steps", type=int, default=None)
     p.add_argument("--lr-min-ratio", type=float, default=None)
     p.add_argument("--max-grad-norm", type=float, default=None)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--tbptt-chunk", type=int, default=None,
+                   help="TBPTT chunk size (0=disabled)")
+    # Trainer options
+    p.add_argument("--compile", type=_bool_arg, default=None, metavar="true|false",
+                   help="mx.compile the loss function")
+    p.add_argument("--prefetch", type=_bool_arg, default=None, metavar="true|false",
+                   help="Prefetch next slab on CPU while GPU trains")
+    p.add_argument("--log-interval", type=int, default=None)
+    # Data
     p.add_argument("--val-frac", type=float, default=None)
     p.add_argument("--slab-rows", type=int, default=None)
-    p.add_argument("--log-interval", type=int, default=None,
-                   help="Print training stats every N steps")
-    p.add_argument("--tbptt-chunk", type=int, default=0,
-                   help="TBPTT chunk size (0=disabled, 8/16/32 for sequential training)")
-    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--max-rows", type=int, default=None, help="Max training rows (0=all)")
+    p.add_argument("--zero-wouldko", action="store_true", default=None)
+    p.add_argument("--dedup", action="store_true", default=None)
+    # Output
     p.add_argument("--out", default=None)
     p.add_argument("--resume", default=None)
-    p.add_argument("--max-rows", type=int, default=None,
-                   help="Max training rows (0 = all, default: config or 0)")
     a = p.parse_args()
 
     # Load config: CLI > config file > defaults
+    # Every TrainConfig field is overridable from CLI
+    _CLI_MAP = {
+        "d_model": "d_model", "nhead": "nhead", "nlayers": "nlayers",
+        "ff": "ff_dim", "static": "static", "split_heads": "split_heads",
+        "structured": "structured", "scratch_registers": "scratch_registers",
+        "value_atoms": "value_atoms", "value_vmax": "value_vmax",
+        "epochs": "epochs", "batch": "batch_size", "accum_steps": "accum_steps",
+        "lr": "lr", "lr_schedule": "lr_schedule", "warmup_steps": "warmup_steps",
+        "lr_min_ratio": "lr_min_ratio", "max_grad_norm": "max_grad_norm",
+        "seed": "seed", "tbptt_chunk": "tbptt_chunk",
+        "compile": "compile", "prefetch": "prefetch", "log_interval": "log_interval",
+        "val_frac": "val_frac", "slab_rows": "slab_rows", "max_rows": "max_rows",
+    }
     cli = {}
-    if a.d_model is not None:
-        cli["d_model"] = a.d_model
-    if a.nhead is not None:
-        cli["nhead"] = a.nhead
-    if a.nlayers is not None:
-        cli["nlayers"] = a.nlayers
-    if a.ff is not None:
-        cli["ff_dim"] = a.ff
-    if a.static is not None:
-        cli["static"] = a.static
-    if a.split_heads is not None:
-        cli["split_heads"] = a.split_heads
-    if a.structured is not None:
-        cli["structured"] = a.structured
-    if a.epochs is not None:
-        cli["epochs"] = a.epochs
-    if a.batch is not None:
-        cli["batch_size"] = a.batch
-    if a.accum_steps is not None:
-        cli["accum_steps"] = a.accum_steps
-    if a.lr is not None:
-        cli["lr"] = a.lr
-    if a.lr_schedule is not None:
-        cli["lr_schedule"] = a.lr_schedule
-    if a.warmup_steps is not None:
-        cli["warmup_steps"] = a.warmup_steps
-    if a.lr_min_ratio is not None:
-        cli["lr_min_ratio"] = a.lr_min_ratio
-    if a.max_grad_norm is not None:
-        cli["max_grad_norm"] = a.max_grad_norm
-    if a.val_frac is not None:
-        cli["val_frac"] = a.val_frac
-    if a.slab_rows is not None:
-        cli["slab_rows"] = a.slab_rows
-    if a.seed is not None:
-        cli["seed"] = a.seed
-    if a.max_rows is not None:
-        cli["max_rows"] = a.max_rows
+    for cli_attr, cfg_key in _CLI_MAP.items():
+        val = getattr(a, cli_attr, None)
+        if val is not None:
+            cli[cfg_key] = val
     cfg = load_config(cli_overrides=cli, config_path=a.config)
 
     # Apply config values (config defaults > hardcoded defaults for flags)
@@ -132,6 +132,9 @@ def main() -> None:
     a.static = a.static if a.static is not None else cfg.static
     a.split_heads = a.split_heads if a.split_heads is not None else cfg.split_heads
     a.structured = a.structured if a.structured is not None else cfg.structured
+    a.scratch_registers = a.scratch_registers if a.scratch_registers is not None else cfg.scratch_registers
+    a.value_atoms = a.value_atoms if a.value_atoms is not None else cfg.value_atoms
+    a.value_vmax = a.value_vmax if a.value_vmax is not None else cfg.value_vmax
     a.epochs = a.epochs if a.epochs is not None else cfg.epochs
     a.batch = a.batch if a.batch is not None else cfg.batch_size
     a.accum_steps = a.accum_steps if a.accum_steps is not None else cfg.accum_steps
@@ -140,15 +143,15 @@ def main() -> None:
     a.warmup_steps = a.warmup_steps if a.warmup_steps is not None else cfg.warmup_steps
     a.lr_min_ratio = a.lr_min_ratio if a.lr_min_ratio is not None else cfg.lr_min_ratio
     a.max_grad_norm = a.max_grad_norm if a.max_grad_norm is not None else cfg.max_grad_norm
-    a.val_frac = a.val_frac if a.val_frac is not None else cfg.val_frac
-    a.slab_rows = a.slab_rows if a.slab_rows is not None else cfg.slab_rows
     a.seed = a.seed if a.seed is not None else cfg.seed
-    a.out = a.out or "model/checkpoint/bc_best_mlx.pkl"
-    a.max_rows = a.max_rows if a.max_rows is not None else cfg.max_rows
-    a.tbptt_chunk = a.tbptt_chunk if a.tbptt_chunk > 0 else cfg.tbptt_chunk
-    a.log_interval = a.log_interval if a.log_interval is not None else cfg.log_interval
+    a.tbptt_chunk = a.tbptt_chunk if a.tbptt_chunk is not None else cfg.tbptt_chunk
     a.compile = a.compile if a.compile is not None else cfg.compile
     a.prefetch = a.prefetch if a.prefetch is not None else cfg.prefetch
+    a.log_interval = a.log_interval if a.log_interval is not None else cfg.log_interval
+    a.val_frac = a.val_frac if a.val_frac is not None else cfg.val_frac
+    a.slab_rows = a.slab_rows if a.slab_rows is not None else cfg.slab_rows
+    a.max_rows = a.max_rows if a.max_rows is not None else cfg.max_rows
+    a.out = a.out or "model/checkpoint/bc_best_mlx.pkl"
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     os.makedirs("model/bc_model", exist_ok=True)
@@ -228,8 +231,8 @@ def main() -> None:
                "nhead": a.nhead, "nlayers": a.nlayers, "ff": a.ff,
                "static": a.static, "structured": a.structured,
                "split_heads": a.split_heads,
-               "scratch_registers": cfg.scratch_registers,
-               "value_atoms": cfg.value_atoms, "value_vmax": cfg.value_vmax}
+               "scratch_registers": a.scratch_registers,
+               "value_atoms": a.value_atoms, "value_vmax": a.value_vmax}
     model = build_token_net_mlx(ct, net_cfg)
 
     # Resume from checkpoint
