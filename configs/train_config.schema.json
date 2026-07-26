@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pokemon-tcg-mlx/config.schema.json",
+  "title": "Pokémon TCG MLX — TrainConfig",
+  "description": "Configuration schema for the Pokémon TCG MLX training pipeline. Hierarchy: CLI args > --config file > configs/train_config.json > hardcoded defaults.",
+  "type": "object",
+  "properties": {
+    "d_model": {
+      "type": "integer",
+      "default": 128,
+      "description": "Transformer hidden dimension. Controls embedding size, attention width, and FFN input. Larger = more capacity but slower. 128=~1M params, 256=~3.5M, 512=~20M.",
+      "enum": [64, 128, 256, 512]
+    },
+    "nhead": {
+      "type": "integer",
+      "default": 4,
+      "description": "Number of attention heads in each Transformer layer. Must divide d_model evenly.",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "nlayers": {
+      "type": "integer",
+      "default": 3,
+      "description": "Number of stacked Transformer encoder layers. More layers = deeper reasoning but slower and more memory.",
+      "minimum": 1,
+      "maximum": 12
+    },
+    "ff_dim": {
+      "type": "integer",
+      "default": 512,
+      "description": "Feed-forward network width inside each Transformer layer. Typically 4 × d_model.",
+      "minimum": 64,
+      "maximum": 4096
+    },
+    "static": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable static card features (HP, type, retreat cost, etc.) from EN_Card_Data.csv. Adds a learned projection of domain attributes into model space."
+    },
+    "split_heads": {
+      "type": "boolean",
+      "default": true,
+      "description": "Use dedicated VALUE and SUBMIT tokens with separate output heads. VALUE token gets CLS scalars directly (short residual for prize counts). SUBMIT token feeds the submit logit."
+    },
+    "structured": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable verb-conditioned structured action head. Adds per-OptionType query and bias embeddings for scoring. Currently disabled for BC baseline."
+    },
+    "scratch_registers": {
+      "type": "integer",
+      "default": 4,
+      "description": "Number of scratch/workspace tokens inserted between state and option tokens. Used as inter-decision memory when TBPTT is enabled. Inspired by 'ViTs Need Registers'.",
+      "minimum": 0,
+      "maximum": 16
+    },
+    "prefetch": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable background slab prefetching. A separate thread loads the next memory-mapped slab while the GPU trains on the current one. Reduces I/O wait but uses more RAM (2 slabs in memory)."
+    },
+    "compile": {
+      "type": "boolean",
+      "default": false,
+      "description": "Compile the training step with mx.compile for graph optimization. Faster after warmup but first call takes several minutes. Incompatible with gradient clipping (needs float() conversion)."
+    },
+    "log_interval": {
+      "type": "integer",
+      "default": 100,
+      "description": "Print training stats (loss, LR, ETA) every N optimizer steps.",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "epochs": {
+      "type": "integer",
+      "default": 10,
+      "description": "Number of training epochs. Each epoch iterates over all training data once (shuffled per-epoch).",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "batch_size": {
+      "type": "integer",
+      "default": 128,
+      "description": "Training batch size. 128 is safe for M3 Pro 24GB. Reduce to 64 or 32 for smoke tests or if OOM.",
+      "minimum": 1,
+      "maximum": 4096
+    },
+    "accum_steps": {
+      "type": "integer",
+      "default": 1,
+      "description": "Gradient accumulation steps. Splits each batch into K microbatches, accumulates gradients in FP32, then clips and updates once. Effective batch = batch_size × accum_steps. 1 = no accumulation.",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "lr": {
+      "type": "number",
+      "default": 0.0005,
+      "description": "Peak learning rate for Adam optimizer.",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "lr_schedule": {
+      "type": "string",
+      "default": "cosine",
+      "description": "Learning rate decay schedule after warmup. 'cosine' = cosine annealing to lr×lr_min_ratio. 'linear' = linear decay. 'none' = constant lr.",
+      "enum": ["cosine", "linear", "none"]
+    },
+    "warmup_steps": {
+      "type": "integer",
+      "default": 1500,
+      "description": "Number of linear warmup steps from 0 to peak LR. Scheduler counts optimizer updates (not forward passes). Clamped to max(total_steps/5, 1).",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "lr_min_ratio": {
+      "type": "number",
+      "default": 0.1,
+      "description": "Minimum LR = lr × lr_min_ratio. After decay schedule completes, LR holds at this floor (Orbit-style).",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "max_grad_norm": {
+      "type": "number",
+      "default": 1.0,
+      "description": "Max gradient norm for clipping. Applied once after accumulation (not per microbatch). 0 = disabled.",
+      "minimum": 0.0,
+      "maximum": 100.0
+    },
+    "seed": {
+      "type": "integer",
+      "default": 0,
+      "description": "Random seed for reproducibility. Affects slab shuffling, batch ordering, and validation split."
+    },
+    "slab_rows": {
+      "type": "integer",
+      "default": 32768,
+      "description": "Number of rows per memory-mapped slab (I/O unit). 32k rows × ~14KB/row ≈ 450MB. With prefetch, 2 slabs ≈ 900MB. Reduce for smoke tests (500) or low-memory machines.",
+      "minimum": 100,
+      "maximum": 1000000
+    },
+    "val_frac": {
+      "type": "number",
+      "default": 0.1,
+      "description": "Fraction of data reserved for validation. Split falls on episode boundary when episode_meta.npy exists.",
+      "minimum": 0.01,
+      "maximum": 0.5
+    },
+    "max_rows": {
+      "type": "integer",
+      "default": 0,
+      "description": "Maximum training rows to use. 0 = all rows (no limit). Set to 1000 for smoke tests.",
+      "minimum": 0,
+      "maximum": 10000000
+    },
+    "tbptt_chunk": {
+      "type": "integer",
+      "default": 0,
+      "description": "TBPTT chunk size (decisions per chunk). 0 = disabled (shuffled training). When >0, requires episode_meta.npy. Groups rows by (episode_id, side) in temporal order. stop_gradient at chunk boundaries. Typical: 8, 16, or 32.",
+      "minimum": 0,
+      "maximum": 256
+    },
+    "data_dir": {
+      "type": "string",
+      "default": "data/bc_data",
+      "description": "Directory for encoded BC datasets (.npy files). Each subdirectory is one dataset (e.g., bc_2026_07_25/)."
+    },
+    "replay_zip_dir": {
+      "type": "string",
+      "default": "data/bc_replay_zip",
+      "description": "Directory for downloaded Kaggle replay zips. Each zip is one day of episodes."
+    },
+    "checkpoint_dir": {
+      "type": "string",
+      "default": "model/checkpoint",
+      "description": "Directory for training checkpoints (.pkl). Best model saved here during training."
+    },
+    "model_dir": {
+      "type": "string",
+      "default": "model/bc_model",
+      "description": "Directory for the final best model. Copied from checkpoint_dir at end of training."
+    },
+    "bc_workers": {
+      "type": "integer",
+      "default": 8,
+      "description": "Number of parallel worker processes for BC dataset building. Each worker encodes one episode independently.",
+      "minimum": 1,
+      "maximum": 32
+    },
+    "bc_flush": {
+      "type": "integer",
+      "default": 200,
+      "description": "Number of episodes per shard in batch processing. Each shard is flushed to disk as a numbered directory. Bounds peak RAM to one shard of results.",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "bc_ep_timeout": {
+      "type": "integer",
+      "default": 60,
+      "description": "Timeout per episode during BC dataset building (seconds). Episodes exceeding this are skipped.",
+      "minimum": 1,
+      "maximum": 600
+    },
+    "max_episodes": {
+      "type": "integer",
+      "default": 0,
+      "description": "Maximum episodes to process from replay zips. 0 = all episodes. Set to 10 for smoke tests.",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "bc_would_ko": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable would_ko simulation in BC dataset builder. Adds would_ko rate, expected prizes, and P(ends game) to option features. Requires search_agent."
+    },
+    "bc_wk_nvar": {
+      "type": "integer",
+      "default": 10,
+      "description": "Number of variable-attack determinizations for would_ko simulation. Higher = more accurate but slower.",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "bc_both_sides": {
+      "type": "boolean",
+      "default": true,
+      "description": "Encode both sides (player 0 and player 1) from each episode. Doubles the data per episode."
+    },
+    "value_atoms": {
+      "type": "integer",
+      "default": 51,
+      "description": "Number of atoms for categorical value head. Only used when value_categorical=True in model. More atoms = finer value distribution.",
+      "minimum": 3,
+      "maximum": 201
+    },
+    "value_vmax": {
+      "type": "number",
+      "default": 1.0,
+      "description": "Maximum absolute value for categorical value head support. Support spans [-vmax, vmax] uniformly. Only used when value_categorical=True.",
+      "minimum": 0.1,
+      "maximum": 10.0
+    },
+    "kaggle_competition": {
+      "type": "string",
+      "default": "pokemon-tcg-ai-battle",
+      "description": "Kaggle competition slug for submission."
+    },
+    "kaggle_episodes_prefix": {
+      "type": "string",
+      "default": "kaggle/pokemon-tcg-ai-battle-episodes",
+      "description": "Kaggle dataset name prefix for daily episode datasets. Full name = prefix + '-YYYY-MM-DD'."
+    }
+  },
+  "additionalProperties": false
+}
