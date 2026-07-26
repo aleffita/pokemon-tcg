@@ -24,6 +24,7 @@ tcg-build-daily = "scripts.bc.build_bc_dataset:main"
 tcg-evaluate    = "scripts.evaluate:main"
 tcg-tournament  = "scripts.tournament:main"
 tcg-submission  = "scripts.build_submission:main"
+tcg-submit      = "scripts.submit:main"
 tcg-data        = "scripts.data_manager:main"
 
 [tool.hatch.build.targets.wheel]

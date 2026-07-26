@@ -1,12 +1,13 @@
-"""Phase E integration test -- inference correctness verified.
+"""Phase E integration test -- MLX-only inference correctness verified.
 
 Validates:
-  1. E.1: Complete logs are passed through agent() -> choose() -> encoder
-  2. E.2: Autoregressive multi-select: picks are sequential, already-picked
+  1. E.1: Agent loads without any PyTorch import
+  2. E.2: Complete logs are passed through agent() -> choose() -> encoder
+  3. E.3: Autoregressive multi-select: picks are sequential, already-picked
           options are masked, SUBMIT is only accepted when min_count satisfied
-  3. E.3: FP16 tensor creation for MLX model (float16 for numeric features)
-  4. E.4: Submission bundle builds correctly and agent loads from it
-  5. PyTorch fallback path still works (float32 tensors)
+  4. E.4: FP16 tensor creation for MLX model (float16 for numeric features)
+  5. E.5: Config system integration (TrainConfig used for architecture params)
+  6. E.6: Submission bundle builds correctly and agent loads from it
 
 Run:
   uv run python scripts/validate/test_phase_e.py
@@ -24,6 +25,7 @@ _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import numpy as np
 import mlx.core as mx
+import mlx.nn as nn
 
 from rl.encoder.card_features import get_card_table
 from rl.encoder.enc_constants import (
@@ -35,6 +37,7 @@ from rl.encoder.enc_constants import (
 from rl.encoder.encoding import TokenEncoder, GameTracker, AbilityTracker
 from rl.encoder.effect_data import N_ATTACK_FX
 from rl.policy_mlx import build_token_net_mlx
+from rl.train_config import TrainConfig
 from scripts.validate.make_synthetic_data import make_dataset
 
 # ---------------------------------------------------------------------------
@@ -56,10 +59,13 @@ CANONICAL_CFG = {
 # Helpers (same pattern as test_phase_a.py -- proven to work)
 # ---------------------------------------------------------------------------
 def _make_synthetic_dir() -> str:
-    """Create temp dir with synthetic data matching bc_train schema."""
+    """Create temp dir with synthetic data matching bc_train schema.
+
+    Ensures effect_mask is present (required by the MLX model's _encode).
+    """
     tmpdir = tempfile.mkdtemp(prefix="phase_e_test_")
     make_dataset(N_ROWS, tmpdir, seed=42)
-    # Add effect_mask if absent
+    # Add effect_mask if absent (model._encode requires it for "effect" stream)
     effect_mask_path = os.path.join(tmpdir, "effect_mask.npy")
     if not os.path.exists(effect_mask_path):
         rng = np.random.default_rng(42)
@@ -105,7 +111,7 @@ def _batch_to_mlx(ob_np, int_keys):
 
 
 def _batch_to_mlx_fp16(ob_np, int_keys):
-    """Convert numpy batch to MLX arrays (float16 for E.3 inference test)."""
+    """Convert numpy batch to MLX arrays (float16 for E.4 inference test)."""
     return {
         k: mx.array(ob_np[k].astype(np.int32 if k in int_keys else np.float16))
         for k in ob_np
@@ -116,9 +122,45 @@ def _batch_to_mlx_fp16(ob_np, int_keys):
 # Tests
 # ---------------------------------------------------------------------------
 
-def test_e1_complete_logs():
-    """E.1: Verify obs.logs flows through the encoding pipeline."""
-    print("\n--- test_e1_complete_logs ---")
+def test_e1_no_pytorch_import():
+    """E.1: Verify agent/main.py has no PyTorch imports."""
+    print("\n--- test_e1_no_pytorch_import ---")
+
+    agent_path = os.path.join(_REPO, "agent", "main.py")
+    with open(agent_path) as f:
+        content = f.read()
+
+    # Check no torch imports
+    bad_lines = []
+    for i, line in enumerate(content.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if "import torch" in stripped or "from torch" in stripped:
+            bad_lines.append((i, stripped))
+
+    assert len(bad_lines) == 0, (
+        f"agent/main.py contains PyTorch imports:\n"
+        + "\n".join(f"  L{n}: {line}" for n, line in bad_lines)
+    )
+
+    # Verify mlx.core is imported at top level
+    assert "import mlx.core as mx" in content, "mlx.core not imported at top level"
+
+    # Verify no _HAS_MLX flag
+    assert "_HAS_MLX" not in content, "_HAS_MLX flag still present"
+
+    # Verify no PyTorch model type branching
+    assert 'model_type == "mlx"' not in content, "MLX/PyTorch branching still present"
+    assert 'model_type == "torch"' not in content, "MLX/PyTorch branching still present"
+    assert '_MODEL_TYPE' not in content, "_MODEL_TYPE still present"
+
+    print("  PASSED: agent/main.py has no PyTorch imports or branching")
+
+
+def test_e2_complete_logs():
+    """E.2: Verify obs.logs flows through the encoding pipeline."""
+    print("\n--- test_e2_complete_logs ---")
 
     # Monkey-patch GameTracker.update to capture logs
     captured_logs = []
@@ -140,7 +182,7 @@ def test_e1_complete_logs():
                                {"deckCount": 10, "handCount": 5, "prize": []}]}
         obs = {"select": select, "current": current, "logs": test_logs}
 
-        # Simulate what choose() now does with obs.logs (E.1 fix)
+        # Simulate what choose() now does with obs.logs (E.2 fix)
         logs = obs.get("logs", [])
         obs_for_encode = {"select": select, "current": current, "logs": logs}
 
@@ -171,9 +213,9 @@ def test_e1_complete_logs():
         GameTracker.update = original_update
 
 
-def test_e2_autoregressive_multiselect():
-    """E.2: Autoregressive picks are sequential, masked, and SUBMIT-respecting."""
-    print("\n--- test_e2_autoregressive_multiselect ---")
+def test_e3_autoregressive_multiselect():
+    """E.3: Autoregressive picks are sequential, masked, and SUBMIT-respecting."""
+    print("\n--- test_e3_autoregressive_multiselect ---")
 
     tmpdir = _make_synthetic_dir()
     try:
@@ -203,8 +245,11 @@ def test_e2_autoregressive_multiselect():
         max_count = 3
 
         for substep in range(max_count):
-            # Build MLX tensors (float32 for model compatibility)
-            ob_mlx = _batch_to_mlx(ob_np, int_keys)
+            # Build MLX tensors (fp16 for numerics, matching E.4)
+            ob_mlx = {
+                k: mx.array(ob_np[k].astype(np.int32 if k in int_keys else np.float16))
+                for k in ob_np
+            }
 
             # Forward
             logits, _ = model.logits_value(ob_mlx)
@@ -244,7 +289,10 @@ def test_e2_autoregressive_multiselect():
 
         # Verify picked options are masked after the loop
         # Run one more forward with the same data and check masking
-        ob_mlx2 = _batch_to_mlx(ob_np, int_keys)
+        ob_mlx2 = {
+            k: mx.array(ob_np[k].astype(np.int32 if k in int_keys else np.float16))
+            for k in ob_np
+        }
         logits2, _ = model.logits_value(ob_mlx2)
         logits2_np = np.asarray(logits2)
         row_logits2 = logits2_np[0].copy()
@@ -264,9 +312,9 @@ def test_e2_autoregressive_multiselect():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def test_e3_fp16_inference():
-    """E.3: MLX tensors use float16 for numeric features in inference."""
-    print("\n--- test_e3_fp16_inference ---")
+def test_e4_fp16_inference():
+    """E.4: MLX tensors use float16 for numeric features in inference."""
+    print("\n--- test_e4_fp16_inference ---")
 
     tmpdir = _make_synthetic_dir()
     try:
@@ -277,7 +325,7 @@ def test_e3_fp16_inference():
         model = build_token_net_mlx(card_table, CANONICAL_CFG)
         model.eval()
 
-        # Convert to fp16 (same as E.3 inference path)
+        # Convert to fp16 (same as E.4 inference path)
         ob_fp16 = _batch_to_mlx_fp16(ob_np, int_keys)
 
         # Check dtypes
@@ -310,68 +358,62 @@ def test_e3_fp16_inference():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def test_e3_pytorch_fallback():
-    """E.3: PyTorch fallback path uses float32 (not fp16)."""
-    print("\n--- test_e3_pytorch_fallback ---")
+def test_e5_config_integration():
+    """E.5: TrainConfig provides architecture params that match the model."""
+    print("\n--- test_e5_config_integration ---")
 
-    try:
-        import torch
-        from rl.policy import build_token_net
-    except ImportError:
-        print("  SKIPPED: PyTorch not available")
-        return
+    cfg = TrainConfig()
 
+    # Verify defaults match canonical architecture
+    assert cfg.d_model == 128, f"d_model={cfg.d_model}"
+    assert cfg.nhead == 4, f"nhead={cfg.nhead}"
+    assert cfg.nlayers == 3, f"nlayers={cfg.nlayers}"
+    assert cfg.ff_dim == 512, f"ff_dim={cfg.ff_dim}"
+    assert cfg.static is True, f"static={cfg.static}"
+    assert cfg.split_heads is True, f"split_heads={cfg.split_heads}"
+    assert cfg.scratch_registers == 4, f"scratch_registers={cfg.scratch_registers}"
+
+    # Verify config can be converted to/from dict
+    d = cfg.to_dict()
+    assert "d_model" in d
+    assert "nhead" in d
+    restored = TrainConfig(**{k: d[k] for k in d if hasattr(TrainConfig, k)})
+    assert restored.d_model == cfg.d_model
+    assert restored.nhead == cfg.nhead
+
+    # Verify config produces valid model architecture
+    model_cfg = {
+        "d_model": cfg.d_model,
+        "nhead": cfg.nhead,
+        "nlayers": cfg.nlayers,
+        "static": cfg.static,
+        "split_heads": cfg.split_heads,
+    }
+    card_table = get_card_table()
+    model = build_token_net_mlx(card_table, model_cfg)
+    model.eval()
+
+    # Quick forward to verify dimensions match
     tmpdir = _make_synthetic_dir()
     try:
         d, labels, keys, int_keys = _load_batches(tmpdir)
-        ob_np = _first_batch(d, keys, int_keys, BATCH_SIZE)
-
-        # PyTorch policy requires effect_mask (synthetic data has effect_id but
-        # the PyTorch _encode iterates over _CARD_STREAMS including "effect" and
-        # accesses o["effect_mask"])
-        if "effect_mask" not in ob_np:
-            rng = np.random.default_rng(42)
-            ob_np["effect_mask"] = (rng.standard_normal(
-                (BATCH_SIZE, 2)).astype(np.float32) * 0.2 + 0.5).clip(0.0, 1.0)
-
-        card_table = get_card_table()
-        model = build_token_net(card_table, CANONICAL_CFG)
-        model.eval()
-
-        # Convert to PyTorch (float32 for numeric, long for int)
-        ob = {}
-        for k in ob_np:
-            arr = ob_np[k]
-            dtype = torch.long if k in int_keys else torch.float32
-            ob[k] = torch.as_tensor(arr, dtype=dtype)
-
-        # Check dtypes
-        n_int = 0
-        n_fp32 = 0
-        for k, v in ob.items():
-            if k in int_keys:
-                assert v.dtype == torch.long, f"{k}: expected long, got {v.dtype}"
-                n_int += 1
-            else:
-                assert v.dtype == torch.float32, f"{k}: expected float32, got {v.dtype}"
-                n_fp32 += 1
-
-        # Forward
-        with torch.no_grad():
-            logits, value = model.logits_value(ob)
-        assert logits.shape == (BATCH_SIZE, N_ACTIONS)
-        assert value.shape == (BATCH_SIZE,)
-        assert torch.all(torch.isfinite(logits)), "logits contain non-finite values"
-        assert torch.all(torch.isfinite(value)), "value contains non-finite values"
-
-        print(f"  PASSED: {n_int} long, {n_fp32} float32, forward finite")
+        ob_np = _first_batch(d, keys, int_keys, 4)
+        ob_mlx = _batch_to_mlx(ob_np, int_keys)
+        logits, value = model.logits_value(ob_mlx)
+        assert logits.shape[1] == N_ACTIONS
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
+    print(f"  PASSED: TrainConfig d={cfg.d_model} h={cfg.nhead} L={cfg.nlayers} "
+          f"static={cfg.static} split={cfg.split_heads}")
 
-def test_e4_checkpoint_save_load():
-    """E.4a: Save and load MLX checkpoint roundtrip."""
-    print("\n--- test_e4_checkpoint_save_load ---")
+
+def test_e6_checkpoint_save_load():
+    """E.6a: Save and load MLX checkpoint roundtrip."""
+    print("\n--- test_e6_checkpoint_save_load ---")
+
+    # Flush any pending MLX computations from previous tests
+    mx.eval(mx.array(0))
 
     tmpdir = _make_synthetic_dir()
     try:
@@ -387,8 +429,10 @@ def test_e4_checkpoint_save_load():
         logits_before, value_before = model.logits_value(ob_mlx)
 
         # Save checkpoint (pickle, matching bc_train_mlx format)
+        # Use nn.utils.tree_flatten to properly handle nested lists in trainable_parameters()
+        flat_params = nn.utils.tree_flatten(model.trainable_parameters())
         state = {
-            "model": {k: np.asarray(v) for k, v in model.trainable_parameters().items()},
+            "model": {k: np.asarray(v) for k, v in flat_params},
             "val_acc": 0.6947,
             "config": model.get_config(),
         }
@@ -402,9 +446,11 @@ def test_e4_checkpoint_save_load():
                 loaded_state = pickle.load(f)
 
             model2 = build_token_net_mlx(card_table, CANONICAL_CFG)
-            # Update with saved parameters
+            # Update with saved parameters (convert numpy -> MLX arrays, rebuild tree)
             if isinstance(loaded_state.get("model"), dict):
-                model2.update(loaded_state["model"])
+                flat = [(k, mx.array(v)) for k, v in loaded_state["model"].items()]
+                tree = nn.utils.tree_unflatten(flat)
+                model2.update(tree)
             model2.eval()
 
             # Verify output matches
@@ -431,9 +477,9 @@ def test_e4_checkpoint_save_load():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def test_e4_submit_handling():
-    """E.4b: SUBMIT is only accepted when min_count is satisfied."""
-    print("\n--- test_e4_submit_handling ---")
+def test_e6_submit_handling():
+    """E.6b: SUBMIT is only accepted when min_count is satisfied."""
+    print("\n--- test_e6_submit_handling ---")
 
     tmpdir = _make_synthetic_dir()
     try:
@@ -459,7 +505,6 @@ def test_e4_submit_handling():
 
         # Case 1: min_count=2, SUBMIT is highest -> should NOT submit
         min_count = 2
-        picked_set: set[int] = set()
         results: list[int] = []
         action = int(np.argmax(row_logits))
         if action == SUBMIT_ACTION and len(results) >= min_count:
@@ -470,7 +515,6 @@ def test_e4_submit_handling():
         # Case 2: min_count=0, SUBMIT is highest -> should submit immediately
         min_count_0 = 0
         results_2: list[int] = []
-        picked_set_2: set[int] = set()
         action_2 = int(np.argmax(row_logits))
         accepted_submit = (action_2 == SUBMIT_ACTION and len(results_2) >= min_count_0)
         assert accepted_submit, "SUBMIT should be accepted when min_count=0"
@@ -480,9 +524,9 @@ def test_e4_submit_handling():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def test_e4_submission_bundle():
-    """E.4c: Verify submission can be built."""
-    print("\n--- test_e4_submission_bundle ---")
+def test_e6_submission_bundle():
+    """E.6c: Verify submission can be built."""
+    print("\n--- test_e6_submission_bundle ---")
 
     result = os.system(
         f"cd {_REPO} && uv run tcg-submission --no-validate 2>&1"
@@ -499,17 +543,29 @@ def test_e4_submission_bundle():
             assert "deck.csv" in names, "deck.csv not in bundle"
             assert "rl/policy_mlx.py" in names, "rl/policy_mlx.py not in bundle"
             assert "rl/encoder/encoding.py" in names, "rl/encoder/encoding.py not in bundle"
-            # Check that E.1/E.2 changes are in the bundled main.py
+            # Verify no PyTorch fallback in bundled main.py
             main_py = [m for m in tar.getmembers() if m.name == "main.py"][0]
             content = tar.extractfile(main_py).read().decode()
-            assert "obs.get" in content, "E.1 fix (obs.get) not in bundled main.py"
-            assert "picked_set" in content, "E.2 fix (picked_set) not in bundled main.py"
-            assert "np.float16" in content, "E.3 fix (float16) not in bundled main.py"
+            assert "import torch" not in content, "PyTorch import in bundled main.py"
+            assert "_HAS_MLX" not in content, "_HAS_MLX in bundled main.py"
+            assert "picked_set" in content, "autoregressive select not in bundled main.py"
+            assert "np.float16" in content, "fp16 inference not in bundled main.py"
             print(f"  PASSED: bundle built ({size_mb:.1f} MB, {len(names)} files, "
-                  f"E.1/E.2/E.3 fixes present)")
+                  f"MLX-only + autoregressive verified)")
         os.remove(tarball)
     else:
         print(f"  FAILED: build_submission.py returned {result}")
+
+
+def test_e7_submit_entrypoint():
+    """E.7: tcg-submit entrypoint is registered and --help works."""
+    print("\n--- test_e7_submit_entrypoint ---")
+
+    result = os.system(
+        f"cd {_REPO} && uv run tcg-submit --help 2>&1"
+    )
+    assert result == 0, f"tcg-submit --help failed with exit code {result}"
+    print("  PASSED: tcg-submit entrypoint works")
 
 
 # ---------------------------------------------------------------------------
@@ -544,17 +600,19 @@ def run_regression():
 # ---------------------------------------------------------------------------
 def main():
     print("=" * 60)
-    print("Phase E: Inference Correctness Tests")
+    print("Phase E: MLX-Only Agent + Autoregressive Multi-Select Tests")
     print("=" * 60)
 
     tests = [
-        ("E.1: Complete logs", test_e1_complete_logs),
-        ("E.2: Autoregressive multi-select", test_e2_autoregressive_multiselect),
-        ("E.3: FP16 inference path", test_e3_fp16_inference),
-        ("E.3: PyTorch fallback", test_e3_pytorch_fallback),
-        ("E.4a: Checkpoint roundtrip", test_e4_checkpoint_save_load),
-        ("E.4b: SUBMIT handling", test_e4_submit_handling),
-        ("E.4c: Submission bundle", test_e4_submission_bundle),
+        ("E.1: No PyTorch imports", test_e1_no_pytorch_import),
+        ("E.2: Complete logs", test_e2_complete_logs),
+        ("E.3: Autoregressive multi-select", test_e3_autoregressive_multiselect),
+        ("E.4: FP16 inference path", test_e4_fp16_inference),
+        ("E.5: Config integration", test_e5_config_integration),
+        ("E.6a: Checkpoint roundtrip", test_e6_checkpoint_save_load),
+        ("E.6b: SUBMIT handling", test_e6_submit_handling),
+        ("E.6c: Submission bundle", test_e6_submission_bundle),
+        ("E.7: Submit entrypoint", test_e7_submit_entrypoint),
     ]
 
     passed = 0

@@ -1,6 +1,7 @@
 """BC agent for the PTCG AI Battle Challenge.
 
-Loads a trained TokenTransformer checkpoint and uses it to select actions.
+MLX-only inference with autoregressive multi-select.
+Loads a trained TokenTransformerMLX checkpoint and uses it to select actions.
 Keeps per-side GameTracker + AbilityTracker for stateful encoding.
 
 Usage:
@@ -12,7 +13,8 @@ import sys
 from typing import Any
 
 import numpy as np
-import torch
+import mlx.core as mx
+import mlx.nn as nn
 
 
 # ---- path setup (Kaggle-safe: __file__ is not defined when exec'd) ----
@@ -39,76 +41,69 @@ if _PROJECT_ROOT not in sys.path:
 
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import TokenEncoder, GameTracker, AbilityTracker, SUBMIT_ACTION
+from rl.encoder.enc_constants import MAX_OPTIONS
+from rl.policy_mlx import build_token_net_mlx
+from rl.train_config import TrainConfig
+
 _DECK_PATH = os.path.join(_AGENT_DIR, "deck.csv")
 
-# Detect MLX availability
-try:
-    import mlx.core as mx
-    import mlx.nn as mlx_nn
-    from rl.policy_mlx import build_token_net_mlx
-    _HAS_MLX = True
-except ImportError:
-    _HAS_MLX = False
-
-from rl.policy import build_token_net  # PyTorch (always available for Kaggle)
-
-# Model: search PyTorch (.pt) and MLX (.pkl) checkpoints
+# ---- model checkpoint search (MLX only) ----
 _MODEL_PATH = None
-_MODEL_TYPE = None
-for candidate, mtype in [
-    # MLX checkpoints (priority — latest training)
-    (os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_mlx_final.pkl"), "mlx"),
-    (os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_mlx.pkl"), "mlx"),
-    # PyTorch checkpoints
-    (os.path.join(_AGENT_DIR, "model", "bc_best_final.pt"), "torch"),
-    (os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_final.pt"), "torch"),
-    (os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best.pt"), "torch"),
+for candidate in [
+    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_mlx_final.pkl"),
+    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_mlx.pkl"),
+    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_final.pkl"),
+    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best.pkl"),
 ]:
     if os.path.exists(candidate):
         _MODEL_PATH = candidate
-        _MODEL_TYPE = mtype
         break
 
 # ---- load once at import ----
 if _MODEL_PATH is None:
-    print(f"[bc-agent] WARNING: no checkpoint found, using random policy")
+    print("[bc-agent] WARNING: no checkpoint found, using random policy")
 _CARD_TABLE = get_card_table()
 _ENCODER = TokenEncoder(_CARD_TABLE)
 
+# Build default architecture config from TrainConfig defaults
+_DEFAULT_CFG: dict[str, Any] = {
+    "d_model": TrainConfig.d_model,
+    "nhead": TrainConfig.nhead,
+    "nlayers": TrainConfig.nlayers,
+    "static": TrainConfig.static,
+    "split_heads": TrainConfig.split_heads,
+}
+
+
 def _load_model():
-    """Load the BC model from checkpoint (MLX or PyTorch)."""
+    """Load the BC model from MLX checkpoint."""
     if _MODEL_PATH is None:
         return None
 
-    # MLX model
-    if _MODEL_TYPE == "mlx" and _HAS_MLX:
-        import pickle
-        with open(_MODEL_PATH, "rb") as f:
-            state = pickle.load(f)
-        cfg = {"d_model": 128, "nhead": 4, "nlayers": 3,
-               "static": True, "split_heads": True}
-        net = build_token_net_mlx(_CARD_TABLE, cfg)
-        if isinstance(state.get("model"), dict):
-            net.update(state["model"])
-        net.eval()
-        acc = state.get("val_acc", "?")
-        print(f"[bc-agent] loaded MLX model {_MODEL_PATH} (val_acc={acc})")
-        return ("mlx", net)
+    import pickle
+    with open(_MODEL_PATH, "rb") as f:
+        state = pickle.load(f)
 
-    # PyTorch model
-    if _MODEL_TYPE == "torch":
-        ckpt = torch.load(_MODEL_PATH, map_location="cpu", weights_only=False)
-        cfg = ckpt.get("net_config", {})
-        net = build_token_net(_CARD_TABLE, cfg)
-        net.load_state_dict(ckpt["net"])
-        net.eval()
-        acc = ckpt.get("bc_val_acc", "?")
-        print(f"[bc-agent] loaded PyTorch model {_MODEL_PATH} (val_acc={acc})")
-        return ("torch", net)
+    # Merge config: checkpoint config (if present) overrides defaults
+    ckpt_cfg = state.get("config", state.get("net_config", {}))
+    cfg = dict(_DEFAULT_CFG)
+    # Only override keys that the model actually needs
+    for key in ("d_model", "nhead", "nlayers", "static", "split_heads", "structured"):
+        if key in ckpt_cfg:
+            cfg[key] = ckpt_cfg[key]
 
-    return None
+    net = build_token_net_mlx(_CARD_TABLE, cfg)
+    if isinstance(state.get("model"), dict):
+        flat = [(k, mx.array(v)) for k, v in state["model"].items()]
+        tree = nn.utils.tree_unflatten(flat)
+        net.update(tree)
+    net.eval()
+    acc = state.get("val_acc", "?")
+    print(f"[bc-agent] loaded MLX model {_MODEL_PATH} (val_acc={acc})")
+    return net
 
-_LOADED = _load_model()
+
+_LOADED_MODEL = _load_model()
 
 # ---- deck ----
 def load_deck(path: str = _DECK_PATH) -> list[int]:
@@ -131,8 +126,95 @@ def _get_tracker(side: int):
     return _TRACKERS[side]
 
 
-def choose(select: dict[str, Any], current: dict | None) -> list[int]:
-    """Pick option indices using the BC model (or fallback to first-N)."""
+def _build_mlx_tensors(encoded: dict, int_keys: set) -> dict[str, mx.array]:
+    """Convert encoded numpy arrays to MLX arrays with FP16 for numerics (E.4)."""
+    ob = {}
+    for k, v in encoded.items():
+        arr = np.asarray(v)
+        if k in int_keys:
+            ob[k] = mx.array(arr.astype(np.int32)).reshape(1, *arr.shape)
+        else:
+            ob[k] = mx.array(arr.astype(np.float16)).reshape(1, *arr.shape)
+    return ob
+
+
+def _autoregressive_select(
+    model,
+    encoded: dict,
+    int_keys: set,
+    options: list,
+    min_count: int,
+    max_count: int,
+) -> list[int]:
+    """Autoregressive multi-select: pick options one at a time, masking already-picked.
+
+    For each substep:
+      1. Encode with current picked set
+      2. Forward pass through model
+      3. Mask illegal + already-picked options
+      4. Select best (argmax)
+      5. If SUBMIT and enough picks -> break
+      6. Add to picked set
+
+    Returns list of selected option indices.
+    """
+    n = len(options)
+    if n == 0:
+        return []
+
+    if _LOADED_MODEL is None:
+        count = max(min_count, min(max_count, n))
+        return list(range(count))
+
+    picked_set: set[int] = set()
+    results: list[int] = []
+
+    for _substep in range(max_count):
+        # Build MLX tensors (FP16 for numerics)
+        ob = _build_mlx_tensors(encoded, int_keys)
+
+        # Forward pass
+        logits, _ = model.logits_value(ob)
+        logits_np = np.asarray(logits).flatten()
+
+        # Mask illegal options
+        action_mask = np.asarray(encoded["action_mask"]).flatten()
+        logits_np[action_mask < 0.5] = -1e9
+
+        # Mask already-picked options
+        for p in picked_set:
+            if p < len(logits_np):
+                logits_np[p] = -1e9
+
+        # Select best legal option
+        action = int(np.argmax(logits_np))
+
+        # SUBMIT is only accepted when min_count is satisfied
+        if action == SUBMIT_ACTION and len(results) >= min_count:
+            break
+
+        # If SUBMIT was chosen but min_count not met, or if all options masked,
+        # we cannot proceed further — return what we have
+        if logits_np[action] <= -1e9:
+            break
+
+        picked_set.add(action)
+        results.append(action)
+
+        if len(results) >= max_count:
+            break
+
+    return results
+
+
+def choose(select: dict[str, Any], current: dict | None, logs: list | None = None) -> list[int]:
+    """Pick option indices using the BC model with autoregressive multi-select.
+
+    Args:
+        select: the select dict from the engine (options, minCount, maxCount)
+        current: the current game state
+        logs: complete observation logs from the engine (E.2: never discard)
+    """
     options = select.get("option") or []
     n = len(options)
     if n == 0:
@@ -142,11 +224,9 @@ def choose(select: dict[str, Any], current: dict | None) -> list[int]:
     max_count = select.get("maxCount", 1)
 
     # If no model loaded, fallback to baseline (first N legal options)
-    if _LOADED is None:
+    if _LOADED_MODEL is None:
         count = max(min_count, min(max_count, n))
         return list(range(count))
-
-    model_type, model = _LOADED
 
     # Get side and trackers
     side = current.get("yourIndex", 0) if current else 0
@@ -155,8 +235,8 @@ def choose(select: dict[str, Any], current: dict | None) -> list[int]:
     ability = st["ability"]
     deck = st["deck"]
 
-    # Update tracker with current observation
-    obs_for_encode = {"select": select, "current": current, "logs": []}
+    # E.2: Pass complete logs (never discard observation information)
+    obs_for_encode = {"select": select, "current": current, "logs": logs or []}
     try:
         tracker.update(obs_for_encode)
         ability.note_turn(current.get("turn") if current else None)
@@ -176,40 +256,12 @@ def choose(select: dict[str, Any], current: dict | None) -> list[int]:
         count = max(min_count, min(max_count, n))
         return list(range(count))
 
-    # Build input tensors (MLX or PyTorch)
     int_keys = _ENCODER.int_keys
-    ob = {}
-    for k, v in encoded.items():
-        arr = np.asarray(v)
-        if model_type == "mlx":
-            dtype = np.int32 if k in int_keys else np.float32
-            ob[k] = mx.array(arr.astype(dtype)).reshape(1, *arr.shape)
-        else:
-            dtype = torch.long if k in int_keys else torch.float32
-            ob[k] = torch.as_tensor(arr, dtype=dtype).unsqueeze(0)
 
-    # Forward pass
-    if model_type == "mlx":
-        logits, _ = model.logits_value(ob)
-        logits = logits.squeeze(0)
-        action_mask = mx.array(encoded["action_mask"].astype(np.float32))
-        logits = mx.where(action_mask < 0.5, -1e9, logits)
-        logits_np = np.asarray(logits)
-    else:
-        with torch.no_grad():
-            logits, _ = model.logits_value(ob)
-        logits = logits.squeeze(0)
-        action_mask = torch.as_tensor(encoded["action_mask"], dtype=torch.float32)
-        logits = logits.masked_fill(action_mask < 0.5, -1e9)
-        logits_np = logits.numpy()
-
-    # Pick top-k legal options (numpy for simplicity)
-    count = max(min_count, min(max_count, n))
-    if count == 1:
-        return [int(np.argmax(logits_np))]
-    else:
-        topk = np.argsort(-logits_np)[:count].tolist()
-        return topk[:count]
+    # E.3: Autoregressive multi-select
+    return _autoregressive_select(
+        _LOADED_MODEL, encoded, int_keys, options, min_count, max_count
+    )
 
 
 def agent(obs: dict[str, Any]) -> list[int]:
@@ -227,4 +279,6 @@ def agent(obs: dict[str, Any]) -> list[int]:
             st["deck"] = list(DECK)
         return list(DECK)
 
-    return choose(select, current)
+    # E.2: Pass complete logs from observation to choose()
+    logs = obs.get("logs", [])
+    return choose(select, current, logs=logs)
