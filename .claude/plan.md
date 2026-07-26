@@ -145,32 +145,52 @@ match_card_usage — which cards were in each match's deck
 
 ---
 
-## Phase I — Replay Pipeline
+## Phase I — Replay Pipeline (Remote: stats only, Local: full data)
 
-**Objective:** Extract structured replay data from Kaggle zips into SQLite (no JSON blobs).
+**Objective:** Process Kaggle replays for card/deck stats ONLY (no full step data). Local arena replays get full structured data.
+
+### Data source distinction
+
+| Source | What we store | Why |
+|---|---|---|
+| Kaggle replays (remote) | deck composition + result + match_card_usage | Card/deck Elo computation only |
+| Arena local | full replay: steps, board_snapshots, events, options | Replay viewer, analysis, debugging |
+
+Remote matches: `matches.source = 'remote'` — no step data, only `match_card_usage` rows.
+Local matches: `matches.source = 'local'` — full step data in all child tables.
 
 ### Tasks
 
-**I.1 — Create `scripts/build_replay_db.py`**
-- Stream episodes from replay zips (same approach as `build_bc_from_zips.py`)
+**I.1 — Create `scripts/build_card_stats.py`**
+- Stream episodes from replay zips
 - For each episode:
-  1. Create `matches` row (with identified deck_id for each side)
-  2. For each step per player: create `match_steps` row
-  3. For each step: create `step_options`, `step_events`, `board_snapshots`, `pokemon_on_field` rows
-  4. Create `match_card_usage` rows (60 cards per player per match)
-- All data normalized — no JSON columns
+  1. Extract deck choices (60 card IDs per player) from step 0 action
+  2. Extract result from `rewards`
+  3. Create `matches` row with `source='remote'`, deck_id for each side
+  4. Create `match_card_usage` rows (60 cards per player)
+  5. Do NOT create match_steps, board_snapshots, etc.
+- After processing all episodes: compute card_elo and deck_elo
 
-**I.2 — Entrypoint `tcg-build-replays`**
-- `uv run tcg-build-replays --date 2026-07-25`
-- `uv run tcg-build-replays --range 2026-07-20 2026-07-25`
-- Idempotent: skips already-processed episodes (by episode_id)
+**I.2 — Modify `scripts/tournament.py` to save full local replay data**
+- After each game, save structured data:
+  1. `matches` row with `source='local'`
+  2. `match_steps` for each decision
+  3. `step_options` for available options
+  4. `step_events` for game log events
+  5. `board_snapshots` + `pokemon_on_field` for board state
+  6. `match_card_usage` for deck composition
 
-**I.3 — Validation**
-- Verify step count matches game length
-- Verify all cards referenced exist in `cards` table
-- Verify board_snapshots are consistent (HP decreases, cards move zones)
+**I.3 — Entrypoint `tcg-build-card-stats`**
+- `uv run tcg-build-card-stats --date 2026-07-25`
+- `uv run tcg-build-card-stats --range 2026-07-20 2026-07-25`
+- Idempotent: skips already-processed episodes
 
-**Commit:** `feat(I): replay pipeline — structured game data into SQLite`
+**I.4 — Validation**
+- Verify remote matches have card_usage but no step data
+- Verify local matches have full step data
+- Verify card_elo and deck_elo are computed correctly
+
+**Commit:** `feat(I): replay pipeline — remote stats only, local full data`
 
 ---
 
