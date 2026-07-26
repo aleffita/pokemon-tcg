@@ -42,7 +42,7 @@ class TransformerEncoderLayerMLX(nn.Module):
 
     def __init__(self, d_model: int, nhead: int, ff_dim: int) -> None:
         super().__init__()
-        self.attn: nn.MultiHeadAttention = nn.MultiHeadAttention(d_model, nhead)
+        self.attn: nn.MultiHeadAttention = nn.MultiHeadAttention(d_model, nhead, bias=True)
         self.norm1: nn.LayerNorm = nn.LayerNorm(d_model)
         self.norm2: nn.LayerNorm = nn.LayerNorm(d_model)
         self.ff: nn.Sequential = nn.Sequential(
@@ -178,10 +178,16 @@ class TokenTransformerMLX(nn.Module):
             return mx.zeros((*ids.shape, self.d))
         return self.static_proj(self.card_feat[ids])
 
+    def _card_emb(self, ids: mx.array) -> mx.array:
+        """Embed with padding_idx=0 semantics: id=0 returns zero vector."""
+        emb = self.card_emb(ids)
+        mask = (ids != 0).astype(emb.dtype)[..., None]
+        return emb * mask
+
     def _card_stream(self, ids: mx.array, t: int) -> mx.array:
         """Card list tokens: card_emb(id) + type_emb + static features."""
         B, K = ids.shape
-        return self.card_emb(ids) + self._type(B, K, t) + self._static(ids)
+        return self._card_emb(ids) + self._type(B, K, t) + self._static(ids)
 
     def _unit_stream(
         self,
@@ -196,10 +202,10 @@ class TokenTransformerMLX(nn.Module):
         """In-play unit tokens: top_card + pre-evos + tools + energies + attr + type."""
         B, U = top_id.shape
         idbag = (
-            self.card_emb(top_id)
-            + self.card_emb(preevo_id).sum(axis=2)
-            + self.card_emb(tool_id).sum(axis=2)
-            + self.card_emb(energy_id).sum(axis=2)
+            self._card_emb(top_id)
+            + self._card_emb(preevo_id).sum(axis=2)
+            + self._card_emb(tool_id).sum(axis=2)
+            + self._card_emb(energy_id).sum(axis=2)
         )  # [B, U, d]
         # Active slot gets active_t, rest get bench_t
         types_arr = [[bench_t] * U for _ in range(B)]
@@ -244,7 +250,7 @@ class TokenTransformerMLX(nn.Module):
         # Synthesize card token where pos < 0 but card > 0
         need = ((pos < 0) & (card > 0)).astype(mx.float32)[..., None]
         synth = (
-            self.card_emb(card) + self._static(card)
+            self._card_emb(card) + self._static(card)
             + self._type(B, K, T_CARD_SYNTH)
         )
         return tok + need * synth
@@ -380,9 +386,8 @@ class TokenTransformerMLX(nn.Module):
         ], axis=1)
 
         # --- run Transformer ---
-        # MLX MultiHeadAttention mask: True = attend, False = ignore
-        # Needs to be 4D (B, H, S_q, S_kv) or (B, 1, 1, S_kv) for key-padding mask
-        attn_mask = (~pad)[:, None, None, :]  # [B, 1, 1, S_kv]
+        # Additive mask: 0 = attend, -1e9 = ignore (matches MLX MHA contract)
+        attn_mask = mx.where(pad[:, None, None, :], -1e9, 0.0)  # [B, 1, 1, S_kv]
         enc = self.encoder(seq, mask=attn_mask)
 
         cls_out = enc[:, 0]                    # [B, d]
