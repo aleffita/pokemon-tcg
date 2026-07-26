@@ -271,7 +271,7 @@ def test_forward_pass_finite():
             for k in keys
         }
 
-        logits, value = model.logits_value(ob)
+        logits, value, _ = model.logits_value(ob)
 
         # Shape checks
         assert logits.shape == (BATCH_SIZE, N_ACTIONS), (
@@ -326,7 +326,7 @@ def test_forward_matches_bc_train():
         model = build_token_net_mlx(ct, CANONICAL_CFG)
         model.eval()
 
-        logits, value = model.logits_value(ob_mlx)
+        logits, value, _ = model.logits_value(ob_mlx)
 
         # Verify we can compute a valid cross-entropy loss
         yb = mx.array(labels[indices].astype(np.int32))

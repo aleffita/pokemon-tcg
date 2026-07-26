@@ -87,6 +87,9 @@ class TrainConfig:
     max_episodes: int = 0  # 0 = all episodes (for smoke testing)
     max_rows: int = 0  # 0 = all rows (for smoke testing)
 
+    # F.3: TBPTT (0 = disabled, 8/16/32 for sequential training)
+    tbptt_chunk: int = 0
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 

@@ -73,6 +73,8 @@ def main() -> None:
     p.add_argument("--slab-rows", type=int, default=None)
     p.add_argument("--log-interval", type=int, default=None,
                    help="Print training stats every N steps")
+    p.add_argument("--tbptt-chunk", type=int, default=0,
+                   help="TBPTT chunk size (0=disabled, 8/16/32 for sequential training)")
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--out", default=None)
     p.add_argument("--resume", default=None)
@@ -143,6 +145,7 @@ def main() -> None:
     a.seed = a.seed if a.seed is not None else cfg.seed
     a.out = a.out or "model/checkpoint/bc_best_mlx.pkl"
     a.max_rows = a.max_rows if a.max_rows is not None else cfg.max_rows
+    a.tbptt_chunk = a.tbptt_chunk if a.tbptt_chunk > 0 else 0  # 0 = disabled
     a.log_interval = a.log_interval or 100
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
@@ -309,9 +312,17 @@ def main() -> None:
     # --- loss + grad function ---
     grad_fn = mx.value_and_grad(
         lambda model, ob, yb: nn.losses.cross_entropy(
-            model.logits_value(ob)[0], yb).mean(),
+            model.logits_value(ob)[0], yb).mean(),  # logits only for loss
         argnums=0
     )
+
+    # F.3: TBPTT loss + grad function (accepts memory, returns memory_out)
+    def tbptt_loss_and_grad(model, ob, yb, memory_in):
+        """Forward with memory, cross-entropy loss, backward through model params only."""
+        logits, _, memory_out = model.logits_value(ob, memory_in=memory_in)
+        loss = nn.losses.cross_entropy(logits, yb).mean()
+        grads = mx.grad(loss, argnums=0)
+        return loss, grads, memory_out
 
     if a.compile:
         from functools import partial
@@ -404,6 +415,45 @@ def main() -> None:
             q.put(item)
         q.put(None)
 
+    # ---- F.3: TBPTT batch generator ----
+    def _tbptt_batches(chunk_size: int):
+        """Yield (ob, yb, memory_in) groups in episode order for TBPTT.
+
+        Loads episode_meta.npy (must have 'episode_id', 'side', 'new_episode').
+        Groups rows by (episode_id, side), iterates in order, yields chunks.
+        Memory is carried between chunks within the same (episode, side) group.
+        """
+        meta_path = os.path.join(a.data, "episode_meta.npy")
+        if not mmapped or not os.path.exists(meta_path):
+            print(f"[bc-train-mlx] F.3: no episode_meta.npy found, falling back to shuffled")
+            return
+
+        meta = np.load(meta_path)
+        ep_ids = np.asarray(meta["episode_id"][:v0])
+        sides = np.asarray(meta["side"][:v0])
+
+        # Group row indices by (episode_id, side)
+        from collections import defaultdict
+        groups: dict[tuple, list[int]] = defaultdict(list)
+        for i in range(v0):
+            key = (int(ep_ids[i]), int(sides[i]))
+            groups[key].append(i)
+
+        # Sort groups by episode_id then side for deterministic order
+        sorted_keys = sorted(groups.keys())
+
+        for key in sorted_keys:
+            row_indices = groups[key]
+            # Process this (episode, side) group in chunks
+            for ci in range(0, len(row_indices), chunk_size):
+                chunk_rows = row_indices[ci:ci + chunk_size]
+                chunk_arr = np.array(chunk_rows, dtype=np.int64)
+                ob = {k: mx.array(np.asarray(obs_np[k][chunk_arr]).astype(
+                        np.int32 if k in int_keys else np.float16))
+                      for k in keys}
+                yb = mx.array(y[chunk_arr].astype(np.int32))
+                yield ob, yb
+
     # ---- training loop ----
     _running_loss: float = 0.0
     _running_n: int = 0
@@ -412,6 +462,7 @@ def main() -> None:
     _accum_grads = None
     _accum_examples: int = 0
     _accum_loss_sum: float = 0.0
+    _tbptt_memory = None  # F.3: persistent memory for TBPTT training
 
     for ep in range(start_epoch, a.epochs):
         ep_t0: float = time.time()
@@ -423,6 +474,7 @@ def main() -> None:
         _accum_grads = None
         _accum_examples = 0
         _accum_loss_sum = 0.0
+        _tbptt_memory = None  # F.3: reset memory at epoch start
         print(f"[bc-train-mlx] === epoch {ep + 1}/{a.epochs} ===", flush=True)
 
         # Flatten all batches from all slabs into a single generator
@@ -463,7 +515,23 @@ def main() -> None:
                 for ob, yb in batches(obs_np, group_np, 0, order, a.batch):
                     yield ob, yb
 
-        for ob, yb in _all_batches():
+        # F.3: TBPTT training path (opt-in, when --tbptt-chunk > 0 and episode_meta exists)
+        _use_tbptt = (a.tbptt_chunk > 0 and mmapped
+                      and os.path.exists(os.path.join(a.data, "episode_meta.npy")))
+
+        if _use_tbptt:
+            print(f"[bc-train-mlx] F.3: TBPTT enabled (chunk={a.tbptt_chunk})", flush=True)
+
+        _batch_iter = (
+            _tbptt_batches(a.tbptt_chunk) if _use_tbptt else _all_batches()
+        )
+
+        for _batch_tuple in _batch_iter:
+            if _use_tbptt:
+                ob, yb = _batch_tuple  # TBPTT path
+            else:
+                ob, yb = _batch_tuple  # standard path
+
             micro_n = len(yb)
 
             # Forward + backward this microbatch
@@ -473,7 +541,17 @@ def main() -> None:
                 _compile_t = time.time()
 
             if a.accum_steps > 1:
-                loss_val, grads = train_step_accum(ob, yb, _micro_count, a.accum_steps)
+                # F.3: TBPTT path uses memory-aware forward
+                if _use_tbptt:
+                    loss, grads, mem_out = tbptt_loss_and_grad(model, ob, yb, _tbptt_memory)
+                    mx.eval(loss)
+                    loss_val = float(loss)
+                    _tbptt_memory = mem_out
+                    # Stop gradient at accumulation boundary
+                    if _micro_count > 0 and _micro_count % a.accum_steps == 0:
+                        _tbptt_memory = mx.stop_gradient(_tbptt_memory)
+                else:
+                    loss_val, grads = train_step_accum(ob, yb, _micro_count, a.accum_steps)
                 if _accum_grads is None:
                     _accum_grads = grads
                     _accum_examples = micro_n
@@ -498,7 +576,12 @@ def main() -> None:
                     _accum_loss_sum = 0.0
             else:
                 # No accumulation: single microbatch = full step
-                if a.compile and a.max_grad_norm <= 0:
+                if _use_tbptt:
+                    loss, grads, mem_out = tbptt_loss_and_grad(model, ob, yb, _tbptt_memory)
+                    mx.eval(loss)
+                    loss_val = float(loss)
+                    _tbptt_memory = mem_out
+                elif a.compile and a.max_grad_norm <= 0:
                     loss, grads = compiled_step(ob, yb)
                     mx.eval(loss)
                     loss_val = float(loss)
@@ -538,7 +621,7 @@ def main() -> None:
         vloss: float = 0.0
         tot: int = 0
         for ob, yb in batches(val_np, gv_np, v0, np.arange(nval), a.batch):
-            lg, _ = model.logits_value(ob)
+            lg, _, _ = model.logits_value(ob)
             lg_np = np.asarray(lg)
             yb_np = np.asarray(yb)
             # Proper cross-entropy: -(logit[label] - logsumexp(logits))

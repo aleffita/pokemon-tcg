@@ -190,7 +190,7 @@ def test_forward_with_compaction():
         model = build_token_net_mlx(ct, CANONICAL_CFG)
         model.eval()
 
-        logits, value = model.logits_value(ob)
+        logits, value, _ = model.logits_value(ob)
 
         # Shape checks
         assert logits.shape == (BATCH_SIZE, N_ACTIONS), (
@@ -244,7 +244,7 @@ def test_backward_with_compaction():
         model = build_token_net_mlx(ct, CANONICAL_CFG)
 
         def loss_fn(m, o, y):
-            logits, _ = m.logits_value(o)
+            logits, _, _ = m.logits_value(o)
             return nn.losses.cross_entropy(logits, y).mean()
 
         loss, grads = mx.value_and_grad(loss_fn)(model, ob, yb)

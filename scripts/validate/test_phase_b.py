@@ -105,7 +105,7 @@ def test_additive_attention_mask():
         ob, _ = _load_batch(tmpdir, BATCH_SIZE)
 
         # Forward pass 1: normal (some padding)
-        logits1, value1 = model.logits_value(ob)
+        logits1, value1, _ = model.logits_value(ob)
 
         # Verify no NaN
         logits1_np = np.asarray(logits1)
@@ -124,7 +124,7 @@ def test_additive_attention_mask():
             if k.endswith("_mask") and k != "action_mask":
                 ob2[k] = ob2[k] * 0.0  # force all to 0 (all padded)
 
-        logits2, value2 = model.logits_value(ob2)
+        logits2, value2, _ = model.logits_value(ob2)
 
         # The NaN-free property should still hold even with extreme padding
         logits2_np = np.asarray(logits2)
@@ -240,7 +240,7 @@ def test_static_tables_unchanged():
         ob, yb = _load_batch(tmpdir, BATCH_SIZE)
 
         def loss_fn(m, o, y):
-            logits, _ = m.logits_value(o)
+            logits, _, _ = m.logits_value(o)
             return nn.losses.cross_entropy(logits, y).mean()
 
         loss, grads = mx.value_and_grad(loss_fn)(model, ob, yb)
@@ -278,7 +278,7 @@ def test_forward_finite():
     try:
         ob, yb = _load_batch(tmpdir, BATCH_SIZE)
 
-        logits, value = model.logits_value(ob)
+        logits, value, _ = model.logits_value(ob)
 
         # Shapes
         assert logits.shape == (BATCH_SIZE, N_ACTIONS), (
@@ -327,7 +327,7 @@ def test_backward_finite():
         ob, yb = _load_batch(tmpdir, BATCH_SIZE)
 
         def loss_fn(m, o, y):
-            logits, _ = m.logits_value(o)
+            logits, _, _ = m.logits_value(o)
             return nn.losses.cross_entropy(logits, y).mean()
 
         loss, grads = mx.value_and_grad(loss_fn)(model, ob, yb)
@@ -386,7 +386,7 @@ def test_categorical_value():
         ob, yb = _load_batch(tmpdir, BATCH_SIZE)
 
         # Forward: logits_value
-        logits, value = model.logits_value(ob)
+        logits, value, _ = model.logits_value(ob)
         value_np = np.asarray(value)
         assert value.shape == (BATCH_SIZE,), (
             f"categorical value shape {value.shape}, expected ({BATCH_SIZE},)"

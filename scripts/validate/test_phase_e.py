@@ -252,7 +252,7 @@ def test_e3_autoregressive_multiselect():
             }
 
             # Forward
-            logits, _ = model.logits_value(ob_mlx)
+            logits, _, _ = model.logits_value(ob_mlx)
             logits_np = np.asarray(logits)
 
             # Process only row 0 (our test row)
@@ -293,7 +293,7 @@ def test_e3_autoregressive_multiselect():
             k: mx.array(ob_np[k].astype(np.int32 if k in int_keys else np.float16))
             for k in ob_np
         }
-        logits2, _ = model.logits_value(ob_mlx2)
+        logits2, _, _ = model.logits_value(ob_mlx2)
         logits2_np = np.asarray(logits2)
         row_logits2 = logits2_np[0].copy()
         row_logits2[am[0] < 0.5] = -1e9
@@ -340,7 +340,7 @@ def test_e4_fp16_inference():
                 n_fp16 += 1
 
         # Verify forward works with fp16 tensors
-        logits, value = model.logits_value(ob_fp16)
+        logits, value, _ = model.logits_value(ob_fp16)
         assert logits.shape == (BATCH_SIZE, N_ACTIONS), f"logits shape: {logits.shape}"
         assert value.shape == (BATCH_SIZE,), f"value shape: {value.shape}"
         assert mx.all(mx.isfinite(logits)).item(), "logits contain non-finite values"
@@ -348,7 +348,7 @@ def test_e4_fp16_inference():
 
         # Compare with float32 forward
         ob_fp32 = _batch_to_mlx(ob_np, int_keys)
-        logits32, value32 = model.logits_value(ob_fp32)
+        logits32, value32, _ = model.logits_value(ob_fp32)
 
         # Values should be close (fp16 vs fp32)
         diff = float(mx.abs(logits - logits32).max())
@@ -399,7 +399,7 @@ def test_e5_config_integration():
         d, labels, keys, int_keys = _load_batches(tmpdir)
         ob_np = _first_batch(d, keys, int_keys, 4)
         ob_mlx = _batch_to_mlx(ob_np, int_keys)
-        logits, value = model.logits_value(ob_mlx)
+        logits, value, _ = model.logits_value(ob_mlx)
         assert logits.shape[1] == N_ACTIONS
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -426,7 +426,7 @@ def test_e6_checkpoint_save_load():
         model.eval()
 
         # Get initial forward output
-        logits_before, value_before = model.logits_value(ob_mlx)
+        logits_before, value_before, _ = model.logits_value(ob_mlx)
 
         # Save checkpoint (pickle, matching bc_train_mlx format)
         # Use nn.utils.tree_flatten to properly handle nested lists in trainable_parameters()
@@ -454,7 +454,7 @@ def test_e6_checkpoint_save_load():
             model2.eval()
 
             # Verify output matches
-            logits_after, value_after = model2.logits_value(ob_mlx)
+            logits_after, value_after, _ = model2.logits_value(ob_mlx)
             logits_match = np.allclose(
                 np.asarray(logits_before), np.asarray(logits_after), atol=1e-5
             )
@@ -497,7 +497,7 @@ def test_e6_submit_handling():
         ob_np["action_mask"] = am
 
         ob_mlx = _batch_to_mlx(ob_np, int_keys)
-        logits, _ = model.logits_value(ob_mlx)
+        logits, _, _ = model.logits_value(ob_mlx)
         logits_np = np.asarray(logits)
         row_logits = logits_np[0].copy()
         row_am = am[0]

@@ -57,6 +57,7 @@ def _get_config() -> dict:
         "structured": False,
         "max_options": 192,
         "value_categorical": False,
+        "has_learned_init": True,
     }
 
 

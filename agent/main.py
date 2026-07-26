@@ -93,9 +93,19 @@ def _load_model():
             cfg[key] = ckpt_cfg[key]
 
     net = build_token_net_mlx(_CARD_TABLE, cfg)
-    if isinstance(state.get("model"), dict):
-        flat = [(k, mx.array(v)) for k, v in state["model"].items()]
-        tree = nn.utils.tree_unflatten(flat)
+    model_state = state.get("model")
+    if model_state is not None:
+        # Flatten nested parameter dict (from model.parameters()) to key-value pairs
+        if isinstance(model_state, dict):
+            flat = nn.utils.tree_flatten(model_state)
+        else:
+            flat = model_state
+        # Filter to only parameters the model actually has (skip numpy-backed like card_feat)
+        model_param_keys = {k for k, _ in nn.utils.tree_flatten(net.parameters())}
+        flat_filtered = [(k, v) for k, v in flat if k in model_param_keys]
+        # Convert numpy arrays to MLX arrays
+        flat_mlx = [(k, mx.array(v)) for k, v in flat_filtered]
+        tree = nn.utils.tree_unflatten(flat_mlx)
         net.update(tree)
     net.eval()
     acc = state.get("val_acc", "?")
@@ -122,6 +132,7 @@ def _get_tracker(side: int):
             "tracker": GameTracker(),
             "ability": AbilityTracker(),
             "deck": None,
+            "memory": None,  # F.1: persistent scratch register state
         }
     return _TRACKERS[side]
 
@@ -145,7 +156,8 @@ def _autoregressive_select(
     options: list,
     min_count: int,
     max_count: int,
-) -> list[int]:
+    memory_in: mx.array | None = None,
+) -> tuple[list[int], mx.array | None]:
     """Autoregressive multi-select: pick options one at a time, masking already-picked.
 
     For each substep:
@@ -156,25 +168,27 @@ def _autoregressive_select(
       5. If SUBMIT and enough picks -> break
       6. Add to picked set
 
-    Returns list of selected option indices.
+    Returns (list of selected option indices, memory_out).
     """
     n = len(options)
     if n == 0:
-        return []
+        return [], memory_in
 
     if _LOADED_MODEL is None:
         count = max(min_count, min(max_count, n))
-        return list(range(count))
+        return list(range(count)), memory_in
 
     picked_set: set[int] = set()
     results: list[int] = []
+    current_memory = memory_in
 
     for _substep in range(max_count):
         # Build MLX tensors (FP16 for numerics)
         ob = _build_mlx_tensors(encoded, int_keys)
 
-        # Forward pass
-        logits, _ = model.logits_value(ob)
+        # Forward pass with memory
+        logits, _, memory_out = model.logits_value(ob, memory_in=current_memory)
+        current_memory = memory_out
         logits_np = np.asarray(logits).flatten()
 
         # Mask illegal options
@@ -204,7 +218,7 @@ def _autoregressive_select(
         if len(results) >= max_count:
             break
 
-    return results
+    return results, current_memory
 
 
 def choose(select: dict[str, Any], current: dict | None, logs: list | None = None) -> list[int]:
@@ -258,10 +272,15 @@ def choose(select: dict[str, Any], current: dict | None, logs: list | None = Non
 
     int_keys = _ENCODER.int_keys
 
-    # E.3: Autoregressive multi-select
-    return _autoregressive_select(
-        _LOADED_MODEL, encoded, int_keys, options, min_count, max_count
+    # F.1: Pass memory and store memory_out
+    memory_in = st["memory"]
+    results, memory_out = _autoregressive_select(
+        _LOADED_MODEL, encoded, int_keys, options, min_count, max_count,
+        memory_in=memory_in,
     )
+    st["memory"] = memory_out  # F.1: persist memory for next decision
+
+    return results
 
 
 def agent(obs: dict[str, Any]) -> list[int]:
@@ -269,14 +288,15 @@ def agent(obs: dict[str, Any]) -> list[int]:
     select = obs.get("select")
     current = obs.get("current")
 
-    # Deck submission
+    # Deck submission (new match)
     if select is None:
-        # Reset trackers for both sides
+        # Reset trackers for both sides (F.1: also reset memory)
         for side in (0, 1):
             st = _get_tracker(side)
             st["tracker"].reset()
             st["ability"].reset()
             st["deck"] = list(DECK)
+            st["memory"] = None  # F.1: clean memory at match start
         return list(DECK)
 
     # E.2: Pass complete logs from observation to choose()

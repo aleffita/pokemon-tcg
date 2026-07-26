@@ -137,6 +137,11 @@ class TokenTransformerMLX(nn.Module):
         self.scratch_tokens: int = N_SCRATCH
         self.scratch: mx.array = mx.zeros((N_SCRATCH, d_model))
 
+        # F.1: Learned initial register state (persistent memory)
+        # When memory_in is None, scratch tokens are seeded from this parameter.
+        # When memory_in is provided, scratch tokens are seeded from it instead.
+        self.learned_init: mx.array = mx.zeros((N_SCRATCH, d_model))
+
         # Projections
         self.unit_attr_proj: nn.Linear = nn.Linear(UNIT_ATTR, d_model)
         self.drawable_emb: mx.array = mx.zeros(d_model)
@@ -264,7 +269,8 @@ class TokenTransformerMLX(nn.Module):
     # Option bucket sizes — round up max_legal to one of these for compiled shapes
     _OPT_BUCKETS: tuple[int, ...] = (32, 64, 128, 192)
 
-    def _encode(self, o: dict, opt_len: int | None = None) -> tuple:
+    def _encode(self, o: dict, opt_len: int | None = None,
+                memory_in: mx.array | None = None) -> tuple:
         """Build full token sequence and run Transformer.
 
         Includes D.1 option bucket compaction (truncate option tokens to the
@@ -275,13 +281,16 @@ class TokenTransformerMLX(nn.Module):
         Args:
             o: observation dict (from encoder, mlx arrays)
             opt_len: optional explicit option truncation (overrides bucket)
+            memory_in: optional [B, N_SCRATCH, d] or [N_SCRATCH, d] initial
+                       register state. When None, uses learned_init.
 
         Returns:
-            (cls_out, opt_out, pooled, extra)
+            (cls_out, opt_out, pooled, extra, scr_out)
             - cls_out: [B, d] CLS token output
             - opt_out: [B, n_opt, d] option token outputs
             - pooled: [B, d] mean-pool over non-pad tokens
             - extra: (value_out, submit_out) if split_heads, else None
+            - scr_out: [B, N_SCRATCH, d] scratch register outputs (memory_out)
         """
         import os as _os
         B = o["cls_scalars"].shape[0]
@@ -451,10 +460,16 @@ class TokenTransformerMLX(nn.Module):
         n_opt = opt_tok.shape[1]
 
         # --- scratch tokens (between state and options) ---
-        scr = (
-            mx.broadcast_to(self.scratch.reshape(1, self.scratch_tokens, self.d), (B, self.scratch_tokens, self.d))
-            + self._type(B, self.scratch_tokens, T_CLS)
-        )
+        # F.1: Use memory_in if provided, otherwise use learned_init
+        if memory_in is not None:
+            # memory_in: [B, N_SCRATCH, d] or [N_SCRATCH, d]
+            scr_base = memory_in.reshape(B, self.scratch_tokens, self.d)
+        else:
+            scr_base = mx.broadcast_to(
+                self.learned_init.reshape(1, self.scratch_tokens, self.d),
+                (B, self.scratch_tokens, self.d),
+            )
+        scr = scr_base + self._type(B, self.scratch_tokens, T_CLS)
 
         # --- full sequence: state + scratch + options ---
         seq = mx.concatenate([state_seq, scr, opt_tok], axis=1)
@@ -476,7 +491,15 @@ class TokenTransformerMLX(nn.Module):
         pooled = (enc * present).sum(axis=1) / denom
         extra = (enc[:, 1], enc[:, 2]) if self.split_heads else None
 
-        return cls_out, opt_out, pooled, extra
+        # F.1: Extract scratch register outputs (persistent memory)
+        # scr_start = end of state_seq in the compacted sequence
+        # In the concatenated sequence [state_seq, scr, opt_tok], the scratch
+        # tokens start right after state_seq. After compaction, state_seq has
+        # n_kept columns, so scr starts at index n_kept.
+        n_state_toks = state_seq.shape[1]
+        scr_out = enc[:, n_state_toks:n_state_toks + self.scratch_tokens]  # [B, N_SCRATCH, d]
+
+        return cls_out, opt_out, pooled, extra, scr_out
 
     def get_config(self) -> dict:
         """Return architecture configuration dict for checkpoint versioning."""
@@ -495,21 +518,30 @@ class TokenTransformerMLX(nn.Module):
             "structured": self.structured,
             "max_options": 192,
             "value_categorical": self.value_categorical,
+            "has_learned_init": True,  # F.1: memory API present
         }
 
     def logits_value(
             self, o: dict, opt_len: int | None = None,
-    ) -> tuple[mx.array, mx.array]:
-        """Forward pass: return policy logits + value estimate.
+            memory_in: mx.array | None = None,
+    ) -> tuple[mx.array, mx.array, mx.array]:
+        """Forward pass: return policy logits + value estimate + memory_out.
 
         Args:
             o: observation dict (mlx arrays)
             opt_len: optional option truncation
+            memory_in: optional [B, N_SCRATCH, d] or [N_SCRATCH, d] initial
+                       register state. None → use learned_init.
 
         Returns:
-            (logits, value): logits [B, N_ACTIONS], value [B]
+            (logits, value, memory_out):
+                logits: [B, N_ACTIONS]
+                value: [B]
+                memory_out: [B, N_SCRATCH, d] scratch register outputs
         """
-        cls_out, opt_out, pooled, extra = self._encode(o, opt_len=opt_len)
+        cls_out, opt_out, pooled, extra, scr_out = self._encode(
+            o, opt_len=opt_len, memory_in=memory_in,
+        )
         n = opt_out.shape[1]
 
         # Option scoring
@@ -551,11 +583,14 @@ class TokenTransformerMLX(nn.Module):
         action_mask = o["action_mask"]
         logits = mx.where(action_mask < 0.5, -1e9, logits)
 
-        return logits, value
+        return logits, value, scr_out
 
-    def get_value(self, o: dict, opt_len: int | None = None) -> mx.array:
+    def get_value(self, o: dict, opt_len: int | None = None,
+                  memory_in: mx.array | None = None) -> mx.array:
         """Return only the value estimate."""
-        cls_out, _, pooled, extra = self._encode(o, opt_len=opt_len)
+        cls_out, _, pooled, extra, _ = self._encode(
+            o, opt_len=opt_len, memory_in=memory_in,
+        )
         if self.split_heads:
             v_in = extra[0]
         else:
@@ -567,10 +602,14 @@ class TokenTransformerMLX(nn.Module):
         return self.value_head(v_in).squeeze(-1)
 
     def get_action_and_value(
-            self, o: dict, action: mx.array | None = None, opt_len: int | None = None,
-    ) -> tuple[mx.array, mx.array, mx.array, mx.array]:
-        """Return action, log_prob, entropy, value (for PPO)."""
-        logits, value = self.logits_value(o, opt_len=opt_len)
+            self, o: dict, action: mx.array | None = None,
+            opt_len: int | None = None,
+            memory_in: mx.array | None = None,
+    ) -> tuple[mx.array, mx.array, mx.array, mx.array, mx.array]:
+        """Return action, log_prob, entropy, value, memory_out (for PPO)."""
+        logits, value, memory_out = self.logits_value(
+            o, opt_len=opt_len, memory_in=memory_in,
+        )
         # Softmax for sampling
         probs = mx.softmax(logits, axis=-1)
         log_probs = mx.log(mx.clip(probs, a_min=1e-8, a_max=None))
@@ -579,7 +618,7 @@ class TokenTransformerMLX(nn.Module):
             # Sample from distribution
             action = mx.random.categorical(logits, num_samples=1).squeeze(-1)
         log_prob = mx.take_along_axis(log_probs, action.reshape(-1, 1), axis=1).squeeze(-1)
-        return action, log_prob, entropy, value
+        return action, log_prob, entropy, value, memory_out
 
 
 # ============================================================
