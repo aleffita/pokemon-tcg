@@ -53,6 +53,11 @@ class TrainConfig:
     structured: bool = False
     scratch_registers: int = 4
 
+    # Trainer options
+    prefetch: bool = False
+    compile: bool = False
+    log_interval: int = 100
+
     # Training
     epochs: int = 10
     batch_size: int = 128
@@ -82,10 +87,17 @@ class TrainConfig:
     bc_workers: int = 8
     bc_flush: int = 200  # episodes per batch/shard
     bc_ep_timeout: int = 60  # seconds per episode
+    bc_would_ko: bool = False
+    bc_wk_nvar: int = 10
+    bc_both_sides: bool = True
 
     # Training constraints (0 = all)
     max_episodes: int = 0  # 0 = all episodes (for smoke testing)
     max_rows: int = 0  # 0 = all rows (for smoke testing)
+
+    # Categorical value (model)
+    value_atoms: int = 51
+    value_vmax: float = 1.0
 
     # F.3: TBPTT (0 = disabled, 8/16/32 for sequential training)
     tbptt_chunk: int = 0

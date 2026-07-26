@@ -146,7 +146,9 @@ def main() -> None:
     a.out = a.out or "model/checkpoint/bc_best_mlx.pkl"
     a.max_rows = a.max_rows if a.max_rows is not None else cfg.max_rows
     a.tbptt_chunk = a.tbptt_chunk if a.tbptt_chunk > 0 else 0  # 0 = disabled
-    a.log_interval = a.log_interval or 100
+    a.log_interval = a.log_interval if a.log_interval is not None else cfg.log_interval
+    a.compile = a.compile if a.compile is not None else cfg.compile
+    a.prefetch = a.prefetch if a.prefetch is not None else cfg.prefetch
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     os.makedirs("model/bc_model", exist_ok=True)
@@ -222,11 +224,13 @@ def main() -> None:
     int_keys = set(enc.int_keys)
 
     # --- model (MLX!) ---
-    cfg = {"arch": "transformer2", "d_model": a.d_model,
-           "nhead": a.nhead, "nlayers": a.nlayers, "ff": a.ff,
-           "static": a.static, "structured": a.structured,
-           "split_heads": a.split_heads}
-    model = build_token_net_mlx(ct, cfg)
+    net_cfg = {"arch": "transformer2", "d_model": a.d_model,
+               "nhead": a.nhead, "nlayers": a.nlayers, "ff": a.ff,
+               "static": a.static, "structured": a.structured,
+               "split_heads": a.split_heads,
+               "scratch_registers": cfg.scratch_registers,
+               "value_atoms": cfg.value_atoms, "value_vmax": cfg.value_vmax}
+    model = build_token_net_mlx(ct, net_cfg)
 
     # Resume from checkpoint
     start_epoch = 0

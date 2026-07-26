@@ -90,6 +90,7 @@ class TokenTransformerMLX(nn.Module):
         d_model: int = 128,
         nhead: int = 4,
         nlayers: int = 2,
+        n_scratch: int = N_SCRATCH,
         dropout: float = 0.0,
         card_feat: np.ndarray | None = None,
         structured: bool = False,
@@ -134,13 +135,13 @@ class TokenTransformerMLX(nn.Module):
         if split_heads:
             self.value_tok: mx.array = mx.zeros(d_model)
             self.submit_tok: mx.array = mx.zeros(d_model)
-        self.scratch_tokens: int = N_SCRATCH
-        self.scratch: mx.array = mx.zeros((N_SCRATCH, d_model))
+        self.scratch_tokens: int = n_scratch
+        self.scratch: mx.array = mx.zeros((n_scratch, d_model))
 
         # F.1: Learned initial register state (persistent memory)
         # When memory_in is None, scratch tokens are seeded from this parameter.
         # When memory_in is provided, scratch tokens are seeded from it instead.
-        self.learned_init: mx.array = mx.zeros((N_SCRATCH, d_model))
+        self.learned_init: mx.array = mx.zeros((n_scratch, d_model))
 
         # Projections
         self.unit_attr_proj: nn.Linear = nn.Linear(UNIT_ATTR, d_model)
@@ -638,6 +639,9 @@ def build_token_net_mlx(card_table: CardTable, net_config: dict | None = None) -
     use_structured: bool = cfg.pop("structured", False)
     use_split: bool = cfg.pop("split_heads", False)
     cfg.pop("would_ko", None)
+    n_scratch: int = cfg.pop("scratch_registers", N_SCRATCH)
+    value_atoms: int = cfg.pop("value_atoms", 51)
+    value_vmax: float = cfg.pop("value_vmax", 1.0)
     opt_struct: int = cfg.pop("opt_struct", OPT_STRUCT + effect_data.N_ATTACK_FX)
 
     feat = card_table.matrix if use_static else None
@@ -650,5 +654,7 @@ def build_token_net_mlx(card_table: CardTable, net_config: dict | None = None) -
 
     return TokenTransformerMLX(
         card_table.vocab_size, card_feat=feat, structured=use_structured,
-        split_heads=use_split, opt_struct=opt_struct, **cfg,
+        split_heads=use_split, n_scratch=n_scratch,
+        value_atoms=value_atoms, value_vmax=value_vmax,
+        opt_struct=opt_struct, **cfg,
     )

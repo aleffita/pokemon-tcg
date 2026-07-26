@@ -48,12 +48,14 @@ from rl.train_config import TrainConfig
 _DECK_PATH = os.path.join(_AGENT_DIR, "deck.csv")
 
 # ---- model checkpoint search (MLX only) ----
+# Use config dirs for search paths, with known fallbacks
+_cfg_default = TrainConfig()
 _MODEL_PATH = None
 for candidate in [
-    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_mlx_final.pkl"),
-    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_mlx.pkl"),
-    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_final.pkl"),
-    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best.pkl"),
+    os.path.join(_PROJECT_ROOT, _cfg_default.model_dir, "bc_best_mlx_final.pkl"),
+    os.path.join(_PROJECT_ROOT, _cfg_default.checkpoint_dir, "bc_best_mlx.pkl"),
+    os.path.join(_PROJECT_ROOT, _cfg_default.model_dir, "bc_best_final.pkl"),
+    os.path.join(_PROJECT_ROOT, _cfg_default.checkpoint_dir, "bc_best.pkl"),
 ]:
     if os.path.exists(candidate):
         _MODEL_PATH = candidate
@@ -72,6 +74,10 @@ _DEFAULT_CFG: dict[str, Any] = {
     "nlayers": TrainConfig.nlayers,
     "static": TrainConfig.static,
     "split_heads": TrainConfig.split_heads,
+    "structured": TrainConfig.structured,
+    "scratch_registers": TrainConfig.scratch_registers,
+    "value_atoms": TrainConfig.value_atoms,
+    "value_vmax": TrainConfig.value_vmax,
 }
 
 

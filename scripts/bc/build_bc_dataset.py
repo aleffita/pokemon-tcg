@@ -21,10 +21,16 @@ import numpy as np
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import TokenEncoder, GameTracker, AbilityTracker, SUBMIT_ACTION
 from rl.encoder.option_dedup import dup_legal_indices
+from rl.train_config import load_config
 
 EP_DIR = sys.argv[1] if len(sys.argv) > 1 else "_kaggle_scout/ep"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "_kaggle_scout/bc.npz"
 MAX_EPS = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+
+# Load config: config defaults, with env var fallback for backward compat
+_cfg = load_config()
+WOULD_KO = os.environ.get("BC_WOULD_KO", "1" if _cfg.bc_would_ko else "0") == "1"
+WK_NVAR = int(os.environ.get("BC_WK_NVAR", str(_cfg.bc_wk_nvar)))
 
 ct = get_card_table()
 enc = TokenEncoder(ct)
@@ -33,8 +39,6 @@ enc = TokenEncoder(ct)
 # (rl.search_agent.annotate_would_ko) on each decision obs BEFORE encoding, so opt_attr's would_ko
 # trio (rate / exp-prizes / P-win) is populated EXACTLY as in env collection + inference. Off by
 # default -> the trio stays 0.0 (so the same builder produces the nowk arm, columns just zeroed).
-WOULD_KO = os.environ.get("BC_WOULD_KO", "0") == "1"
-WK_NVAR = int(os.environ.get("BC_WK_NVAR", "10"))
 if WOULD_KO:
     from rl import search_agent as SA
 
@@ -57,7 +61,7 @@ def _dedup_group(sel, s, me, deck_list, action_mask, n):
     return arr
 
 
-BOTH_SIDES = os.environ.get("BC_BOTH_SIDES", "1") == "1"   # clone BOTH players (default): Kaggle
+BOTH_SIDES = os.environ.get("BC_BOTH_SIDES", "1" if _cfg.bc_both_sides else "0") == "1"   # clone BOTH players (default): Kaggle
 # matchmaking pairs similar-rated agents, so the loser's moves are ~the winner's quality and
 # winner-only throws away half the data for a near-nil quality filter. BC_BOTH_SIDES=0 = old behavior.
 
