@@ -58,6 +58,7 @@ class ResultsDB:
                 d INTEGER NOT NULL DEFAULT 0,
                 win_rate REAL NOT NULL DEFAULT 0.0,
                 lb_score INTEGER,
+                replay_html TEXT,
                 FOREIGN KEY (tournament_id) REFERENCES tournaments(id)
             );
 

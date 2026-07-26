@@ -66,26 +66,31 @@ def resolve(name: str):
     return load_agent(name)
 
 
-def play(env, a, b) -> int:
-    """Run one game; return +1 if a (P0) wins, -1 if loses, 0 draw."""
+def play(env, a, b) -> tuple[int, str]:
+    """Run one game; return (result, html_replay). result: +1=P0 wins, -1=loses, 0=draw."""
     env.reset()
     env.run([a, b])
     r0, r1 = (s.reward for s in env.steps[-1])
-    return 1 if r0 > r1 else (-1 if r0 < r1 else 0)
+    html = env.render(mode="html")
+    return (1 if r0 > r1 else (-1 if r0 < r1 else 0)), html
 
 
-def run_matchup(env, our_agent, opp_agent, n_games: int) -> tuple[int, int, int]:
-    """Play n_games between our agent and opponent, alternating sides."""
+def run_matchup(env, our_agent, opp_agent, n_games: int) -> tuple[int, int, int, str]:
+    """Play n_games; return (wins, losses, draws, last_replay_html)."""
     wins = losses = draws = 0
+    last_html = ""
     for i in range(n_games):
         if i % 2 == 0:
-            r = play(env, our_agent, opp_agent)
+            r, html = play(env, our_agent, opp_agent)
         else:
-            r = -play(env, opp_agent, our_agent)
+            r, html = play(env, opp_agent, our_agent)
+            r = -r
+        if i == n_games - 1:
+            last_html = html
         wins += r == 1
         losses += r == -1
         draws += r == 0
-    return wins, losses, draws
+    return wins, losses, draws, last_html
 
 
 def main():
@@ -127,11 +132,11 @@ def main():
             continue
 
         t0 = time.time()
-        w, l, d = run_matchup(env, our_agent, opp_agent, args.games)
+        w, l, d, replay_html = run_matchup(env, our_agent, opp_agent, args.games)
         elapsed = time.time() - t0
         wr = w / max(w + l, 1) * 100
         total_w += w; total_l += l; total_d += d
-        rows.append((label, f"{w}", f"{l}", f"{d}", f"{wr:.1f}%", f"{elapsed:.0f}s"))
+        rows.append((label, w, l, d, wr, elapsed, replay_html))
         print(f"  {label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s)", flush=True)
 
     total_time = time.time() - start_time

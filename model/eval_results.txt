@@ -239,3 +239,70 @@ Note: Alakazam Deck - Trained on the dataset from 21-07-2026
   sub/lb1048_akalazam_v2_deck_updated      W= 10 L= 10 D=  0 wr= 50.0%
   OVERALL                                  W=215 L= 45 D=  0 wr= 82.7%
   Total time: 133s
+
+======================================================================
+Tournament: 2026-07-26 19:05
+Agent: /Users/alefita/workdir/pokemon-tcg/agent/main.py
+Games per opponent: 3
+======================================================================
+  random                                   W=  3 L=  0 D=  0 wr=100.0%
+  first                                    W=  1 L=  2 D=  0 wr= 33.3%
+  lb1009_mega_lucario_ex_islet             W=  0 L=  3 D=  0 wr=  0.0%
+  lb945_multiply_ivan                      W=  0 L=  3 D=  0 wr=  0.0%
+  lb826_alakazam_seok                      W=  0 L=  3 D=  0 wr=  0.0%
+  lb814_crustle_emre                       W=  2 L=  1 D=  0 wr= 66.7%
+  lb798_lucario_pilkwang                   W=  1 L=  2 D=  0 wr= 33.3%
+  starters/lb600_mega_lucario_ex           W=  0 L=  3 D=  0 wr=  0.0%
+  starters/lb526_iono                      W=  1 L=  2 D=  0 wr= 33.3%
+  starters/lb510_mega_abomasnow_ex         W=  1 L=  2 D=  0 wr= 33.3%
+  starters/lb600_dragapult_ex              W=  0 L=  3 D=  0 wr=  0.0%
+  sub/lb966_akalazam_v2_deck_updated       W=  0 L=  3 D=  0 wr=  0.0%
+  sub/lb881_alakazam_v1                    W=  0 L=  3 D=  0 wr=  0.0%
+  sub/lb1004_alakazam_v3                   W=  0 L=  3 D=  0 wr=  0.0%
+  OVERALL                                  W=  9 L= 33 D=  0 wr= 21.4%
+  Total time: 24s
+
+======================================================================
+Tournament: 2026-07-26 19:09
+Agent: /Users/alefita/workdir/pokemon-tcg/agent/main.py
+Games per opponent: 3
+======================================================================
+  random                                   W=  1 L=  2 D=  0 wr= 33.3%
+  first                                    W=  2 L=  1 D=  0 wr= 66.7%
+  lb1009_mega_lucario_ex_islet             W=  1 L=  2 D=  0 wr= 33.3%
+  lb945_multiply_ivan                      W=  2 L=  1 D=  0 wr= 66.7%
+  lb826_alakazam_seok                      W=  0 L=  3 D=  0 wr=  0.0%
+  lb814_crustle_emre                       W=  1 L=  2 D=  0 wr= 33.3%
+  lb798_lucario_pilkwang                   W=  1 L=  2 D=  0 wr= 33.3%
+  starters/lb600_mega_lucario_ex           W=  1 L=  2 D=  0 wr= 33.3%
+  starters/lb526_iono                      W=  0 L=  3 D=  0 wr=  0.0%
+  starters/lb510_mega_abomasnow_ex         W=  0 L=  3 D=  0 wr=  0.0%
+  starters/lb600_dragapult_ex              W=  0 L=  3 D=  0 wr=  0.0%
+  sub/lb966_akalazam_v2_deck_updated       W=  0 L=  3 D=  0 wr=  0.0%
+  sub/lb881_alakazam_v1                    W=  0 L=  3 D=  0 wr=  0.0%
+  sub/lb1004_alakazam_v3                   W=  0 L=  3 D=  0 wr=  0.0%
+  OVERALL                                  W=  9 L= 33 D=  0 wr= 21.4%
+  Total time: 24s
+
+======================================================================
+Tournament: 2026-07-26 19:38
+Agent: /Users/alefita/workdir/pokemon-tcg/agent/main.py
+Games per opponent: 5
+Note: scratch=16, 2ep, 10eps data
+======================================================================
+  random                                   W=  3 L=  2 D=  0 wr= 60.0%
+  first                                    W=  2 L=  3 D=  0 wr= 40.0%
+  lb1009_mega_lucario_ex_islet             W=  0 L=  5 D=  0 wr=  0.0%
+  lb945_multiply_ivan                      W=  0 L=  5 D=  0 wr=  0.0%
+  lb826_alakazam_seok                      W=  0 L=  5 D=  0 wr=  0.0%
+  lb814_crustle_emre                       W=  4 L=  1 D=  0 wr= 80.0%
+  lb798_lucario_pilkwang                   W=  1 L=  4 D=  0 wr= 20.0%
+  starters/lb600_mega_lucario_ex           W=  1 L=  4 D=  0 wr= 20.0%
+  starters/lb526_iono                      W=  0 L=  5 D=  0 wr=  0.0%
+  starters/lb510_mega_abomasnow_ex         W=  1 L=  4 D=  0 wr= 20.0%
+  starters/lb600_dragapult_ex              W=  1 L=  4 D=  0 wr= 20.0%
+  sub/lb966_akalazam_v2_deck_updated       W=  0 L=  5 D=  0 wr=  0.0%
+  sub/lb881_alakazam_v1                    W=  0 L=  5 D=  0 wr=  0.0%
+  sub/lb1004_alakazam_v3                   W=  0 L=  5 D=  0 wr=  0.0%
+  OVERALL                                  W= 13 L= 57 D=  0 wr= 18.6%
+  Total time: 44s
