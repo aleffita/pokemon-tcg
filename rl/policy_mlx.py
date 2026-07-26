@@ -636,6 +636,11 @@ def build_token_net_mlx(card_table: CardTable, net_config: dict | None = None) -
     cfg.pop("arch", None)
     cfg.pop("emb_dim", None)
     cfg.pop("ff", None)
+    cfg.pop("ff_dim", None)  # always computed as 4 * d_model
+    # Pop arch_config keys that aren't constructor args
+    for _k in ("arch_version", "token_schema_version", "n_scratch", "max_options",
+               "has_learned_init", "value_categorical"):
+        cfg.pop(_k, None)
     use_static: bool = cfg.pop("static", False)
     use_structured: bool = cfg.pop("structured", False)
     use_split: bool = cfg.pop("split_heads", False)
