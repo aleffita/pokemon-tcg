@@ -124,7 +124,8 @@ def _flush_shard(shard_dir, shard_idx, rows, labels, attack, int_keys, meta=None
             ("step_id", "i4"),
             ("new_episode", "bool"),
         ])
-        np.save(os.path.join(path, "episode_meta.npy"), np.array(meta, dtype=EP_META),
+        meta_tuples = [(m["episode_id"], m["side"], m["step_id"], m["new_episode"]) for m in meta]
+        np.save(os.path.join(path, "episode_meta.npy"), np.array(meta_tuples, dtype=EP_META),
                 allow_pickle=False)
     # .done marker LAST — the shard is only valid if this file exists
     open(os.path.join(path, ".done"), "w").close()

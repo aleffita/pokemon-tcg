@@ -197,7 +197,8 @@ def main():
             ("step_id", "i4"),
             ("new_episode", "bool"),
         ])
-        meta_arr = np.array(meta_list, dtype=EP_META)
+        meta_tuples = [(m["episode_id"], m["side"], m["step_id"], m["new_episode"]) for m in meta_list]
+        meta_arr = np.array(meta_tuples, dtype=EP_META)
         meta_out = os.path.splitext(OUT)[0] + "_episode_meta.npy"
         np.save(meta_out, meta_arr, allow_pickle=False)
         print(f"[bc] episode_meta saved: {meta_out} ({len(meta_arr)} rows)", flush=True)
