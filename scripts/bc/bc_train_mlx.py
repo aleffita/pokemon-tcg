@@ -559,8 +559,9 @@ def main() -> None:
                     loss, grads, mem_out = tbptt_loss_and_grad(model, ob, yb, _tbptt_memory)
                     mx.eval(loss)
                     loss_val = float(loss)
-                    _tbptt_memory = mem_out
-                    # Stop gradient at accumulation boundary
+                    # Carry only the last row's memory (last timestep) to next chunk
+                    _tbptt_memory = mx.stop_gradient(mem_out[-1:])
+                    # Additional stop_gradient at accumulation boundary
                     if _micro_count > 0 and _micro_count % a.accum_steps == 0:
                         _tbptt_memory = mx.stop_gradient(_tbptt_memory)
                 else:
@@ -593,7 +594,8 @@ def main() -> None:
                     loss, grads, mem_out = tbptt_loss_and_grad(model, ob, yb, _tbptt_memory)
                     mx.eval(loss)
                     loss_val = float(loss)
-                    _tbptt_memory = mem_out
+                    # Carry only the last row's memory (last timestep) to next chunk
+                    _tbptt_memory = mx.stop_gradient(mem_out[-1:])
                 elif a.compile and a.max_grad_norm <= 0:
                     loss, grads = compiled_step(ob, yb)
                     mx.eval(loss)
