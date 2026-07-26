@@ -19,10 +19,16 @@ from rl import (
     MAX_OPTIONS, N_ACTIONS, OPT_STRUCT, OPT_PICKED, N_OPT_TYPES,
     MAX_ATTACK, N_SELECT_TYPES, N_SELECT_CTX, UNIT_ATTR, G,
 )
+from rl.token_schema import (
+    T_CLS, T_SELF_DECK, T_OPP_DECK, T_SELF_PRIZE, T_OPP_PRIZE,
+    T_SELF_HAND, T_OPP_HAND, T_SELF_DISC, T_OPP_DISC, T_STADIUM,
+    T_SELF_ACTIVE, T_SELF_BENCH, T_OPP_ACTIVE, T_OPP_BENCH,
+    T_OPT, T_EFFECT, T_SEL_TYPE, T_SEL_CTX, T_CARD_SYNTH,
+    N_TTYPES,
+)
 
 
 # --- Model constants ---
-_N_TTYPES: int = 19      # token-type ids
 N_SCRATCH: int = 4        # register/workspace tokens ("ViTs Need Registers")
 
 
@@ -115,7 +121,7 @@ class TokenTransformerMLX(nn.Module):
             self.type_bias: nn.Embedding = nn.Embedding(N_OPT_TYPES, 1)
 
         # Token-type / context embeddings
-        self.type_emb: nn.Embedding = nn.Embedding(_N_TTYPES, d_model)
+        self.type_emb: nn.Embedding = nn.Embedding(N_TTYPES, d_model)
         self.sel_type_emb: nn.Embedding = nn.Embedding(N_SELECT_TYPES, d_model)
         self.sel_ctx_emb: nn.Embedding = nn.Embedding(N_SELECT_CTX, d_model)
 
@@ -217,7 +223,7 @@ class TokenTransformerMLX(nn.Module):
             + self.opt_attr_proj(attr)
             + self.opt_verb_emb(verb)
             + self.attack_emb(attack_id)
-            + self._type(B, K, 14)  # _T_OPT = 14
+            + self._type(B, K, T_OPT)
         )
 
     # --- core ---
@@ -238,7 +244,7 @@ class TokenTransformerMLX(nn.Module):
         need = ((pos < 0) & (card > 0)).astype(mx.float32)[..., None]
         synth = (
             self.card_emb(card) + self._static(card)
-            + self._type(B, K, 18)  # _T_CARD_SYNTH = 18
+            + self._type(B, K, T_CARD_SYNTH)
         )
         return tok + need * synth
 
@@ -264,7 +270,7 @@ class TokenTransformerMLX(nn.Module):
         cls_tok = (
             mx.broadcast_to(self.cls.reshape(1, 1, self.d), (B, 1, self.d))
             + self.scalar_proj(o["cls_scalars"]).reshape(B, 1, self.d)
-            + self._type(B, 1, 0)  # _T_CLS = 0
+            + self._type(B, 1, T_CLS)
         )
         toks.append(cls_tok)
         pads.append(mx.zeros((B, 1), dtype=mx.bool_))
@@ -274,14 +280,14 @@ class TokenTransformerMLX(nn.Module):
             value_tok = (
                 mx.broadcast_to(self.value_tok.reshape(1, 1, self.d), (B, 1, self.d))
                 + self.scalar_proj(o["cls_scalars"]).reshape(B, 1, self.d)
-                + self._type(B, 1, 0)
+                + self._type(B, 1, T_CLS)
             )
             toks.append(value_tok)
             pads.append(mx.zeros((B, 1), dtype=mx.bool_))
 
             submit_tok = (
                 mx.broadcast_to(self.submit_tok.reshape(1, 1, self.d), (B, 1, self.d))
-                + self._type(B, 1, 0)
+                + self._type(B, 1, T_CLS)
             )
             toks.append(submit_tok)
             pads.append(mx.zeros((B, 1), dtype=mx.bool_))
@@ -289,11 +295,11 @@ class TokenTransformerMLX(nn.Module):
         # --- select type + context tokens (never padded) ---
         sel_type_tok = (
             self.sel_type_emb(o["select_type"].squeeze(-1)).reshape(B, 1, self.d)
-            + self._type(B, 1, 16)  # _T_SEL_TYPE = 16
+            + self._type(B, 1, T_SEL_TYPE)
         )
         sel_ctx_tok = (
             self.sel_ctx_emb(o["select_context"].squeeze(-1)).reshape(B, 1, self.d)
-            + self._type(B, 1, 17)  # _T_SEL_CTX = 17
+            + self._type(B, 1, T_SEL_CTX)
         )
         toks.append(sel_type_tok)
         pads.append(mx.zeros((B, 1), dtype=mx.bool_))
@@ -302,12 +308,12 @@ class TokenTransformerMLX(nn.Module):
 
         # --- card-list streams (deck, prize, hand, discard, stadium, effect) ---
         _CARD_STREAMS = [
-            ("self_deck", 3), ("opp_deck", 4),
-            ("self_prize", 5), ("opp_prize", 6),
-            ("self_hand", 7), ("opp_hand", 8),
-            ("self_discard", 9), ("opp_discard", 10),
-            ("stadium", 11),
-            ("effect", 15),  # _T_EFFECT = 15
+            ("self_deck", T_SELF_DECK), ("opp_deck", T_OPP_DECK),
+            ("self_prize", T_SELF_PRIZE), ("opp_prize", T_OPP_PRIZE),
+            ("self_hand", T_SELF_HAND), ("opp_hand", T_OPP_HAND),
+            ("self_discard", T_SELF_DISC), ("opp_discard", T_OPP_DISC),
+            ("stadium", T_STADIUM),
+            ("effect", T_EFFECT),
         ]
         for name, t in _CARD_STREAMS:
             tok = self._card_stream(o[f"{name}_id"], t)
@@ -322,12 +328,8 @@ class TokenTransformerMLX(nn.Module):
             pads.append(o[f"{name}_mask"] < 0.5)
 
         # --- unit streams (active + bench, both sides) ---
-        _UNIT_TYPES = [
-            ("self", 12, 13),  # _T_SELF_ACTIVE=12, _T_SELF_BENCH=13
-            ("opp", 14, 15),   # actually _T_OPP_ACTIVE=14 doesn't exist, let me check
-        ]
-        # Correction: using actual type ids from policy.py
-        for side, (at, bt) in [("self", (12, 13)), ("opp", (13, 13))]:
+        for side, (at, bt) in [("self", (T_SELF_ACTIVE, T_SELF_BENCH)),
+                               ("opp", (T_OPP_ACTIVE, T_OPP_BENCH))]:
             tok = self._unit_stream(
                 o[f"{side}_unit_top_id"], o[f"{side}_unit_preevo_id"],
                 o[f"{side}_unit_tool_id"], o[f"{side}_unit_energy_id"],
@@ -365,7 +367,7 @@ class TokenTransformerMLX(nn.Module):
         # --- scratch tokens (between state and options) ---
         scr = (
             mx.broadcast_to(self.scratch.reshape(1, self.scratch_tokens, self.d), (B, self.scratch_tokens, self.d))
-            + self._type(B, self.scratch_tokens, 0)  # _T_CLS type
+            + self._type(B, self.scratch_tokens, T_CLS)
         )
 
         # --- full sequence: state + scratch + options ---
