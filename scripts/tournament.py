@@ -1,7 +1,8 @@
 """Mini-tournament: our agent vs multiple public agents.
 
 Runs N games per opponent (alternating sides to cancel first-player advantage)
-and reports a results table. Results are APPENDED to eval_results.txt.
+and reports a results table. Results are saved to SQLite (model/results.db)
+with an optional backup append to eval_results.txt.
 
 Usage:
   uv run tcg-tournament                              # all agents, 20 games each
@@ -93,7 +94,9 @@ def main():
     p.add_argument("--opponent", type=str, default=None,
                    help="Single opponent path (skip tournament)")
     p.add_argument("--note", type=str, default=None,
-                   help="Annotation for this run (saved in results file)")
+                   help="Annotation for this run (saved in SQLite)")
+    p.add_argument("--txt-backup", action="store_true", default=False,
+                   help="Also append results to eval_results.txt (backup)")
     args = p.parse_args()
 
     # Our agent
@@ -147,24 +150,47 @@ def main():
     print("-" * len(header))
     print(f"{'OVERALL':40s} {total_w:>4d} {total_l:>4d} {total_d:>4d} {overall_wr:>7.1f}% {total_time:>5.0f}s")
 
-    # Append to results file
-    os.makedirs(os.path.dirname(RESULTS_FILE), exist_ok=True)
-    with open(RESULTS_FILE, "a") as f:
-        f.write(f"\n{'='*70}\n")
-        f.write(f"Tournament: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
-        f.write(f"Agent: {our_path}\n")
-        f.write(f"Games per opponent: {args.games}\n")
-        if args.note:
-            f.write(f"Note: {args.note}\n")
-        f.write(f"{'='*70}\n")
-        for row in rows:
-            if len(row) == 3:
-                f.write(f"  {row[0]:40s} {row[1]:>4s} — {row[2]}\n")
-            else:
-                f.write(f"  {row[0]:40s} W={row[1]:>3s} L={row[2]:>3s} D={row[3]:>3s} wr={row[4]:>6s}\n")
-        f.write(f"  {'OVERALL':40s} W={total_w:3d} L={total_l:3d} D={total_d:3d} wr={overall_wr:5.1f}%\n")
-        f.write(f"  Total time: {total_time:.0f}s\n")
-    print(f"\nResults appended to {RESULTS_FILE}")
+    # Build structured rows for SQLite (exclude error rows which have len==3)
+    rows_with_stats = []
+    for r in rows:
+        if len(r) == 6:
+            label, w, l, d, wr, t = r
+            rows_with_stats.append((label, int(w), int(l), int(d), float(wr.rstrip('%')), t))
+
+    # Save to SQLite (primary storage)
+    from rl.results_db import ResultsDB
+    db = ResultsDB()
+    db.add_tournament(
+        timestamp=datetime.now().strftime('%Y-%m-%d %H:%M'),
+        agent=our_path,
+        games_per_opp=args.games,
+        note=args.note or '',
+        matchups=[{"opponent": label, "w": w, "l": l, "d": d, "wr": wr}
+                  for label, w, l, d, wr, _ in rows_with_stats],
+        overall={"w": total_w, "l": total_l, "d": total_d, "wr": overall_wr},
+        total_time=total_time)
+    db.close()
+    print(f"\nResults saved to model/results.db")
+
+    # Optional: also append to eval_results.txt (backup)
+    if args.txt_backup:
+        os.makedirs(os.path.dirname(RESULTS_FILE), exist_ok=True)
+        with open(RESULTS_FILE, "a") as f:
+            f.write(f"\n{'='*70}\n")
+            f.write(f"Tournament: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+            f.write(f"Agent: {our_path}\n")
+            f.write(f"Games per opponent: {args.games}\n")
+            if args.note:
+                f.write(f"Note: {args.note}\n")
+            f.write(f"{'='*70}\n")
+            for row in rows:
+                if len(row) == 3:
+                    f.write(f"  {row[0]:40s} {row[1]:>4s} — {row[2]}\n")
+                else:
+                    f.write(f"  {row[0]:40s} W={row[1]:>3s} L={row[2]:>3s} D={row[3]:>3s} wr={row[4]:>6s}\n")
+            f.write(f"  {'OVERALL':40s} W={total_w:3d} L={total_l:3d} D={total_d:3d} wr={overall_wr:5.1f}%\n")
+            f.write(f"  Total time: {total_time:.0f}s\n")
+        print(f"  Also appended to {RESULTS_FILE}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Pokémon TCG MLX — Elo Dashboard (Streamlit).
 
-Reads eval_results.txt, config files, and checkpoint metadata directly.
-Auto-refreshes on file changes. No copy-paste needed.
+Reads tournament results from SQLite (model/results.db) and displays
+Elo rankings, matchup history, and configuration.
 
 Usage:
     uv run tcg-dashboard
@@ -9,7 +9,6 @@ Usage:
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -38,87 +37,31 @@ def run_app():
 
     # ── paths ────────────────────────────────────────────────────
     ROOT = Path(__file__).resolve().parent.parent
-    RESULTS_FILE = ROOT / "model" / "eval_results.txt"
     SMOKE_CONFIG = ROOT / "configs" / "smoke.json"
     TRAIN_CONFIG = ROOT / "configs" / "train_config.json"
     SCHEMA_FILE = ROOT / "configs" / "train_config.schema.json"
 
-    # ── elo engine ───────────────────────────────────────────────
-    K = 32
-    INITIAL_ELO = 1000
-
-    def elo_expected(ra, rb):
-        return 1 / (1 + 10 ** ((rb - ra) / 400))
-
-    def elo_update(ra, rb, score):
-        ea = elo_expected(ra, rb)
-        return ra + K * (score - ea)
-
+    # ── elo helpers ──────────────────────────────────────────────
     def extract_lb_score(label):
         m = re.search(r"lb(\d+)", label)
         return int(m.group(1)) if m else None
 
-    # ── parser ───────────────────────────────────────────────────
-    def parse_results(text):
-        blocks = re.split(r"={10,}", text)
-        runs = []
-        for block in blocks:
-            block = block.strip()
-            if not block:
-                continue
-            ts = re.search(r"Tournament:\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", block)
-            if not ts:
-                continue
-            agent = re.search(r"Agent:\s*(.+)", block)
-            games = re.search(r"Games per opponent:\s*(\d+)", block)
-            note = re.search(r"Note:\s*(.+)", block)
-            matchups = []
-            overall = None
-            for line in block.splitlines():
-                m = re.match(r"\s*(\S.*?)\s+W=\s*(\d+)\s+L=\s*(\d+)\s+D=\s*(\d+)\s+wr=\s*([\d.]+)%", line)
-                if m:
-                    matchups.append({"opponent": m.group(1).strip(), "w": int(m.group(2)),
-                                     "l": int(m.group(3)), "d": int(m.group(4)), "wr": float(m.group(5))})
-                om = re.match(r"\s*OVERALL.*W=\s*(\d+)\s+L=\s*(\d+)\s+D=\s*(\d+)\s+wr=\s*([\d.]+)%", line)
-                if om:
-                    overall = {"w": int(om.group(1)), "l": int(om.group(2)),
-                               "d": int(om.group(3)), "wr": float(om.group(4))}
-            if matchups:
-                runs.append({"timestamp": ts.group(1), "agent": agent.group(1).strip() if agent else "unknown",
-                             "games_per_opp": int(games.group(1)) if games else 0,
-                             "note": note.group(1).strip() if note else "",
-                             "matchups": matchups, "overall": overall})
-        return runs
-
-    def compute_elos(runs):
-        elos = {}
-        for run in runs:
-            label = run["timestamp"]
-            if label not in elos:
-                elos[label] = INITIAL_ELO
-            for m in run["matchups"]:
-                opp = m["opponent"]
-                if opp not in elos:
-                    lb = extract_lb_score(opp)
-                    elos[opp] = lb if lb else INITIAL_ELO
-        for run in runs:
-            label = run["timestamp"]
-            for m in run["matchups"]:
-                total = m["w"] + m["l"] + m["d"]
-                if total == 0:
-                    continue
-                score = (m["w"] + 0.5 * m["d"]) / total
-                new_elo = elo_update(elos[label], elos[m["opponent"]], score)
-                elos[m["opponent"]] -= new_elo - elos[label]
-                elos[label] = new_elo
-        return elos
-
-    # ── data loading ─────────────────────────────────────────────
+    # ── data loading from SQLite ─────────────────────────────────
     @st.cache_data(ttl=5)
     def load_results():
-        if not RESULTS_FILE.exists():
-            return []
-        return parse_results(RESULTS_FILE.read_text())
+        from rl.results_db import ResultsDB
+        db = ResultsDB()
+        runs = db.get_all_runs()
+        db.close()
+        return runs
+
+    @st.cache_data(ttl=5)
+    def load_elos():
+        from rl.results_db import ResultsDB
+        db = ResultsDB()
+        elos = db.compute_elos()
+        db.close()
+        return elos
 
     @st.cache_data(ttl=30)
     def load_config(path):
@@ -143,7 +86,7 @@ def run_app():
         st.caption("Elo Dashboard")
         st.divider()
         runs = load_results() or []
-        elos = compute_elos(runs) if runs else {}
+        elos = load_elos() if runs else {}
         if runs:
             latest = runs[-1]
             st.metric("Latest Run", latest["timestamp"])
@@ -158,7 +101,7 @@ def run_app():
             st.rerun()
         st.divider()
         st.subheader("Files")
-        st.code(f"Results: {RESULTS_FILE}", language=None)
+        st.code(f"Results: model/results.db", language=None)
         st.code(f"Smoke:   {SMOKE_CONFIG}", language=None)
         st.code(f"Train:   {TRAIN_CONFIG}", language=None)
 
