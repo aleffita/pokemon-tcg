@@ -1,0 +1,10 @@
+[project]
+name = "tcg-pokemon-agent"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "kaggle-environments>=1.32.0",
+    "numpy>=2.5.1",
+    "pymupdf>=1.28.0",
+    "torch>=2.13.0",
+]

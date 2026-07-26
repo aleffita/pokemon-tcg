@@ -26,6 +26,32 @@ This is not a benchmark project. Do not spend the implementation phase comparing
 
 The author-original repository and its full PPO/self-play infrastructure are context only. They are not the comparison target for this port. The concrete baseline is the simplified Mikaelzinho behavioral-cloning implementation and the MLX code included in this archive.
 
+## Local PyTorch reference
+
+The PyTorch project used as the reference for this migration is vendored locally at:
+
+```text
+reference/mikaelzinho-pytorch/
+```
+
+It was downloaded from the shared Drive artifact:
+
+- file: `tcg-pokemon-agent-main.zip`
+- Drive file ID: `1IwESPm29-6bGByS6qHcrPchhR2-QjEld`
+- MIME type: `application/zip`
+- source snapshot: 2026-07-23
+
+This directory is deliberately kept inside the repository so implementation agents do not need Drive access to inspect the reference. It contains the original PyTorch policy/trainer/encoder layout, model artifacts, public agents, native bindings, and the source project's own historical documentation.
+
+### Reference rules
+
+- `reference/mikaelzinho-pytorch/` is read-only reference material for this task.
+- Do not implement fixes there while porting the MLX project.
+- Do not treat its PPO/self-play files as the current implementation contract.
+- Use the corresponding Mikaelzinho PyTorch model and encoder to understand intended semantics, shapes, defaults, and data flow.
+- The active implementation remains the repository root and its MLX files, especially `rl/policy_mlx.py` and `scripts/bc/bc_train_mlx.py`.
+- If the reference archive and the current root differ, record the difference in `TASK.md` before deciding whether it is an intentional port change or a bug.
+
 ## Explicit non-goals for this phase
 
 Do **not** introduce yet:

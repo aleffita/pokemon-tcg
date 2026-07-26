@@ -22,6 +22,8 @@ This task file is a handoff and execution order. It does not authorize implement
 
 Use the extracted MLX project and the corresponding Mikaelzinho PyTorch snapshot as the reference pair. Do not use the original author's full PPO repository as the parity target.
 
+The PyTorch reference is vendored locally at `reference/mikaelzinho-pytorch/`, so agents must not depend on Drive access. Treat that directory as read-only reference material; all implementation changes belong in the repository root.
+
 ```text
 d_model              128
 attention heads      4

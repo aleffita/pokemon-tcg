@@ -1,0 +1,27 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# === Virtual Environment ===
+.venv/
+
+# === Jupyter ===
+.ipynb_checkpoints/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === IDE ===
+.vscode/
+.idea/
+
+# === Engine ===
+engine/
+
+# === RL ===
+data/
+scripts/deck_builder/card_images
