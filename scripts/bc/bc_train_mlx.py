@@ -170,7 +170,7 @@ def main() -> None:
         print(f"[bc-train-mlx] limited to {a.max_rows} rows (max_rows={a.max_rows})", flush=True)
 
     labels = read_rows(d["__labels__"], 0, N)
-    keys = [k for k in d if k not in ("__labels__", "__is_attack__", "__group__")]
+    keys = [k for k in d if k not in ("__labels__", "__is_attack__", "__group__", "episode_meta")]
     obs_np = {k: d[k] for k in keys}
     group_np = d.get("__group__")
 
