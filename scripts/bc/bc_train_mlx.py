@@ -145,7 +145,7 @@ def main() -> None:
     a.seed = a.seed if a.seed is not None else cfg.seed
     a.out = a.out or "model/checkpoint/bc_best_mlx.pkl"
     a.max_rows = a.max_rows if a.max_rows is not None else cfg.max_rows
-    a.tbptt_chunk = a.tbptt_chunk if a.tbptt_chunk > 0 else 0  # 0 = disabled
+    a.tbptt_chunk = a.tbptt_chunk if a.tbptt_chunk > 0 else cfg.tbptt_chunk
     a.log_interval = a.log_interval if a.log_interval is not None else cfg.log_interval
     a.compile = a.compile if a.compile is not None else cfg.compile
     a.prefetch = a.prefetch if a.prefetch is not None else cfg.prefetch
