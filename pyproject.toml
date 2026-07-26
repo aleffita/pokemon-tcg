@@ -11,9 +11,11 @@ dependencies = [
     "kaggle-environments>=1.32.0",
     "mlx>=0.32.0",
     "numpy>=2.5.1",
+    "pandas>=3.0.3",
     "pymupdf>=1.28.0",
     "pyrefly>=0.60.0",
     "rich>=15.0.0",
+    "streamlit>=1.60.0",
     "torch>=2.13.0",
 ]
 
@@ -26,6 +28,7 @@ tcg-tournament  = "scripts.tournament:main"
 tcg-submission  = "scripts.build_submission:main"
 tcg-submit      = "scripts.submit:main"
 tcg-data        = "scripts.data_manager:main"
+tcg-dashboard   = "scripts.dashboard:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rl", "scripts", "agent", "cg"]
