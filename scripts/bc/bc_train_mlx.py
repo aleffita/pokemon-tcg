@@ -138,7 +138,26 @@ def main() -> None:
             model.update(model_params)
         start_epoch = int(state.get("epoch", -1)) + 1
         best = float(state.get("val_acc", 0.0))
-        print(f"[bc-train-mlx] resumed from {a.resume} (epoch {start_epoch}, val_acc={best:.4f})")
+        # Restore gstep for scheduler continuity
+        gstep = int(state.get("gstep", 0))
+        # Validate arch_config if present (backward compat with old checkpoints)
+        saved_cfg = state.get("arch_config")
+        if saved_cfg is not None:
+            cur_cfg = model.get_config()
+            mismatches = []
+            for k, v in saved_cfg.items():
+                if k in cur_cfg and cur_cfg[k] != v:
+                    mismatches.append(f"{k}: saved={v} current={cur_cfg[k]}")
+            if mismatches:
+                print(f"[bc-train-mlx] WARNING: arch_config mismatch: {', '.join(mismatches)}")
+                print(f"[bc-train-mlx] proceeding anyway — results may be invalid")
+            else:
+                print(f"[bc-train-mlx] arch_config validated OK")
+        else:
+            print(f"[bc-train-mlx] WARNING: no arch_config in checkpoint (old format) — "
+                  f"proceeding without validation")
+        print(f"[bc-train-mlx] resumed from {a.resume} (epoch {start_epoch}, "
+              f"val_acc={best:.4f}, gstep={gstep})")
 
     # Optimizer
     optimizer = optim.Adam(learning_rate=a.lr)
@@ -380,8 +399,12 @@ def main() -> None:
             with open(a.out, "wb") as f:
                 pickle.dump({
                     "model": model.parameters(),
+                    "arch_config": model.get_config(),
                     "epoch": ep,
+                    "gstep": gstep,
                     "val_acc": acc,
+                    "seed": a.seed,
+                    "dataset_path": a.data,
                 }, f)
         best = max(best, acc)
 

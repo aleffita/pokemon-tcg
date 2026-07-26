@@ -20,6 +20,7 @@ from rl import (
     MAX_ATTACK, N_SELECT_TYPES, N_SELECT_CTX, UNIT_ATTR, G,
 )
 from rl.token_schema import (
+    ARCH_VERSION, TOKEN_SCHEMA_VERSION,
     T_CLS, T_SELF_DECK, T_OPP_DECK, T_SELF_PRIZE, T_OPP_PRIZE,
     T_SELF_HAND, T_OPP_HAND, T_SELF_DISC, T_OPP_DISC, T_STADIUM,
     T_SELF_ACTIVE, T_SELF_BENCH, T_OPP_ACTIVE, T_OPP_BENCH,
@@ -392,6 +393,25 @@ class TokenTransformerMLX(nn.Module):
         extra = (enc[:, 1], enc[:, 2]) if self.split_heads else None
 
         return cls_out, opt_out, pooled, extra
+
+    def get_config(self) -> dict:
+        """Return architecture configuration dict for checkpoint versioning."""
+        nhead = self.encoder.layers[0].attn.num_heads
+        ff_dim = self.encoder.layers[0].ff.layers[0].weight.shape[0]
+        return {
+            "arch_version": ARCH_VERSION,
+            "token_schema_version": TOKEN_SCHEMA_VERSION,
+            "d_model": self.d,
+            "nhead": nhead,
+            "nlayers": len(self.encoder.layers),
+            "ff_dim": ff_dim,
+            "n_scratch": self.scratch_tokens,
+            "static": self.static_proj is not None,
+            "split_heads": self.split_heads,
+            "structured": self.structured,
+            "max_options": 192,
+            "value_categorical": self.value_categorical,
+        }
 
     def logits_value(
             self, o: dict, opt_len: int | None = None,
