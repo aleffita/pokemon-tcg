@@ -1,0 +1,241 @@
+======================================================================
+Tournament: 2026-07-21 13:26
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 20
+======================================================================
+  random                                   W= 20 L=  0 D=  0 wr=100.0%
+  first                                    W= 20 L=  0 D=  0 wr=100.0%
+  lb1009_mega_lucario_ex_islet             W= 19 L=  1 D=  0 wr= 95.0%
+  lb945_multiply_ivan                      W= 17 L=  3 D=  0 wr= 85.0%
+  lb826_alakazam_seok                      W= 20 L=  0 D=  0 wr=100.0%
+  lb814_crustle_emre                       W= 20 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W= 18 L=  2 D=  0 wr= 90.0%
+  starters/lb600_mega_lucario_ex           W= 19 L=  1 D=  0 wr= 95.0%
+  starters/lb526_iono                      W= 11 L=  9 D=  0 wr= 55.0%
+  starters/lb510_mega_abomasnow_ex         W= 18 L=  2 D=  0 wr= 90.0%
+  starters/lb600_dragapult_ex              W= 13 L=  7 D=  0 wr= 65.0%
+  OVERALL                                  W=195 L= 25 D=  0 wr= 88.6%
+  Total time: 92s
+
+======================================================================
+Tournament: 2026-07-22 13:49
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 20
+======================================================================
+  random                                   W= 20 L=  0 D=  0 wr=100.0%
+  first                                    W= 20 L=  0 D=  0 wr=100.0%
+  lb1009_mega_lucario_ex_islet             W= 20 L=  0 D=  0 wr=100.0%
+  lb945_multiply_ivan                      W= 20 L=  0 D=  0 wr=100.0%
+  lb826_alakazam_seok                      W= 20 L=  0 D=  0 wr=100.0%
+  lb814_crustle_emre                       W= 20 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W= 18 L=  2 D=  0 wr= 90.0%
+  starters/lb600_mega_lucario_ex           W= 19 L=  1 D=  0 wr= 95.0%
+  starters/lb526_iono                      W=  9 L= 11 D=  0 wr= 45.0%
+  starters/lb510_mega_abomasnow_ex         W= 16 L=  4 D=  0 wr= 80.0%
+  starters/lb600_dragapult_ex              W= 13 L=  7 D=  0 wr= 65.0%
+  OVERALL                                  W=195 L= 25 D=  0 wr= 88.6%
+  Total time: 104s
+
+======================================================================
+Tournament: 2026-07-22 15:16
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 20
+======================================================================
+  random                                   W= 20 L=  0 D=  0 wr=100.0%
+  first                                    W= 18 L=  2 D=  0 wr= 90.0%
+  lb1009_mega_lucario_ex_islet             W= 17 L=  3 D=  0 wr= 85.0%
+  lb945_multiply_ivan                      W= 18 L=  2 D=  0 wr= 90.0%
+  lb826_alakazam_seok                      W= 18 L=  2 D=  0 wr= 90.0%
+  lb814_crustle_emre                       W= 18 L=  2 D=  0 wr= 90.0%
+  lb798_lucario_pilkwang                   W= 20 L=  0 D=  0 wr=100.0%
+  starters/lb600_mega_lucario_ex           W= 15 L=  5 D=  0 wr= 75.0%
+  starters/lb526_iono                      W=  9 L= 11 D=  0 wr= 45.0%
+  starters/lb510_mega_abomasnow_ex         W= 20 L=  0 D=  0 wr=100.0%
+  starters/lb600_dragapult_ex              W= 13 L=  7 D=  0 wr= 65.0%
+  OVERALL                                  W=186 L= 34 D=  0 wr= 84.5%
+  Total time: 107s
+
+======================================================================
+Tournament: 2026-07-22 15:20
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 20
+======================================================================
+  random                                   W= 20 L=  0 D=  0 wr=100.0%
+  first                                    W= 20 L=  0 D=  0 wr=100.0%
+  lb1009_mega_lucario_ex_islet             W= 16 L=  4 D=  0 wr= 80.0%
+  lb945_multiply_ivan                      W= 16 L=  4 D=  0 wr= 80.0%
+  lb826_alakazam_seok                      W= 19 L=  1 D=  0 wr= 95.0%
+  lb814_crustle_emre                       W= 20 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W= 19 L=  1 D=  0 wr= 95.0%
+  starters/lb600_mega_lucario_ex           W= 15 L=  5 D=  0 wr= 75.0%
+  starters/lb526_iono                      W=  9 L= 11 D=  0 wr= 45.0%
+  starters/lb510_mega_abomasnow_ex         W= 20 L=  0 D=  0 wr=100.0%
+  starters/lb600_dragapult_ex              W= 12 L=  8 D=  0 wr= 60.0%
+  OVERALL                                  W=186 L= 34 D=  0 wr= 84.5%
+  Total time: 104s
+
+======================================================================
+Tournament: 2026-07-22 15:28
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 20
+======================================================================
+  random                                   W= 20 L=  0 D=  0 wr=100.0%
+  first                                    W= 20 L=  0 D=  0 wr=100.0%
+  lb1009_mega_lucario_ex_islet             W= 18 L=  2 D=  0 wr= 90.0%
+  lb945_multiply_ivan                      W= 13 L=  7 D=  0 wr= 65.0%
+  lb826_alakazam_seok                      W= 20 L=  0 D=  0 wr=100.0%
+  lb814_crustle_emre                       W= 20 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W= 19 L=  1 D=  0 wr= 95.0%
+  starters/lb600_mega_lucario_ex           W= 17 L=  3 D=  0 wr= 85.0%
+  starters/lb526_iono                      W= 12 L=  8 D=  0 wr= 60.0%
+  starters/lb510_mega_abomasnow_ex         W= 18 L=  2 D=  0 wr= 90.0%
+  starters/lb600_dragapult_ex              W= 11 L=  9 D=  0 wr= 55.0%
+  OVERALL                                  W=188 L= 32 D=  0 wr= 85.5%
+  Total time: 206s
+
+======================================================================
+Tournament: 2026-07-22 15:46
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 20
+======================================================================
+  random                                   W= 20 L=  0 D=  0 wr=100.0%
+  first                                    W= 20 L=  0 D=  0 wr=100.0%
+  lb1009_mega_lucario_ex_islet             W= 17 L=  3 D=  0 wr= 85.0%
+  lb945_multiply_ivan                      W= 17 L=  3 D=  0 wr= 85.0%
+  lb826_alakazam_seok                      W= 20 L=  0 D=  0 wr=100.0%
+  lb814_crustle_emre                       W= 20 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W= 16 L=  4 D=  0 wr= 80.0%
+  starters/lb600_mega_lucario_ex           W= 19 L=  1 D=  0 wr= 95.0%
+  starters/lb526_iono                      W= 10 L= 10 D=  0 wr= 50.0%
+  starters/lb510_mega_abomasnow_ex         W= 17 L=  3 D=  0 wr= 85.0%
+  starters/lb600_dragapult_ex              W=  9 L= 11 D=  0 wr= 45.0%
+  sub/lb881_alakazam_v1                    W= 13 L=  7 D=  0 wr= 65.0%
+  OVERALL                                  W=198 L= 42 D=  0 wr= 82.5%
+  Total time: 115s
+
+======================================================================
+Tournament: 2026-07-22 15:55
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 10
+Note: Testing notes...
+======================================================================
+  random                                   W= 10 L=  0 D=  0 wr=100.0%
+  first                                    W= 10 L=  0 D=  0 wr=100.0%
+  lb1009_mega_lucario_ex_islet             W=  9 L=  1 D=  0 wr= 90.0%
+  lb945_multiply_ivan                      W=  8 L=  2 D=  0 wr= 80.0%
+  lb826_alakazam_seok                      W= 10 L=  0 D=  0 wr=100.0%
+  lb814_crustle_emre                       W= 10 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W=  8 L=  2 D=  0 wr= 80.0%
+  starters/lb600_mega_lucario_ex           W=  9 L=  1 D=  0 wr= 90.0%
+  starters/lb526_iono                      W=  5 L=  5 D=  0 wr= 50.0%
+  starters/lb510_mega_abomasnow_ex         W=  9 L=  1 D=  0 wr= 90.0%
+  starters/lb600_dragapult_ex              W=  4 L=  6 D=  0 wr= 40.0%
+  sub/lb881_alakazam_v1                    W=  5 L=  5 D=  0 wr= 50.0%
+  OVERALL                                  W= 97 L= 23 D=  0 wr= 80.8%
+  Total time: 55s
+
+======================================================================
+Tournament: 2026-07-22 16:04
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 10
+Note: Hops deck
+======================================================================
+  random                                   W=  7 L=  3 D=  0 wr= 70.0%
+  first                                    W=  7 L=  3 D=  0 wr= 70.0%
+  lb1009_mega_lucario_ex_islet             W=  0 L= 10 D=  0 wr=  0.0%
+  lb945_multiply_ivan                      W=  0 L= 10 D=  0 wr=  0.0%
+  lb826_alakazam_seok                      W=  7 L=  3 D=  0 wr= 70.0%
+  lb814_crustle_emre                       W= 10 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W=  1 L=  9 D=  0 wr= 10.0%
+  starters/lb600_mega_lucario_ex           W=  7 L=  3 D=  0 wr= 70.0%
+  starters/lb526_iono                      W=  1 L=  9 D=  0 wr= 10.0%
+  starters/lb510_mega_abomasnow_ex         W=  1 L=  9 D=  0 wr= 10.0%
+  starters/lb600_dragapult_ex              W=  1 L=  9 D=  0 wr= 10.0%
+  sub/lb881_alakazam_v1                    W=  3 L=  7 D=  0 wr= 30.0%
+  OVERALL                                  W= 45 L= 75 D=  0 wr= 37.5%
+  Total time: 63s
+
+======================================================================
+Tournament: 2026-07-22 16:15
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 10
+Note: Alakazam - Yushin deck
+======================================================================
+  random                                   W= 10 L=  0 D=  0 wr=100.0%
+  first                                    W= 10 L=  0 D=  0 wr=100.0%
+  lb1009_mega_lucario_ex_islet             W=  7 L=  3 D=  0 wr= 70.0%
+  lb945_multiply_ivan                      W= 10 L=  0 D=  0 wr=100.0%
+  lb826_alakazam_seok                      W=  9 L=  1 D=  0 wr= 90.0%
+  lb814_crustle_emre                       W= 10 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W=  9 L=  1 D=  0 wr= 90.0%
+  starters/lb600_mega_lucario_ex           W=  6 L=  4 D=  0 wr= 60.0%
+  starters/lb526_iono                      W=  3 L=  7 D=  0 wr= 30.0%
+  starters/lb510_mega_abomasnow_ex         W= 10 L=  0 D=  0 wr=100.0%
+  starters/lb600_dragapult_ex              W=  5 L=  5 D=  0 wr= 50.0%
+  sub/lb881_alakazam_v1                    W=  8 L=  2 D=  0 wr= 80.0%
+  OVERALL                                  W= 97 L= 23 D=  0 wr= 80.8%
+  Total time: 60s
+
+======================================================================
+Tournament: 2026-07-22 19:00
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 20
+Note: Alakazam - Majkel deck
+======================================================================
+  random                                   W= 20 L=  0 D=  0 wr=100.0%
+  first                                    W= 20 L=  0 D=  0 wr=100.0%
+  lb1009_mega_lucario_ex_islet             W= 15 L=  5 D=  0 wr= 75.0%
+  lb945_multiply_ivan                      W= 17 L=  3 D=  0 wr= 85.0%
+  lb826_alakazam_seok                      W= 20 L=  0 D=  0 wr=100.0%
+  lb814_crustle_emre                       W= 20 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W= 20 L=  0 D=  0 wr=100.0%
+  starters/lb600_mega_lucario_ex           W= 17 L=  3 D=  0 wr= 85.0%
+  starters/lb526_iono                      W= 13 L=  7 D=  0 wr= 65.0%
+  starters/lb510_mega_abomasnow_ex         W= 19 L=  1 D=  0 wr= 95.0%
+  starters/lb600_dragapult_ex              W= 13 L=  7 D=  0 wr= 65.0%
+  sub/lb881_alakazam_v1                    W= 16 L=  4 D=  0 wr= 80.0%
+  OVERALL                                  W=210 L= 30 D=  0 wr= 87.5%
+  Total time: 119s
+
+======================================================================
+Tournament: 2026-07-23 13:18
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 20
+Note: Alakazam Deck - Trained on the dataset from 21-07-2026
+======================================================================
+  random                                   W= 20 L=  0 D=  0 wr=100.0%
+  first                                    W= 20 L=  0 D=  0 wr=100.0%
+  lb1009_mega_lucario_ex_islet             W= 18 L=  2 D=  0 wr= 90.0%
+  lb945_multiply_ivan                      W= 16 L=  4 D=  0 wr= 80.0%
+  lb826_alakazam_seok                      W= 19 L=  1 D=  0 wr= 95.0%
+  lb814_crustle_emre                       W= 20 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W= 18 L=  2 D=  0 wr= 90.0%
+  starters/lb600_mega_lucario_ex           W= 18 L=  2 D=  0 wr= 90.0%
+  starters/lb526_iono                      W= 11 L=  9 D=  0 wr= 55.0%
+  starters/lb510_mega_abomasnow_ex         W= 19 L=  1 D=  0 wr= 95.0%
+  starters/lb600_dragapult_ex              W= 15 L=  5 D=  0 wr= 75.0%
+  sub/lb881_alakazam_v1                    W= 14 L=  6 D=  0 wr= 70.0%
+  OVERALL                                  W=208 L= 32 D=  0 wr= 86.7%
+  Total time: 118s
+
+======================================================================
+Tournament: 2026-07-23 13:31
+Agent: /Users/mika/Workspaces/tcg-pokemon-agent/agent/main.py
+Games per opponent: 20
+Note: Alakazam Deck - Trained on the dataset from 21-07-2026
+======================================================================
+  random                                   W= 19 L=  1 D=  0 wr= 95.0%
+  first                                    W= 20 L=  0 D=  0 wr=100.0%
+  lb1009_mega_lucario_ex_islet             W= 19 L=  1 D=  0 wr= 95.0%
+  lb945_multiply_ivan                      W= 16 L=  4 D=  0 wr= 80.0%
+  lb826_alakazam_seok                      W= 19 L=  1 D=  0 wr= 95.0%
+  lb814_crustle_emre                       W= 20 L=  0 D=  0 wr=100.0%
+  lb798_lucario_pilkwang                   W= 19 L=  1 D=  0 wr= 95.0%
+  starters/lb600_mega_lucario_ex           W= 17 L=  3 D=  0 wr= 85.0%
+  starters/lb526_iono                      W= 12 L=  8 D=  0 wr= 60.0%
+  starters/lb510_mega_abomasnow_ex         W= 17 L=  3 D=  0 wr= 85.0%
+  starters/lb600_dragapult_ex              W= 14 L=  6 D=  0 wr= 70.0%
+  sub/lb881_alakazam_v1                    W= 13 L=  7 D=  0 wr= 65.0%
+  sub/lb1048_akalazam_v2_deck_updated      W= 10 L= 10 D=  0 wr= 50.0%
+  OVERALL                                  W=215 L= 45 D=  0 wr= 82.7%
+  Total time: 133s
