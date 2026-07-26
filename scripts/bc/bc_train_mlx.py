@@ -198,8 +198,9 @@ def main() -> None:
             valid_boundaries = boundaries[boundaries <= N - nval]
             if len(valid_boundaries) > 0:
                 v0 = int(valid_boundaries[-1])
+                nval = N - v0
                 print(f"[bc-train-mlx] D.4: episode-level split at row {v0} "
-                      f"({v0} train, {N - v0} val)", flush=True)
+                      f"({v0} train, {nval} val)", flush=True)
             else:
                 print(f"[bc-train-mlx] D.4: no episode boundary before {N - nval}, "
                       f"using tail split at {v0}", flush=True)
