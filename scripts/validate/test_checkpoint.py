@@ -7,7 +7,7 @@ Verifies:
 4. Backward compat: old checkpoint without arch_config loads with warning
 
 Run:
-  PYTHONPATH=. uv run python scripts/validate/test_checkpoint.py
+  uv run python scripts/validate/test_checkpoint.py
 """
 from __future__ import annotations
 

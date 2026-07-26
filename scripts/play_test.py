@@ -2,8 +2,6 @@ import random
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from cg.api import to_observation_class
 from cg.game import battle_start, battle_select, battle_finish
 

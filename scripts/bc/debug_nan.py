@@ -7,7 +7,7 @@ Checks:
   4. Gradient update doesn't explode
 
 Usage:
-  PYTHONPATH=. python3 scripts/bc/debug_nan.py data/bc_data/bc_2026_07_16
+  uv run python scripts/bc/debug_nan.py data/bc_data/bc_2026_07_16
 """
 import os
 import sys

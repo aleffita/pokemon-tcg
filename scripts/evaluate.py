@@ -11,7 +11,7 @@ Usage:
 import argparse
 import os
 
-from _common import AGENT_DIR, load_agent, make_env
+from scripts._common import AGENT_DIR, load_agent, make_env
 
 
 def resolve(name: str):

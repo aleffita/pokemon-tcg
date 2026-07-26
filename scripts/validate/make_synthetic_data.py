@@ -4,7 +4,7 @@ Creates a directory of .npy files matching the TokenEncoder output schema.
 All shape constants are imported from rl/encoder/enc_constants.py.
 
 Usage:
-  PYTHONPATH=. uv run python scripts/validate/make_synthetic_data.py \
+  uv run python scripts/validate/make_synthetic_data.py \
       --rows 1000 --out data/bc_data/synthetic_1k
 """
 from __future__ import annotations

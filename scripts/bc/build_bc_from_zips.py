@@ -14,7 +14,7 @@ are skipped automatically — only incomplete/missing shards are reprocessed. Th
 at episode 4000 (shard 20) can be resumed by re-running the same command; shards 0-19 are reused
 and only the remaining episodes are processed.
 
-  PYTHONPATH=. python scripts/bc/build_bc_from_zips.py OUT ZIP1 [ZIP2 ...]
+  uv run tcg-build-bc OUT ZIP1 [ZIP2 ...]
 Env: BC_WORKERS     (default 8),  BC_CAP_EPS (default 0 = all),
      BC_FLUSH       (default 200 episodes per batch/shard),
      BC_EP_TIMEOUT  (default 60s per episode).
@@ -28,16 +28,16 @@ from multiprocessing import Pool
 
 import numpy as np
 
-# import the FIXED rows_from_episode + shared encoder from the sibling script (scripts/ on path).
-# build_bc_dataset reads sys.argv AT IMPORT (MAX_EPS=int(sys.argv[3])), so hide our zip args during import.
-# Add both scripts/bc/ (for sibling imports) and project root (for rl.encoder.*)
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))
-sys.path.insert(0, _SCRIPT_DIR)
-sys.path.insert(0, _PROJECT_ROOT)
+# import the FIXED rows_from_episode + shared encoder from the sibling module.
+# build_bc_dataset reads sys.argv AT IMPORT (MAX_EPS=int(sys.argv[3])), so hide our zip args
+# during import.  The project root must be on sys.path for rl.encoder.* and scripts.bc.*
+# to resolve (multiprocessing workers inherit this path).
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 _argv = sys.argv
 sys.argv = [_argv[0]]
-import build_bc_dataset as B   # B.rows_from_episode (off-by-one fixed), B.enc
+from scripts.bc import build_bc_dataset as B   # B.rows_from_episode (off-by-one fixed), B.enc
 sys.argv = _argv
 
 OUT = sys.argv[1]

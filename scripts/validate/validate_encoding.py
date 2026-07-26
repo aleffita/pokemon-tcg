@@ -6,7 +6,7 @@ tests batching through obs_to_tensors and a forward pass of policy.TokenTransfor
 when available, so the encoder<->net contract is checked end to end.
 
 Run:
-    PYTHONPATH=. /c/Users/mgrom/miniconda3/python scripts/validate_encoding.py
+    uv run python scripts/validate/validate_encoding.py
 """
 
 from __future__ import annotations
@@ -16,8 +16,6 @@ import pickle
 import sys
 
 import numpy as np
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rl.encoder.encoding import TokenEncoder  # noqa: E402
 

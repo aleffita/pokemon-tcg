@@ -13,7 +13,7 @@ What this test covers:
   7. All existing validation tests pass (test_token_schema, test_mlx_token_types, test_checkpoint)
 
 Run:
-  PYTHONPATH=. uv run python scripts/validate/test_phase_a.py
+  uv run python scripts/validate/test_phase_a.py
 """
 from __future__ import annotations
 
@@ -23,9 +23,7 @@ import sys
 import tempfile
 import traceback
 
-# --- path setup ---
-_REPO = os.path.join(os.path.dirname(__file__), "..", "..")
-sys.path.insert(0, os.path.abspath(_REPO))
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # --- imports (heavy, fail early) ---
 import numpy as np
@@ -415,7 +413,6 @@ def run_existing_validation_tests() -> list[tuple[str, bool, str]]:
             continue
 
         env = os.environ.copy()
-        env["PYTHONPATH"] = os.path.abspath(_REPO)
         env["MLX_BACKEND"] = "cpu"  # headless for CI/test
 
         try:

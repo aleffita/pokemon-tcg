@@ -3,9 +3,6 @@
 import sys
 import os
 
-# Ensure project root is on sys.path so rl.token_schema is importable.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-
 from rl.token_schema import (
     ARCH_VERSION,
     TOKEN_SCHEMA_VERSION,

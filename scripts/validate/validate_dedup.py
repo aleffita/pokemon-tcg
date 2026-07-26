@@ -21,7 +21,6 @@ from __future__ import annotations
 import sys, os, json, zipfile, random, dataclasses, collections
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
 
 from rl.encoder.option_dedup import option_groups, option_signature, dup_legal_indices
 from rl.encoder.encoding import _card_id

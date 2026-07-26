@@ -9,7 +9,7 @@ Validates:
   6. Backward pass produces finite gradients
 
 Run:
-  PYTHONPATH=. uv run python scripts/validate/test_phase_b.py
+  uv run python scripts/validate/test_phase_b.py
 """
 from __future__ import annotations
 
@@ -17,8 +17,7 @@ import os
 import sys
 import traceback
 
-_REPO = os.path.join(os.path.dirname(__file__), "..", "..")
-sys.path.insert(0, os.path.abspath(_REPO))
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import numpy as np
 import mlx.core as mx

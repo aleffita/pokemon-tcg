@@ -4,9 +4,9 @@ Runs N games per opponent (alternating sides to cancel first-player advantage)
 and reports a results table. Results are APPENDED to eval_results.txt.
 
 Usage:
-  PYTHONPATH=. python3 scripts/tournament.py                      # all agents, 20 games each
-  PYTHONPATH=. python3 scripts/tournament.py --games 50           # 50 games each
-  PYTHONPATH=. python3 scripts/tournament.py --opponent public_agents/lb826_alakazam_seok
+  uv run tcg-tournament                              # all agents, 20 games each
+  uv run tcg-tournament --games 50                   # 50 games each
+  uv run tcg-tournament --opponent public_agents/lb826_alakazam_seok
 """
 
 import argparse
@@ -15,8 +15,7 @@ import sys
 import time
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import AGENT_DIR, load_agent, make_env
+from scripts._common import AGENT_DIR, load_agent, make_env
 
 PUBLIC_AGENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                  "public_agents")

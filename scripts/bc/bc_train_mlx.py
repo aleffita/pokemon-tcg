@@ -7,7 +7,7 @@ FP16-native: numeric features stay float16 end-to-end.
 Gradient accumulation: --accum-steps K accumulates K microbatches before update.
 
 Usage:
-  PYTHONPATH=. python3 scripts/bc/bc_train_mlx.py data/bc_data/bc_2026_07_21 \
+  uv run tcg-train data/bc_data/bc_2026_07_21 \
       --d-model 128 --static --split-heads --epochs 8 --batch 128
 """
 import argparse

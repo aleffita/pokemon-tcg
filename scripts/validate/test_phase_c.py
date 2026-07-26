@@ -10,7 +10,7 @@ Validates:
   7. All previous Phase A and B tests pass (no regressions)
 
 Run:
-  PYTHONPATH=. uv run python scripts/validate/test_phase_c.py
+  uv run python scripts/validate/test_phase_c.py
 """
 from __future__ import annotations
 
@@ -20,8 +20,7 @@ import sys
 import tempfile
 import traceback
 
-_REPO = os.path.join(os.path.dirname(__file__), "..", "..")
-sys.path.insert(0, os.path.abspath(_REPO))
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import numpy as np
 import mlx.core as mx
@@ -433,7 +432,6 @@ def run_previous_tests() -> list[tuple[str, bool, str]]:
             continue
 
         env = os.environ.copy()
-        env["PYTHONPATH"] = os.path.abspath(_REPO)
         env["MLX_BACKEND"] = "cpu"
 
         try:
