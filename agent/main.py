@@ -90,13 +90,18 @@ def _load_model():
     with open(_MODEL_PATH, "rb") as f:
         state = pickle.load(f)
 
-    # Merge config: checkpoint config (if present) overrides defaults
-    ckpt_cfg = state.get("config", state.get("net_config", {}))
+    # Merge config: checkpoint arch_config (if present) overrides defaults
+    ckpt_cfg = state.get("arch_config", state.get("config", state.get("net_config", {})))
     cfg = dict(_DEFAULT_CFG)
-    # Only override keys that the model actually needs
-    for key in ("d_model", "nhead", "nlayers", "static", "split_heads", "structured"):
+    # Override all architecture keys from checkpoint
+    _ARCH_KEYS = ("d_model", "nhead", "nlayers", "ff_dim", "static", "split_heads",
+                  "structured", "scratch_registers", "value_atoms", "value_vmax")
+    for key in _ARCH_KEYS:
         if key in ckpt_cfg:
             cfg[key] = ckpt_cfg[key]
+    # Map ff_dim → ff for build_token_net_mlx
+    if "ff_dim" in ckpt_cfg:
+        cfg["ff"] = ckpt_cfg["ff_dim"]
 
     net = build_token_net_mlx(_CARD_TABLE, cfg)
     model_state = state.get("model")
