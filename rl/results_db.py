@@ -487,23 +487,130 @@ class ResultsDB:
                       source: str = "replay") -> list[dict]:
         """Get top N cards by Elo."""
         rows = self.conn.execute(
-            """SELECT ce.*, c.name FROM card_elo ce
+            """SELECT c.id, c.name, c.category, c.energy_type,
+                      ce.elo, ce.games_played, ce.win_rate
+               FROM card_elo ce
                JOIN cards c ON ce.card_id = c.id
                WHERE ce.source = ?
                ORDER BY ce.elo DESC LIMIT ?""",
             (source, n)).fetchall()
-        return [dict(r) for r in rows]
+        return [{"id": r[0], "name": r[1], "category": r[2],
+                 "energy_type": r[3], "elo": r[4],
+                 "games_played": r[5], "win_rate": r[6]} for r in rows]
 
     def get_top_decks(self, n: int = 20,
                       source: str = "replay") -> list[dict]:
         """Get top N decks by Elo."""
         rows = self.conn.execute(
-            """SELECT de.*, d.name, d.archetype FROM deck_elo de
+            """SELECT d.id, d.name, d.source, d.archetype,
+                      de.elo, de.games_played, de.win_rate
+               FROM deck_elo de
                JOIN decks d ON de.deck_id = d.id
                WHERE de.source = ?
                ORDER BY de.elo DESC LIMIT ?""",
             (source, n)).fetchall()
-        return [dict(r) for r in rows]
+        return [{"id": r[0], "name": r[1], "source": r[2],
+                 "archetype": r[3], "elo": r[4],
+                 "games_played": r[5], "win_rate": r[6]} for r in rows]
+
+    def compute_card_elo(self, source='replay'):
+        """Compute Elo for all cards from match results."""
+        K = 32
+        # Get all remote matches with results
+        matches = self.conn.execute(
+            "SELECT id, result FROM matches WHERE source = ?"
+        , (source,)).fetchall()
+
+        if not matches:
+            return {}
+
+        # Initialize all card elos
+        card_elos = {}
+        for row in self.conn.execute("SELECT id FROM cards").fetchall():
+            card_elos[row[0]] = 1000.0
+
+        for match_row in matches:
+            match_id, result = match_row
+            if result == 0:
+                continue  # skip draws
+
+            # Get cards for each side
+            winner_side = 0 if result == 1 else 1
+            loser_side = 1 - winner_side
+
+            winner_cards = self.conn.execute(
+                "SELECT card_id, quantity FROM match_card_usage WHERE match_id = ? AND player_side = ?",
+                (match_id, winner_side)).fetchall()
+            loser_cards = self.conn.execute(
+                "SELECT card_id, quantity FROM match_card_usage WHERE match_id = ? AND player_side = ?",
+                (match_id, loser_side)).fetchall()
+
+            if not winner_cards or not loser_cards:
+                continue
+
+            # Average Elo of each deck
+            winner_avg = sum(card_elos.get(c, 1000) for c, _ in winner_cards) / len(winner_cards)
+            loser_avg = sum(card_elos.get(c, 1000) for c, _ in loser_cards) / len(loser_cards)
+
+            # Elo delta
+            ea = 1 / (1 + 10 ** ((loser_avg - winner_avg) / 400))
+            delta = K * (1 - ea)
+
+            # Apply to each card (weighted by quantity)
+            for card_id, qty in winner_cards:
+                card_elos[card_id] = card_elos.get(card_id, 1000) + delta * qty / 4
+            for card_id, qty in loser_cards:
+                card_elos[card_id] = card_elos.get(card_id, 1000) - delta * qty / 4
+
+        # Save to card_elo table
+        for card_id, elo in card_elos.items():
+            wins = self.conn.execute(
+                "SELECT COUNT(DISTINCT m.id) FROM matches m JOIN match_card_usage mcu ON m.id = mcu.match_id WHERE mcu.card_id = ? AND ((mcu.player_side = 0 AND m.result = 1) OR (mcu.player_side = 1 AND m.result = -1))",
+                (card_id,)).fetchone()[0]
+            losses = self.conn.execute(
+                "SELECT COUNT(DISTINCT m.id) FROM matches m JOIN match_card_usage mcu ON m.id = mcu.match_id WHERE mcu.card_id = ? AND ((mcu.player_side = 0 AND m.result = -1) OR (mcu.player_side = 1 AND m.result = 1))",
+                (card_id,)).fetchone()[0]
+            games = wins + losses
+            wr = wins / games if games > 0 else 0.0
+
+            self.conn.execute(
+                "INSERT OR REPLACE INTO card_elo (card_id, elo, games_played, wins, losses, win_rate, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (card_id, elo, games, wins, losses, wr, source))
+        self.conn.commit()
+        return card_elos
+
+    def compute_deck_elo(self, source='replay'):
+        """Compute Elo for all decks from matches."""
+        K = 32
+        deck_elos = {}
+
+        matches = self.conn.execute(
+            "SELECT id, our_deck_id, opp_deck_id, result FROM matches WHERE our_deck_id IS NOT NULL AND opp_deck_id IS NOT NULL"
+        ).fetchall()
+
+        for match_id, our_deck, opp_deck, result in matches:
+            if our_deck not in deck_elos:
+                deck_elos[our_deck] = 1000.0
+            if opp_deck not in deck_elos:
+                deck_elos[opp_deck] = 1000.0
+
+            if result == 0:
+                continue
+
+            ra = deck_elos[our_deck]
+            rb = deck_elos[opp_deck]
+            ea = 1 / (1 + 10 ** ((rb - ra) / 400))
+            delta = K * ((1 if result == 1 else 0) - ea)
+
+            deck_elos[our_deck] += delta
+            deck_elos[opp_deck] -= delta
+
+        for deck_id, elo in deck_elos.items():
+            self.conn.execute(
+                "INSERT OR REPLACE INTO deck_elo (deck_id, elo, games_played, wins, losses, win_rate, source) VALUES (?, ?, 0, 0, 0, 0, ?)",
+                (deck_id, source))
+        self.conn.commit()
+        return deck_elos
 
     def close(self):
         self.conn.close()

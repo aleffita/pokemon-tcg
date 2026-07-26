@@ -29,6 +29,7 @@ tcg-submission  = "scripts.build_submission:main"
 tcg-submit      = "scripts.submit:main"
 tcg-data        = "scripts.data_manager:main"
 tcg-dashboard   = "scripts.dashboard:main"
+tcg-build-card-stats = "scripts.build_card_stats:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rl", "scripts", "agent", "cg"]
