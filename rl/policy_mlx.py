@@ -463,8 +463,9 @@ class TokenTransformerMLX(nn.Module):
         # --- scratch tokens (between state and options) ---
         # F.1: Use memory_in if provided, otherwise use learned_init
         if memory_in is not None:
-            # memory_in: [B, N_SCRATCH, d] or [N_SCRATCH, d]
-            scr_base = memory_in.reshape(B, self.scratch_tokens, self.d)
+            # memory_in: [B, N_SCRATCH, d] or [1, N_SCRATCH, d] or [N_SCRATCH, d]
+            mem = memory_in.reshape(-1, self.scratch_tokens, self.d)
+            scr_base = mx.broadcast_to(mem, (B, self.scratch_tokens, self.d))
         else:
             scr_base = mx.broadcast_to(
                 self.learned_init.reshape(1, self.scratch_tokens, self.d),
