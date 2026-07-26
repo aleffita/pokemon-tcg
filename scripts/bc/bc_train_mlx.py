@@ -107,9 +107,26 @@ def main() -> None:
     y = labels.astype(np.int32)
     is_attack = read_rows(d["__is_attack__"], 0, N).astype(bool) if "__is_attack__" in d else np.zeros(N, dtype=bool)
 
-    # Val split (game-level holdout)
+    # D.4: Episode-level val split (snap to episode boundary if metadata available)
     nval = max(1, int(N * a.val_frac))
     v0 = N - nval
+    meta_path = os.path.join(a.data, "episode_meta.npy") if mmapped else None
+    if meta_path and os.path.exists(meta_path):
+        try:
+            meta = np.load(meta_path)
+            new_ep = meta["new_episode"]
+            boundaries = np.where(new_ep)[0]
+            valid_boundaries = boundaries[boundaries <= N - nval]
+            if len(valid_boundaries) > 0:
+                v0 = int(valid_boundaries[-1])
+                print(f"[bc-train-mlx] D.4: episode-level split at row {v0} "
+                      f"({v0} train, {N - v0} val)", flush=True)
+            else:
+                print(f"[bc-train-mlx] D.4: no episode boundary before {N - nval}, "
+                      f"using tail split at {v0}", flush=True)
+        except Exception as e:
+            print(f"[bc-train-mlx] D.4: failed to load episode_meta ({e}), "
+                  f"using tail split at {v0}", flush=True)
     idx = np.arange(N)
     vi, ti = idx[v0:], idx[:v0]
 

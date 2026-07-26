@@ -261,12 +261,20 @@ class TokenTransformerMLX(nn.Module):
         )
         return tok + need * synth
 
+    # Option bucket sizes — round up max_legal to one of these for compiled shapes
+    _OPT_BUCKETS: tuple[int, ...] = (32, 64, 128, 192)
+
     def _encode(self, o: dict, opt_len: int | None = None) -> tuple:
         """Build full token sequence and run Transformer.
 
+        Includes D.1 option bucket compaction (truncate option tokens to the
+        smallest bucket >= max_legal) and D.2 state column compaction (remove
+        state columns padded for all rows in the batch, remapping option
+        source/target positions).
+
         Args:
             o: observation dict (from encoder, mlx arrays)
-            opt_len: optional truncation for option tokens
+            opt_len: optional explicit option truncation (overrides bucket)
 
         Returns:
             (cls_out, opt_out, pooled, extra)
@@ -275,6 +283,7 @@ class TokenTransformerMLX(nn.Module):
             - pooled: [B, d] mean-pool over non-pad tokens
             - extra: (value_out, submit_out) if split_heads, else None
         """
+        import os as _os
         B = o["cls_scalars"].shape[0]
         toks: list[mx.array] = []
         pads: list[mx.array] = []
@@ -355,11 +364,64 @@ class TokenTransformerMLX(nn.Module):
         state_seq = mx.concatenate(toks, axis=1)  # [B, N_STATE, d]
         pad_state = mx.concatenate(pads, axis=1)   # [B, N_STATE]
 
-        # --- option tokens ---
-        _shift = 2 if self.split_heads else 0
-        _src_pos = mx.where(o["opt_src_pos"] >= 0, o["opt_src_pos"] + _shift, o["opt_src_pos"])
-        _tgt_pos = mx.where(o["opt_tgt_pos"] >= 0, o["opt_tgt_pos"] + _shift, o["opt_tgt_pos"])
+        # --- D.2: state column compaction ---
+        # Remove columns padded for ALL rows in the batch.
+        # Keep: CLS(0), value_tok(1 if split_heads), submit_tok(2 if split_heads),
+        #        sel_type(3 or 1), sel_ctx(4 or 2), scratch positions.
+        N_STATE = state_seq.shape[1]
+        has_at_least_one_real = (~pad_state).any(axis=0)  # [N_STATE] MLX bool
 
+        # Build keep_mask in numpy (avoids MLX boolean indexing issues)
+        keep_np = np.asarray(has_at_least_one_real).copy()
+        keep_np[0] = True   # CLS
+        keep_np[1] = True   # sel_type (or value_tok if split_heads)
+        keep_np[2] = True   # sel_ctx  (or submit_tok if split_heads)
+        if self.split_heads:
+            keep_np[3] = True  # sel_type (shifted)
+            keep_np[4] = True  # sel_ctx  (shifted)
+
+        n_kept = int(keep_np.sum())
+
+        if n_kept < N_STATE:
+            # Build position remap: old_pos -> new_pos, -1 for removed
+            remap = np.full(N_STATE, -1, dtype=np.int32)
+            remap[keep_np] = np.arange(n_kept, dtype=np.int32)
+            keep_indices = np.where(keep_np)[0]  # integer indices of kept columns
+
+            # Compact state tokens and padding mask using mx.take (preserves gradients)
+            state_seq = mx.take(state_seq, mx.array(keep_indices), axis=1)
+            pad_state = mx.take(pad_state, mx.array(keep_indices), axis=1)
+
+            # D.2: remap option source/target positions BEFORE applying split_heads shift
+            _pre_shift = 2 if self.split_heads else 0
+            src_pre = np.asarray(o["opt_src_pos"]).copy()
+            tgt_pre = np.asarray(o["opt_tgt_pos"]).copy()
+            valid_src = src_pre >= 0
+            valid_tgt = tgt_pre >= 0
+            src_pre[valid_src] = np.clip(src_pre[valid_src] + _pre_shift, 0, N_STATE - 1)
+            tgt_pre[valid_tgt] = np.clip(tgt_pre[valid_tgt] + _pre_shift, 0, N_STATE - 1)
+
+            # Gather remap for valid positions (numpy 1D array + 2D index = same-shape result)
+            safe_src = np.clip(src_pre, 0, N_STATE - 1)
+            safe_tgt = np.clip(tgt_pre, 0, N_STATE - 1)
+            remapped_src = remap[safe_src]   # [B, MAX_OPTIONS]
+            remapped_tgt = remap[safe_tgt]   # [B, MAX_OPTIONS]
+
+            # Negative stays negative (synthesized from card id)
+            remapped_src = np.where(valid_src, remapped_src, -1).astype(np.int32)
+            remapped_tgt = np.where(valid_tgt, remapped_tgt, -1).astype(np.int32)
+            _src_pos = mx.array(remapped_src)
+            _tgt_pos = mx.array(remapped_tgt)
+
+            state_pad = pad_state  # compacted state padding
+        else:
+            # No compaction needed — apply split_heads shift as before
+            _shift = 2 if self.split_heads else 0
+            _src_pos = mx.where(o["opt_src_pos"] >= 0, o["opt_src_pos"] + _shift, o["opt_src_pos"])
+            _tgt_pos = mx.where(o["opt_tgt_pos"] >= 0, o["opt_tgt_pos"] + _shift, o["opt_tgt_pos"])
+            state_pad = pad_state
+
+        # --- option tokens ---
         opt_tok = self._opt_stream(
             self._resolve(_src_pos, o["opt_src_card"], state_seq),
             self._resolve(_tgt_pos, o["opt_tgt_card"], state_seq),
@@ -371,6 +433,17 @@ class TokenTransformerMLX(nn.Module):
             (o["action_mask"][..., :MAX_OPTIONS] > 0.5)
             | (o["opt_attr"][..., OPT_PICKED] > 0.5)
         )
+
+        # --- D.1: option bucket compaction ---
+        if opt_len is None and _os.environ.get("MLX_NO_OPT_BUCKET", "0") != "1":
+            max_legal = int(mx.sum(opt_present, axis=1).max().item())
+            if max_legal > 0:
+                opt_len = max_legal
+                for bucket in self._OPT_BUCKETS:
+                    if bucket >= max_legal:
+                        opt_len = bucket
+                        break
+
         # Truncate options if requested
         if opt_len is not None and opt_len < opt_tok.shape[1]:
             opt_tok = opt_tok[:, :opt_len]
@@ -386,7 +459,7 @@ class TokenTransformerMLX(nn.Module):
         # --- full sequence: state + scratch + options ---
         seq = mx.concatenate([state_seq, scr, opt_tok], axis=1)
         pad = mx.concatenate([
-            pad_state,
+            state_pad,
             mx.zeros((B, self.scratch_tokens), dtype=mx.bool_),
             ~opt_present,
         ], axis=1)

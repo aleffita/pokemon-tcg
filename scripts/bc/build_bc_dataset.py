@@ -62,9 +62,12 @@ BOTH_SIDES = os.environ.get("BC_BOTH_SIDES", "1") == "1"   # clone BOTH players 
 # winner-only throws away half the data for a near-nil quality filter. BC_BOTH_SIDES=0 = old behavior.
 
 
-def rows_from_episode(ep):
-    """Yield (encoded_obs_dict, label) for each cloned side's decisions (BOTH sides by default,
-    see BOTH_SIDES; each side gets its OWN trackers fed only that side's decision obs -- train==test).
+def rows_from_episode(ep, episode_id=None, ep_meta=None):
+    """Yield (encoded_obs_dict, label, is_attack) for each cloned side's decisions.
+
+    BOTH_SIDES by default: each side gets its OWN trackers fed only that side's
+    decision obs -- train==test.  If ep_meta (list) is provided, episode metadata
+    dicts are appended for D.3 sequential metadata sidecar.
 
     OBS<->ACTION OFF-BY-ONE: kaggle_environments records the action a player returns IN RESPONSE TO a
     select-obs on that player's NEXT entry, not the same one. So the label for a side's entry i
@@ -77,14 +80,16 @@ def rows_from_episode(ep):
     if len(rewards) != 2 or rewards[0] is None or rewards[1] is None or rewards[0] == rewards[1]:
         return                                   # draw / malformed -> skip
     win = 0 if rewards[0] > rewards[1] else 1
+    ep_id = episode_id if episode_id is not None else "unknown"
     for _side in ((0, 1) if BOTH_SIDES else (win,)):
-        yield from _side_rows(ep, _side)
+        yield from _side_rows(ep, _side, ep_id, _side, ep_meta)
 
 
-def _side_rows(ep, win):
+def _side_rows(ep, win, ep_id, side, ep_meta):
     went = [st[win] for st in (ep.get("steps") or []) if len(st) > win]   # this side's entries, in order
     tr, ab = GameTracker(), AbilityTracker()
     deck = None
+    step = 0
     for i, ag in enumerate(went):
         obs = ag.get("observation") or {}
         sel = obs.get("select")
@@ -123,6 +128,7 @@ def _side_rows(ep, win):
             deck_list = sel.get("deck") if isinstance(sel.get("deck"), list) else None
             cur = obs.get("current") or {}
             rows = []
+            new_ep = (step == 0)
             for k, idx in enumerate(label):
                 e = enc.encode(obs, set(label[:k]), self_deck=deck, tracker=tr, ability_slots=ab.slots)
                 if float(e["action_mask"][int(idx)]) < 0.5:
@@ -137,6 +143,15 @@ def _side_rows(ep, win):
                 rows.append((e, SUBMIT_ACTION, is_atk))
             for r in rows:
                 yield r
+                if ep_meta is not None:
+                    ep_meta.append({
+                        "episode_id": ep_id,
+                        "side": int(side),
+                        "step_id": step,
+                        "new_episode": new_ep,
+                    })
+                    new_ep = False
+            step += 1
             ab.record(sel, label)
         except Exception:
             return                               # malformed mid-episode -> drop the rest
@@ -147,15 +162,16 @@ def main():
     if MAX_EPS:
         eps = eps[:MAX_EPS]
     print(f"[bc] {len(eps)} episodes from {EP_DIR}", flush=True)
-    rows, labels, attack = [], [], []
+    rows, labels, attack, meta_list = [], [], [], []
     used = 0
     for i, f in enumerate(eps):
         try:
             ep = json.load(open(f, encoding="utf-8"))
         except Exception:
             continue
+        ep_id = os.path.splitext(os.path.basename(f))[0]
         got = 0
-        for row, lab, ia in rows_from_episode(ep):
+        for row, lab, ia in rows_from_episode(ep, episode_id=ep_id, ep_meta=meta_list):
             rows.append(row); labels.append(lab); attack.append(ia); got += 1
         used += 1 if got else 0
         if (i + 1) % 25 == 0:
@@ -173,6 +189,18 @@ def main():
     out["__is_attack__"] = np.array(attack, dtype=np.int8)
     os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
     np.savez_compressed(OUT, **out)
+    # D.3: emit episode metadata sidecar
+    if meta_list:
+        EP_META = np.dtype([
+            ("episode_id", "U64"),
+            ("side", "i4"),
+            ("step_id", "i4"),
+            ("new_episode", "bool"),
+        ])
+        meta_arr = np.array(meta_list, dtype=EP_META)
+        meta_out = os.path.splitext(OUT)[0] + "_episode_meta.npy"
+        np.save(meta_out, meta_arr, allow_pickle=False)
+        print(f"[bc] episode_meta saved: {meta_out} ({len(meta_arr)} rows)", flush=True)
     import collections
     lc = collections.Counter(labels)
     print(f"[bc] saved {OUT}: {len(labels)} rows, {len(keys)} keys; "

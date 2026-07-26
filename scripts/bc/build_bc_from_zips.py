@@ -48,17 +48,19 @@ FLUSH = int(os.environ.get("BC_FLUSH", "200"))
 
 
 def _job(arg):
-    """(zip_path, member) -> (rows, labels, attack) for that episode; never raises (bad episode -> [])."""
+    """(zip_path, member) -> (rows, labels, attack, metadata) for that episode; never raises."""
     zp, name = arg
     try:
         with zipfile.ZipFile(zp) as z:
             ep = json.loads(z.read(name))
+        ep_id = os.path.splitext(os.path.basename(name))[0]
+        ep_meta = []
         rows, labs, atk = [], [], []
-        for r, l, ia in B.rows_from_episode(ep):
+        for r, l, ia in B.rows_from_episode(ep, episode_id=ep_id, ep_meta=ep_meta):
             rows.append(r); labs.append(l); atk.append(ia)
-        return rows, labs, atk
+        return rows, labs, atk, ep_meta
     except Exception:
-        return [], [], []
+        return [], [], [], []
 
 
 # ---------------------------------------------------------------------------
@@ -83,11 +85,12 @@ def _shard_row_count(shard_dir, idx):
     return n
 
 
-def _flush_shard(shard_dir, shard_idx, rows, labels, attack, int_keys):
+def _flush_shard(shard_dir, shard_idx, rows, labels, attack, int_keys, meta=None):
     """Write accumulated rows to a numbered shard directory on disk.
 
     Writes all .npy files first, then a .done marker LAST as an atomic completeness signal.
     If the process crashes mid-flush, the shard lacks .done and will be reprocessed on resume.
+    meta: optional list of episode metadata dicts (D.3).
     """
     if not rows:
         return 0
@@ -101,6 +104,16 @@ def _flush_shard(shard_dir, shard_idx, rows, labels, attack, int_keys):
         np.save(os.path.join(path, f"{k}.npy"), np.stack([r[k] for r in rows]).astype(dt))
     np.save(os.path.join(path, "__labels__.npy"), np.array(labels, dtype=np.int64))
     np.save(os.path.join(path, "__is_attack__.npy"), np.array(attack, dtype=np.int8))
+    # D.3: episode metadata sidecar
+    if meta:
+        EP_META = np.dtype([
+            ("episode_id", "U64"),
+            ("side", "i4"),
+            ("step_id", "i4"),
+            ("new_episode", "bool"),
+        ])
+        np.save(os.path.join(path, "episode_meta.npy"), np.array(meta, dtype=EP_META),
+                allow_pickle=False)
     # .done marker LAST — the shard is only valid if this file exists
     open(os.path.join(path, ".done"), "w").close()
     return len(rows)
@@ -122,9 +135,11 @@ def _merge_shards(shard_dir, out_path, n_shards):
     For each key: pre-allocate a memmap output file with the total row count, then copy each shard's
     data into it one at a time. The memmap is flushed and closed before moving to the next key, so
     only one key's worth of shard data is in memory at any point.
+    episode_meta.npy (D.3 structured dtype) is handled separately via direct concatenation.
     """
     s0_path = _shard_path(shard_dir, 0)
-    keys = sorted(f[:-4] for f in os.listdir(s0_path) if f.endswith(".npy"))
+    keys = sorted(f[:-4] for f in os.listdir(s0_path)
+                  if f.endswith(".npy") and f[:-4] != "episode_meta")
 
     shard_rows = []
     for i in range(n_shards):
@@ -154,6 +169,19 @@ def _merge_shards(shard_dir, out_path, n_shards):
 
         if (ki + 1) % 10 == 0:
             print(f"[bc-zips]   merged {ki + 1}/{len(keys)} keys ...", flush=True)
+
+    # D.3: merge episode metadata (structured dtype, direct concat — no memmap needed)
+    meta_path_0 = os.path.join(_shard_path(shard_dir, 0), "episode_meta.npy")
+    if os.path.exists(meta_path_0):
+        meta_parts = []
+        for i in range(n_shards):
+            p = os.path.join(_shard_path(shard_dir, i), "episode_meta.npy")
+            if os.path.exists(p):
+                meta_parts.append(np.load(p))
+        meta_merged = np.concatenate(meta_parts, axis=0)
+        os.makedirs(out_path, exist_ok=True)
+        np.save(os.path.join(out_path, "episode_meta.npy"), meta_merged, allow_pickle=False)
+        print(f"[bc-zips]   merged episode_meta ({len(meta_merged)} rows)", flush=True)
 
     return total
 
@@ -208,20 +236,21 @@ def main():
             # Submit ONLY this batch to the pool — bounded memory
             asyncs = [pool.apply_async(_job, (t,)) for t in batch]
 
-            buf_rows, buf_labels, buf_attack = [], [], []
+            buf_rows, buf_labels, buf_attack, buf_meta = [], [], [], []
             batch_skipped = 0
             for a in asyncs:
                 try:
-                    r, l, ia = a.get(timeout=TIMEOUT)
+                    r, l, ia, m = a.get(timeout=TIMEOUT)
                 except Exception:
-                    r, l, ia = [], [], []; batch_skipped += 1
-                buf_rows.extend(r); buf_labels.extend(l); buf_attack.extend(ia)
+                    r, l, ia, m = [], [], [], []; batch_skipped += 1
+                buf_rows.extend(r); buf_labels.extend(l); buf_attack.extend(ia); buf_meta.extend(m)
 
             # Flush this batch to disk and free memory
-            n = _flush_shard(shard_dir, batch_idx, buf_rows, buf_labels, buf_attack, int_keys)
+            n = _flush_shard(shard_dir, batch_idx, buf_rows, buf_labels, buf_attack, int_keys,
+                             meta=buf_meta)
             total_rows += n
             skipped += batch_skipped
-            del buf_rows, buf_labels, buf_attack
+            del buf_rows, buf_labels, buf_attack, buf_meta
 
             print(f"[bc-zips]   batch {batch_idx + 1}/{n_batches} "
                   f"(eps {batch_start}-{batch_end - 1}) -> {n} rows "
