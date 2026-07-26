@@ -7,11 +7,13 @@ name = "tcg-pokemon-agent"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
+    "kaggle>=2.2.4",
     "kaggle-environments>=1.32.0",
     "mlx>=0.32.0",
     "numpy>=2.5.1",
     "pymupdf>=1.28.0",
     "pyrefly>=0.60.0",
+    "rich>=15.0.0",
     "torch>=2.13.0",
 ]
 
@@ -22,6 +24,7 @@ tcg-build-daily = "scripts.bc.build_bc_dataset:main"
 tcg-evaluate    = "scripts.evaluate:main"
 tcg-tournament  = "scripts.tournament:main"
 tcg-submission  = "scripts.build_submission:main"
+tcg-data        = "scripts.data_manager:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rl", "scripts", "agent", "cg"]
