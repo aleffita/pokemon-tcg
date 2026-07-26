@@ -322,11 +322,16 @@ def main() -> None:
     )
 
     # F.3: TBPTT loss + grad function (accepts memory, returns memory_out)
-    def tbptt_loss_and_grad(model, ob, yb, memory_in):
-        """Forward with memory, cross-entropy loss, backward through model params only."""
+    def _tbptt_loss_fn(model, ob, yb, memory_in):
         logits, _, memory_out = model.logits_value(ob, memory_in=memory_in)
         loss = nn.losses.cross_entropy(logits, yb).mean()
-        grads = mx.grad(loss, argnums=0)
+        return loss, memory_out
+
+    _tbptt_grad_fn = mx.value_and_grad(_tbptt_loss_fn, argnums=0)
+
+    def tbptt_loss_and_grad(model, ob, yb, memory_in):
+        """Forward with memory, cross-entropy loss, backward through model params only."""
+        (loss, memory_out), grads = _tbptt_grad_fn(model, ob, yb, memory_in)
         return loss, grads, memory_out
 
     if a.compile:
