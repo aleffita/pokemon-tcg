@@ -455,6 +455,7 @@ def main() -> None:
         for key in sorted_keys:
             row_indices = groups[key]
             # Process this (episode, side) group in chunks
+            # Yield (ob, yb, is_new_group) so trainer can reset memory at group boundary
             for ci in range(0, len(row_indices), chunk_size):
                 chunk_rows = row_indices[ci:ci + chunk_size]
                 chunk_arr = np.array(chunk_rows, dtype=np.int64)
@@ -462,7 +463,7 @@ def main() -> None:
                         np.int32 if k in int_keys else np.float16))
                       for k in keys}
                 yb = mx.array(y[chunk_arr].astype(np.int32))
-                yield ob, yb
+                yield ob, yb, (ci == 0)  # is_new_group=True for first chunk in group
 
     # ---- training loop ----
     _running_loss: float = 0.0
@@ -538,9 +539,11 @@ def main() -> None:
 
         for _batch_tuple in _batch_iter:
             if _use_tbptt:
-                ob, yb = _batch_tuple  # TBPTT path
+                ob, yb, is_new_group = _batch_tuple  # TBPTT path: 3-tuple
+                if is_new_group:
+                    _tbptt_memory = None  # reset memory at episode/side boundary
             else:
-                ob, yb = _batch_tuple  # standard path
+                ob, yb = _batch_tuple  # standard path: 2-tuple
 
             micro_n = len(yb)
 
