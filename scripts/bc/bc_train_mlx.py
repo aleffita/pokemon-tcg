@@ -3,6 +3,9 @@
 Same architecture as bc_train.py but uses MLX instead of PyTorch.
 Faster on M1/M2 via native Metal GPU (no MPS NaN bug).
 
+FP16-native: numeric features stay float16 end-to-end.
+Gradient accumulation: --accum-steps K accumulates K microbatches before update.
+
 Usage:
   PYTHONPATH=. python3 scripts/bc/bc_train_mlx.py data/bc_data/bc_2026_07_21 \
       --d-model 128 --static --split-heads --epochs 8 --batch 128
@@ -53,6 +56,8 @@ def main() -> None:
     p.add_argument("--dedup", action="store_true")
     p.add_argument("--epochs", type=int, default=10)
     p.add_argument("--batch", type=int, default=128)
+    p.add_argument("--accum-steps", type=int, default=1,
+                   help="Gradient accumulation microbatches (default=1, no accumulation)")
     p.add_argument("--compile", action="store_true", help="mx.compile the loss function")
     p.add_argument("--prefetch", action="store_true",
                    help="Prefetch next slab on CPU while GPU trains (stream overlap)")
@@ -62,7 +67,7 @@ def main() -> None:
     p.add_argument("--lr-min-ratio", type=float, default=0.1)
     p.add_argument("--max-grad-norm", type=float, default=1.0)
     p.add_argument("--val-frac", type=float, default=0.1)
-    p.add_argument("--slab-rows", type=int, default=262144)
+    p.add_argument("--slab-rows", type=int, default=32768)
     p.add_argument("--log-interval", type=int, default=100,
                    help="Print training stats every N steps")
     p.add_argument("--seed", type=int, default=0)
@@ -129,6 +134,7 @@ def main() -> None:
     # Resume from checkpoint
     start_epoch = 0
     best = 0.0
+    gstep = 0
     if a.resume:
         import pickle
         with open(a.resume, "rb") as f:
@@ -162,30 +168,46 @@ def main() -> None:
     # Optimizer
     optimizer = optim.Adam(learning_rate=a.lr)
 
+    # Restore optimizer state if present in checkpoint (C.5)
+    if a.resume:
+        import pickle
+        with open(a.resume, "rb") as f:
+            state = pickle.load(f)
+        saved_opt_state = state.get("optimizer")
+        if saved_opt_state is not None:
+            try:
+                optimizer.state.update(saved_opt_state)
+                print(f"[bc-train-mlx] restored optimizer state from checkpoint")
+            except Exception as e:
+                print(f"[bc-train-mlx] WARNING: could not restore optimizer state: {e}")
+
     nparams = sum(p.size for _, p in nn.utils.tree_flatten(model.parameters()))
     tag = (f"d{a.d_model}L{a.nlayers}h{a.nhead}"
            f"{' +static' if a.static else ''}"
            f"{' +split' if a.split_heads else ''}"
            f"{' +struct' if a.structured else ''}"
            f"{' +compile' if a.compile else ''}"
-           f"{' +prefetch' if a.prefetch else ''}")
+           f"{' +prefetch' if a.prefetch else ''}"
+           f"{' +accum' if a.accum_steps > 1 else ''}")
     print(f"[bc-train-mlx] {tag} params={nparams:,} N={N} train={len(ti)} val={len(vi)} "
-          f"batch={a.batch}", flush=True)
+          f"batch={a.batch} accum_steps={a.accum_steps}", flush=True)
 
-    # --- batch generator (igual ao PyTorch, mas converte pra mx.array) ---
+    # --- batch generator (C.1: FP16-native numeric features) ---
+    # Keys kept in float32 despite being numeric (needed for masking comparisons):
+    _FP32_KEYS = frozenset({"action_mask"})
+
     def batches(arrs: dict, grp: np.ndarray | None, base: int, order: np.ndarray, bs: int):
         for i in range(0, len(order), bs):
             b = order[i:i + bs]
             ob = {k: mx.array(np.asarray(arrs[k][b]).astype(
-                    np.int32 if k in int_keys else np.float32))
+                    np.int32 if k in int_keys
+                    else (np.float32 if k in _FP32_KEYS else np.float16)))
                   for k in keys}
             if a.dedup:
                 gb = mx.array(np.asarray(grp[b]), dtype=mx.int32)
                 canon = (gb == mx.arange(gb.shape[1])[None, :]).astype(mx.float32)
                 ob["action_mask"] = ob["action_mask"] * canon
             if a.zero_wouldko:
-                ob["opt_attr"] = mx.array(np.asarray(ob["opt_attr"]))
-                # Zero the would_ko columns
                 attr = np.asarray(ob["opt_attr"]).copy()
                 attr[..., WK_LO:WK_HI] = 0.0
                 ob["opt_attr"] = mx.array(attr)
@@ -211,65 +233,81 @@ def main() -> None:
 
         print(f"[bc-train-mlx] compiled train_step with state capture", flush=True)
 
-    # --- slab boundaries ---
+    # --- slab boundaries and total optimizer steps (C.4) ---
     slab_bounds = [(s, min(s + a.slab_rows, v0)) for s in range(0, v0, a.slab_rows)]
-    total_steps = max(1, sum((e0 - s0 + a.batch - 1) // a.batch for s0, e0 in slab_bounds))
-    warmup_steps = min(a.warmup_steps, max(1, total_steps // 5))
+    steps_per_epoch = max(1, sum((e0 - s0 + a.batch - 1) // a.batch for s0, e0 in slab_bounds))
+    total_opt_steps = a.epochs * max(1, steps_per_epoch // a.accum_steps)
+    warmup_steps = min(a.warmup_steps, max(1, total_opt_steps // 5))
 
-    gstep = 0
     train_t0 = time.time()
 
-    # Non-compiled train_step (fallback)
-    def train_step_eager(ob: dict, yb: mx.array) -> float:
+    # --- graph-safe gradient clipping (C.3) ---
+    def clip_grads(grads, max_norm):
+        """Clip gradients in MLX graph (no float() calls)."""
+        if max_norm <= 0:
+            return grads
+        flat = [g.reshape(-1) for _, g in nn.utils.tree_flatten(grads) if g is not None]
+        if not flat:
+            return grads
+        gn = mx.sqrt(sum(mx.sum(g ** 2) for g in flat))
+        scale = mx.where(gn > max_norm, max_norm / mx.maximum(gn, 1e-6), 1.0)
+        grads = nn.utils.tree_map(
+            lambda g: (g * scale) if g is not None else g, grads
+        )
+        mx.eval(grads)
+        return grads
+
+    # --- train step with gradient accumulation (C.2) ---
+    def train_step_accum(ob: dict, yb: mx.array, micro_step: int,
+                         accum_steps: int) -> float:
+        """Forward + backward for one microbatch. Returns loss (Python float)."""
+        loss, grads = grad_fn(model, ob, yb)
+        mx.eval(loss)
+        loss_val = float(loss)
+        return loss_val, grads
+
+    def optimizer_step(grads, accum_steps, n_examples):
+        """Normalize accumulated grads, clip, update optimizer, advance gstep."""
         nonlocal gstep
         gstep += 1
+        # Normalize by total examples (FP32 reduction)
+        grads = nn.utils.tree_map(lambda g: (g / n_examples) if g is not None else g, grads)
+        # Clip (C.3: graph-safe, no float())
+        grads = clip_grads(grads, a.max_grad_norm)
+        # LR schedule on optimizer step (C.4)
         if a.lr_schedule != "none":
-            optimizer.learning_rate = lr_at(gstep, total_steps, a.lr,
+            optimizer.learning_rate = lr_at(gstep, total_opt_steps, a.lr,
                                             a.lr_schedule, warmup_steps, a.lr_min_ratio)
-        loss, grads = grad_fn(model, ob, yb)
-        if a.max_grad_norm > 0:
-            flat = [g.reshape(-1) for _, g in nn.utils.tree_flatten(grads) if g is not None]
-            if flat:
-                gn = float(mx.sqrt(mx.sum(mx.concatenate(flat) ** 2)))
-                if gn > a.max_grad_norm:
-                    s = a.max_grad_norm / max(gn, 1e-6)
-                    grads = nn.utils.tree_map(lambda g: g * s if g is not None else g, grads)
         optimizer.update(model, grads)
-        return float(loss)
+        mx.eval(model.parameters())
+        mx.eval(optimizer.state)
 
     # Compiled path (no clipping — clipping uses eager which has float() calls)
-    def train_step_compiled(ob: dict, yb: mx.array) -> float:
-        nonlocal gstep
-        gstep += 1
-        if a.lr_schedule != "none":
-            optimizer.learning_rate = lr_at(gstep, total_steps, a.lr,
-                                            a.lr_schedule, warmup_steps, a.lr_min_ratio)
-        loss, _ = compiled_step(ob, yb)
-        return float(loss)
+    if a.compile:
+        from functools import partial
+        _state = [model.state, optimizer.state]
 
-    # Compiled path: no clipping (compile can't eval arrays). Eager path: with clipping.
-    if a.compile and a.max_grad_norm <= 0:
-        train_step = train_step_compiled
-    elif a.compile:
-        print(f"[bc-train-mlx] NOTE: --compile with clipping uses eager (clipping needs float())",
-              flush=True)
-        train_step = train_step_eager
-    else:
-        train_step = train_step_eager
+        @partial(mx.compile, inputs=_state, outputs=_state)
+        def compiled_step(ob, yb):
+            """Compiled forward + backward (no clipping)."""
+            loss, grads = grad_fn(model, ob, yb)
+            return loss, grads
+
+        print(f"[bc-train-mlx] compiled train_step with state capture", flush=True)
 
     # ---- prefetch helper (stream overlap: CPU loads next slab while GPU trains) ----
-    def _slab_generator(slab_indices):
+    def _slab_generator(slab_indices, ep_seed):
         """Yield (slab_i, si, sd, sg, perm) for each slab."""
         for slab_i, si in enumerate(slab_indices):
             s0, e0 = slab_bounds[si]
             sd = {k: read_rows(obs_np[k], s0, e0) for k in keys}
             sg = read_rows(group_np, s0, e0) if (a.dedup and group_np is not None) else None
-            perm = np.random.default_rng([a.seed, ep, s0]).permutation(e0 - s0)
+            perm = np.random.default_rng([a.seed, ep_seed, s0]).permutation(e0 - s0)
             yield slab_i, si, s0, e0, sd, sg, perm
 
-    def _prefetch_slabs(slab_indices, q: queue.Queue):
+    def _prefetch_slabs(slab_indices, ep_seed, q: queue.Queue):
         """Background thread: load slabs ahead of the GPU."""
-        for item in _slab_generator(slab_indices):
+        for item in _slab_generator(slab_indices, ep_seed):
             q.put(item)
         q.put(None)
 
@@ -277,90 +315,128 @@ def main() -> None:
     _running_loss: float = 0.0
     _running_n: int = 0
     _compile_pending: bool = a.compile
+    _micro_count: int = 0
+    _accum_grads = None
+    _accum_examples: int = 0
+    _accum_loss_sum: float = 0.0
 
     for ep in range(start_epoch, a.epochs):
         ep_t0: float = time.time()
-        ep_step: int = 0  # per-epoch step counter (for display + ETA)
+        ep_step: int = 0  # optimizer steps in this epoch
+        ep_micro: int = 0  # microbatches processed in this epoch
         _running_loss = 0.0
         _running_n = 0
+        _micro_count = 0
+        _accum_grads = None
+        _accum_examples = 0
+        _accum_loss_sum = 0.0
         print(f"[bc-train-mlx] === epoch {ep + 1}/{a.epochs} ===", flush=True)
 
-        if mmapped:
-            perm_slabs = np.random.default_rng([a.seed, ep]).permutation(len(slab_bounds))
-
-            # Prefetch mode: background thread loads next slab while GPU trains
-            if a.prefetch:
-                q: queue.Queue = queue.Queue(maxsize=1)
-                t = threading.Thread(target=_prefetch_slabs, args=(perm_slabs, q), daemon=True)
-                t.start()
-                _slab_iter = iter(lambda: q.get(), None)
-            else:
-                _slab_iter = _slab_generator(perm_slabs)
-
-            for slab_i, si, s0, e0, sd, sg, perm in _slab_iter:
-                slab_t: float = time.time()
-                load_t = 0.0  # already loaded in prefetch mode
-                if not a.prefetch:
-                    print(f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} "
-                          f"(rows {s0:,}-{e0:,}) loading...", end="", flush=True)
-                    load_t = time.time() - slab_t
-                    print(f" {load_t:.1f}s", flush=True)
+        # Flatten all batches from all slabs into a single generator
+        # so we can accumulate across slab boundaries
+        def _all_batches():
+            """Yield (ob, yb) from all slabs in this epoch."""
+            if mmapped:
+                perm_slabs = np.random.default_rng([a.seed, ep]).permutation(len(slab_bounds))
+                if a.prefetch:
+                    q: queue.Queue = queue.Queue(maxsize=1)
+                    t = threading.Thread(target=_prefetch_slabs,
+                                         args=(perm_slabs, ep, q), daemon=True)
+                    t.start()
+                    slab_iter = iter(lambda: q.get(), None)
                 else:
-                    print(f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} "
-                          f"(rows {s0:,}-{e0:,}) prefetched", flush=True)
-                for ob, yb in batches(sd, sg, s0, perm, a.batch):
-                    if _compile_pending:
-                        print("[bc-train-mlx]   compiling (first call, may take several minutes)...",
-                              end="", flush=True)
-                        _compile_t = time.time()
-                    loss_val: float = train_step(ob, yb)
+                    slab_iter = _slab_generator(perm_slabs, ep)
+                for slab_i, si, s0, e0, sd, sg, perm in slab_iter:
+                    slab_t: float = time.time()
+                    load_t = 0.0
+                    if not a.prefetch:
+                        print(f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} "
+                              f"(rows {s0:,}-{e0:,}) loading...", end="", flush=True)
+                        load_t = time.time() - slab_t
+                        print(f" {load_t:.1f}s", flush=True)
+                    else:
+                        print(f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} "
+                              f"(rows {s0:,}-{e0:,}) prefetched", flush=True)
+                    for ob, yb in batches(sd, sg, s0, perm, a.batch):
+                        yield ob, yb
+                    del sd, sg
+                    slab_loss = _running_loss / max(_running_n, 1)
+                    print(f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} done "
+                          f"train_loss={slab_loss:.4f} ({time.time() - ep_t0:.0f}s total, "
+                          f"{load_t:.1f}s load)", flush=True)
+            else:
+                g = np.random.default_rng([a.seed, ep])
+                order = g.permutation(len(ti))
+                for ob, yb in batches(obs_np, group_np, 0, order, a.batch):
+                    yield ob, yb
+
+        for ob, yb in _all_batches():
+            micro_n = len(yb)
+
+            # Forward + backward this microbatch
+            if a.compile and _compile_pending:
+                print("[bc-train-mlx]   compiling (first call, may take several minutes)...",
+                      end="", flush=True)
+                _compile_t = time.time()
+
+            if a.accum_steps > 1:
+                loss_val, grads = train_step_accum(ob, yb, _micro_count, a.accum_steps)
+                if _accum_grads is None:
+                    _accum_grads = grads
+                    _accum_examples = micro_n
+                    _accum_loss_sum = loss_val * micro_n
+                else:
+                    _accum_grads = nn.utils.tree_map(
+                        lambda a, b: (a + b) if (a is not None and b is not None) else (a if a is not None else b),
+                        _accum_grads, grads
+                    )
+                    _accum_examples += micro_n
+                    _accum_loss_sum += loss_val * micro_n
+                _micro_count += 1
+
+                # Accumulate in FP32 for numerical stability
+                if _micro_count % a.accum_steps == 0:
+                    optimizer_step(_accum_grads, a.accum_steps, _accum_examples)
                     ep_step += 1
-                    if _compile_pending:
-                        print(f" done ({time.time() - _compile_t:.0f}s)", flush=True)
-                        _compile_pending = False
-                    _running_loss += loss_val * len(yb)
-                    _running_n += len(yb)
-                    if ep_step % a.log_interval == 0:
-                        avg: float = _running_loss / max(_running_n, 1)
-                        elapsed_s: float = time.time() - ep_t0
-                        steps_left: int = total_steps - ep_step
-                        eta_step: float = (elapsed_s / max(ep_step, 1)) * steps_left
-                        el_m, el_s = divmod(int(elapsed_s), 60)
-                        el_h, el_m = divmod(el_m, 60)
-                        el_str = f"{el_h}h{el_m:02d}m" if el_h else f"{el_m}m{el_s:02d}s"
-                        eta_m_s, eta_s_s = divmod(int(eta_step), 60)
-                        eta_h, eta_m_s = divmod(eta_m_s, 60)
-                        eta_str_s: str = f"{eta_h}h{eta_m_s:02d}m" if eta_h else f"{eta_m_s}m{eta_s_s:02d}s"
-                        print(f"[bc-train-mlx]   step {ep_step}/{total_steps} "
-                              f"loss={avg:.4f} lr={optimizer.learning_rate:.2e} "
-                              f"elapsed={el_str} ETA={eta_str_s}", flush=True)
-                del sd, sg
-                slab_loss: float = _running_loss / max(_running_n, 1)
-                print(f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} done "
-                      f"train_loss={slab_loss:.4f} ({time.time() - ep_t0:.0f}s total, "
-                      f"{load_t:.1f}s load)", flush=True)
-        else:
-            g = np.random.default_rng([a.seed, ep])
-            order = g.permutation(len(ti))
-            for ob, yb in batches(obs_np, group_np, 0, order, a.batch):
-                loss_val = train_step(ob, yb)
+                    _running_loss += _accum_loss_sum
+                    _running_n += _accum_examples
+                    _accum_grads = None
+                    _accum_examples = 0
+                    _accum_loss_sum = 0.0
+            else:
+                # No accumulation: single microbatch = full step
+                if a.compile and a.max_grad_norm <= 0:
+                    loss, grads = compiled_step(ob, yb)
+                    mx.eval(loss)
+                    loss_val = float(loss)
+                else:
+                    loss, grads = grad_fn(model, ob, yb)
+                    mx.eval(loss)
+                    loss_val = float(loss)
+                grads = clip_grads(grads, a.max_grad_norm)
+                optimizer_step(grads, 1, micro_n)
                 ep_step += 1
-                _running_loss += loss_val * len(yb)
-                _running_n += len(yb)
-                if ep_step % a.log_interval == 0:
-                    avg = _running_loss / max(_running_n, 1)
-                    elapsed_s = time.time() - ep_t0
-                    steps_left = total_steps - ep_step
-                    eta_step = (elapsed_s / max(ep_step, 1)) * steps_left
-                    el_m, el_s = divmod(int(elapsed_s), 60)
-                    el_h, el_m = divmod(el_m, 60)
-                    el_str = f"{el_h}h{el_m:02d}m" if el_h else f"{el_m}m{el_s:02d}s"
-                    eta_m_s, eta_s_s = divmod(int(eta_step), 60)
-                    eta_h, eta_m_s = divmod(eta_m_s, 60)
-                    eta_str_s = f"{eta_h}h{eta_m_s:02d}m" if eta_h else f"{eta_m_s}m{eta_s_s:02d}s"
-                    print(f"[bc-train-mlx]   step {ep_step}/{total_steps} "
-                          f"loss={avg:.4f} lr={optimizer.learning_rate:.2e} "
-                          f"elapsed={el_str} ETA={eta_str_s}", flush=True)
+                _running_loss += loss_val * micro_n
+                _running_n += micro_n
+
+            ep_micro += 1
+            if _compile_pending:
+                print(f" done ({time.time() - _compile_t:.0f}s)", flush=True)
+                _compile_pending = False
+            if ep_step % a.log_interval == 0 and ep_step > 0:
+                avg = _running_loss / max(_running_n, 1)
+                elapsed_s = time.time() - ep_t0
+                steps_left = max(0, total_opt_steps - ep_step)
+                eta_step = (elapsed_s / max(ep_step, 1)) * steps_left
+                el_m, el_s = divmod(int(elapsed_s), 60)
+                el_h, el_m = divmod(el_m, 60)
+                el_str = f"{el_h}h{el_m:02d}m" if el_h else f"{el_m}m{el_s:02d}s"
+                eta_m_s, eta_s_s = divmod(int(eta_step), 60)
+                eta_h, eta_m_s = divmod(eta_m_s, 60)
+                eta_str_s = f"{eta_h}h{eta_m_s:02d}m" if eta_h else f"{eta_m_s}m{eta_s_s:02d}s"
+                print(f"[bc-train-mlx]   opt_step {ep_step}/{total_opt_steps} "
+                      f"micro={ep_micro} loss={avg:.4f} lr={optimizer.learning_rate:.2e} "
+                      f"elapsed={el_str} ETA={eta_str_s}", flush=True)
 
         # ---- validation ----
         model.eval()
@@ -395,17 +471,30 @@ def main() -> None:
             yv_group = gv_np[np.arange(len(vi)), y[vi]]
             eq = float((gv_np[np.arange(len(vi)), am_cat] == yv_group).mean())
 
+        # Flush any remaining accumulated gradients before validation
+        if a.accum_steps > 1 and _accum_grads is not None and _accum_examples > 0:
+            optimizer_step(_accum_grads, a.accum_steps, _accum_examples)
+            ep_step += 1
+            _running_loss += _accum_loss_sum
+            _running_n += _accum_examples
+            _accum_grads = None
+            _accum_examples = 0
+            _accum_loss_sum = 0.0
+
+        # Complete checkpoint: save model, optimizer, arch_config, scheduler, seed (C.5)
         if acc > best:
             import pickle
             with open(a.out, "wb") as f:
                 pickle.dump({
                     "model": model.parameters(),
+                    "optimizer": optimizer.state,
                     "arch_config": model.get_config(),
                     "epoch": ep,
                     "gstep": gstep,
                     "val_acc": acc,
                     "seed": a.seed,
                     "dataset_path": a.data,
+                    "accum_steps": a.accum_steps,
                 }, f)
         best = max(best, acc)
 
@@ -418,14 +507,14 @@ def main() -> None:
         eta_str: str = f"{eta_m}m{eta_s:02d}s" if eta_m else f"{eta_s}s"
         print(f"[bc-train-mlx] ep{ep} val_acc={acc:.4f} equiv={eq:.4f} top3={t3:.4f} "
               f"atk={atk:.4f} ko={ko:.4f} loss={vloss / max(tot, 1):.4f} "
-              f"t={ep_time:.0f}s ETA={eta_str}", flush=True)
+              f"t={ep_time:.0f}s ETA={eta_str} gstep={gstep}", flush=True)
 
     # Save final best
     if a.out and os.path.exists(a.out):
         final_path = "model/bc_model/bc_best_mlx_final.pkl"
         shutil.copy2(a.out, final_path)
         print(f"[bc-train-mlx] best checkpoint copied to {final_path}", flush=True)
-    print(f"[bc-train-mlx] RESULT: best_val_acc={best:.4f} params={nparams:,}", flush=True)
+    print(f"[bc-train-mlx] RESULT: best_val_acc={best:.4f} params={nparams:,} gstep={gstep}", flush=True)
 
 
 if __name__ == "__main__":
