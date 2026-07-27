@@ -565,11 +565,11 @@ class ResultsDB:
         # Save to card_elo table
         for card_id, elo in card_elos.items():
             wins = self.conn.execute(
-                "SELECT COUNT(DISTINCT m.id) FROM matches m JOIN match_card_usage mcu ON m.id = mcu.match_id WHERE mcu.card_id = ? AND ((mcu.player_side = 0 AND m.result = 1) OR (mcu.player_side = 1 AND m.result = -1))",
-                (card_id,)).fetchone()[0]
+                "SELECT COUNT(DISTINCT m.id) FROM matches m JOIN match_card_usage mcu ON m.id = mcu.match_id WHERE mcu.card_id = ? AND m.source = ? AND ((mcu.player_side = 0 AND m.result = 1) OR (mcu.player_side = 1 AND m.result = -1))",
+                (card_id, source)).fetchone()[0]
             losses = self.conn.execute(
-                "SELECT COUNT(DISTINCT m.id) FROM matches m JOIN match_card_usage mcu ON m.id = mcu.match_id WHERE mcu.card_id = ? AND ((mcu.player_side = 0 AND m.result = -1) OR (mcu.player_side = 1 AND m.result = 1))",
-                (card_id,)).fetchone()[0]
+                "SELECT COUNT(DISTINCT m.id) FROM matches m JOIN match_card_usage mcu ON m.id = mcu.match_id WHERE mcu.card_id = ? AND m.source = ? AND ((mcu.player_side = 0 AND m.result = -1) OR (mcu.player_side = 1 AND m.result = 1))",
+                (card_id, source)).fetchone()[0]
             games = wins + losses
             wr = wins / games if games > 0 else 0.0
 
