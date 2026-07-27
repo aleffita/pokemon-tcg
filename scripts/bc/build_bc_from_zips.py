@@ -224,9 +224,8 @@ def main():
     CAP = cfg.max_episodes
     FLUSH = cfg.bc_flush
     TIMEOUT = float(cfg.bc_ep_timeout)
-    # Override build_bc_dataset module-level config
-    B.WOULD_KO = cfg.bc_would_ko
-    B.WK_NVAR = cfg.bc_wk_nvar
+    # Configure build_bc_dataset from config
+    B.configure(bc_would_ko=cfg.bc_would_ko, bc_wk_nvar=cfg.bc_wk_nvar, bc_both_sides=cfg.bc_both_sides)
 
     tasks = []
     for zp in ZIPS:
