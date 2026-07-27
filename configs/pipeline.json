@@ -1,0 +1,7 @@
+{
+  "auto_submit": false,
+  "sweep_decks_count": 5,
+  "games_per_opponent": 20,
+  "min_improvement_to_submit": 2.0,
+  "replay_dates_to_keep": 30
+}
