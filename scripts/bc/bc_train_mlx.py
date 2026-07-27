@@ -12,6 +12,7 @@ Usage:
 """
 import argparse
 import os
+from pathlib import Path
 import queue
 import shutil
 import threading
@@ -54,7 +55,7 @@ def main() -> None:
         epilog="Config hierarchy: CLI args > --config file > configs/train_config.json > defaults",
     )
     p.add_argument("data", nargs="?", default=None,
-                   help=".npz or DIRECTORY of per-key .npy files")
+                   help="Dataset directory (default: most recent in data_dir)")
     p.add_argument("--config", default=None, help="Path to JSON config file")
     # Architecture
     p.add_argument("--d-model", type=int, default=None)
@@ -158,6 +159,16 @@ def main() -> None:
 
     # MLX auto-detecta GPU (Metal) — sem device management!
     print(f"[bc-train-mlx] device={mx.default_device()}", flush=True)
+
+    # Auto-detect dataset: use most recent if not specified
+    if a.data is None:
+        data_dir = Path(cfg.data_dir)
+        datasets = sorted([d for d in data_dir.iterdir() if d.is_dir() and (d / "__labels__.npy").exists()])
+        if not datasets:
+            print(f"[bc-train-mlx] ERROR: No datasets found in {data_dir}")
+            return
+        a.data = str(datasets[-1])
+        print(f"[bc-train-mlx] Auto-detected dataset: {a.data}", flush=True)
 
     # --- data loading (igual ao PyTorch) ---
     mmapped = os.path.isdir(a.data)
