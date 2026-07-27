@@ -75,22 +75,181 @@ def play(env, a, b) -> tuple[int, str]:
     return (1 if r0 > r1 else (-1 if r0 < r1 else 0)), html
 
 
-def run_matchup(env, our_agent, opp_agent, n_games: int) -> tuple[int, int, int, str]:
-    """Play n_games; return (wins, losses, draws, last_replay_html)."""
+def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json, our_deck_id=None, opp_deck_id=None):
+    """Save full replay data from a completed game to SQLite.
+
+    Args:
+        db: ResultsDB instance.
+        matchup_id: ID of the parent matchup row.
+        game_index: Index of this game within the matchup.
+        our_side: Which player index was ours (0 or 1).
+        result: +1 win, -1 loss, 0 draw from our perspective.
+        replay_json: Parsed JSON dict from env.render(mode='json').
+        our_deck_id: Optional deck ID for our deck.
+        opp_deck_id: Optional deck ID for opponent's deck.
+    Returns:
+        match_id: The inserted match ID.
+    """
+    steps = replay_json.get('steps', [])
+
+    # Create match
+    match_id = db.add_match(
+        matchup_id=matchup_id,
+        game_index=game_index,
+        source='local',
+        our_agent='agent/main.py',
+        our_deck_id=our_deck_id,
+        opp_agent='opponent',
+        opp_deck_id=opp_deck_id,
+        our_side=our_side,
+        result=result,
+        n_steps=len(steps)
+    )
+
+    if not match_id:
+        return match_id
+
+    # Save steps
+    for step_num, step in enumerate(steps):
+        for player_idx, player_data in enumerate(step):
+            # player_data may be a dict (from JSON) or a state object
+            if isinstance(player_data, dict):
+                obs = player_data.get('observation', {})
+                action_val = player_data.get('action', [])
+                status_val = player_data.get('status', 'UNKNOWN')
+                reward_val = player_data.get('reward', 0)
+            else:
+                obs = getattr(player_data, 'observation', {}) or {}
+                action_val = getattr(player_data, 'action', []) or []
+                status_val = getattr(player_data, 'status', 'UNKNOWN')
+                reward_val = getattr(player_data, 'reward', 0) or 0
+
+            current = obs.get('current') or {}
+            select = obs.get('select') or {}
+            logs = obs.get('logs') or []
+
+            # Normalize action to list
+            if isinstance(action_val, (int, float)):
+                action_list = [int(action_val)]
+            elif isinstance(action_val, list):
+                action_list = action_val
+            else:
+                action_list = []
+
+            # Create step
+            step_id = db.conn.execute(
+                """INSERT OR IGNORE INTO match_steps (match_id, step_num, player_idx, turn, select_type,
+                   select_context, n_options, action, status, reward)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (match_id, step_num, player_idx,
+                 current.get('turn', 0) if current else 0,
+                 select.get('type') if select else None,
+                 select.get('context') if select else None,
+                 len(select.get('option', [])) if select and 'option' in select else 0,
+                 str(action_list),
+                 str(status_val),
+                 int(reward_val) if reward_val is not None else 0)
+            ).lastrowid
+
+            if not step_id:
+                continue
+
+            # Save options
+            if select and 'option' in select:
+                for opt_idx, opt in enumerate(select['option']):
+                    opt_type = opt.get('type', 0) if isinstance(opt, dict) else 0
+                    was_selected = 1 if opt_idx in action_list else 0
+                    db.conn.execute(
+                        "INSERT INTO step_options (step_id, option_idx, option_type, was_selected) VALUES (?, ?, ?, ?)",
+                        (step_id, opt_idx, opt_type, was_selected)
+                    )
+
+            # Save events (logs)
+            for log in logs:
+                if isinstance(log, dict):
+                    db.conn.execute(
+                        """INSERT INTO step_events (step_id, event_type, player_idx, card_id, serial,
+                           target_card_id, target_serial, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (step_id, log.get('type', 0), log.get('playerIndex'),
+                         log.get('cardId'), log.get('serial'),
+                         log.get('cardIdTarget'), log.get('serialTarget'),
+                         log.get('value'))
+                    )
+
+            # Save board snapshot
+            if current and 'players' in current:
+                for pidx, player in enumerate(current['players']):
+                    snapshot_id = db.conn.execute(
+                        """INSERT OR IGNORE INTO board_snapshots (step_id, player_idx, turn, deck_count,
+                           hand_count, prize_count, discard_count, poisoned, burned, asleep,
+                           paralyzed, confused) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (step_id, pidx, current.get('turn', 0),
+                         player.get('deckCount', 0),
+                         player.get('handCount', 0),
+                         len([p for p in player.get('prize', []) if p is not None]) if 'prize' in player else 0,
+                         len(player.get('discard', [])) if 'discard' in player else 0,
+                         int(player.get('poisoned', False)),
+                         int(player.get('burned', False)),
+                         int(player.get('asleep', False)),
+                         int(player.get('paralyzed', False)),
+                         int(player.get('confused', False)))
+                    ).lastrowid
+
+                    if not snapshot_id:
+                        continue
+
+                    # Save Pokemon on field
+                    for slot_name in ('active', 'bench'):
+                        for slot_idx, pokemon in enumerate(player.get(slot_name, [])):
+                            if pokemon is None:
+                                continue
+                            db.conn.execute(
+                                """INSERT INTO pokemon_on_field (snapshot_id, slot, slot_idx, card_id,
+                                   serial, hp, max_hp, n_energies, n_tools, n_preevo)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (snapshot_id, slot_name, slot_idx,
+                                 pokemon.get('id', 0), pokemon.get('serial', 0),
+                                 pokemon.get('hp', 0), pokemon.get('maxHp', 0),
+                                 len(pokemon.get('energies', [])) if 'energies' in pokemon else 0,
+                                 len(pokemon.get('tools', [])) if 'tools' in pokemon else 0,
+                                 len(pokemon.get('preEvolution', [])) if 'preEvolution' in pokemon else 0)
+                            )
+
+    db.conn.commit()
+    return match_id
+
+
+def run_matchup(env, our_agent, opp_agent, n_games: int):
+    """Play n_games; return (wins, losses, draws, last_replay_html, game_results).
+
+    game_results is a list of dicts with keys: game_index, our_side, result, replay_json."""
+    import json as _json
     wins = losses = draws = 0
     last_html = ""
+    game_results = []
     for i in range(n_games):
         if i % 2 == 0:
             r, html = play(env, our_agent, opp_agent)
+            our_side = 0
         else:
             r, html = play(env, opp_agent, our_agent)
             r = -r
+            our_side = 1
         if i == n_games - 1:
             last_html = html
         wins += r == 1
         losses += r == -1
         draws += r == 0
-    return wins, losses, draws, last_html
+
+        # Capture full replay JSON after each game
+        replay_json = _json.loads(env.render(mode='json'))
+        game_results.append({
+            "game_index": i,
+            "our_side": our_side,
+            "result": r,
+            "replay_json": replay_json,
+        })
+    return wins, losses, draws, last_html, game_results
 
 
 def main():
@@ -119,6 +278,7 @@ def main():
 
     total_w = total_l = total_d = 0
     rows = []
+    all_game_results = []  # (label, game_results) pairs for replay saving
     start_time = time.time()
 
     if args.note:
@@ -132,11 +292,12 @@ def main():
             continue
 
         t0 = time.time()
-        w, l, d, replay_html = run_matchup(env, our_agent, opp_agent, args.games)
+        w, l, d, replay_html, game_results = run_matchup(env, our_agent, opp_agent, args.games)
         elapsed = time.time() - t0
         wr = w / max(w + l, 1) * 100
         total_w += w; total_l += l; total_d += d
         rows.append((label, w, l, d, wr, elapsed, replay_html))
+        all_game_results.append((label, game_results))
         print(f"  {label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s)", flush=True)
 
     total_time = time.time() - start_time
@@ -149,23 +310,23 @@ def main():
     print("-" * len(header))
     for row in rows:
         if len(row) == 3:
-            print(f"{row[0]:40s} {row[1]:>4s} — {row[2]}")
+            print(f"{row[0]:40s} {str(row[1]):>4s} — {row[2]}")
         else:
-            print(f"{row[0]:40s} {row[1]:>4s} {row[2]:>4s} {row[3]:>4s} {row[4]:>8s} {row[5]:>6s}")
+            print(f"{row[0]:40s} {str(row[1]):>4s} {str(row[2]):>4s} {str(row[3]):>4s} {row[4]:>7.1f}% {row[5]:>5.0f}s")
     print("-" * len(header))
     print(f"{'OVERALL':40s} {total_w:>4d} {total_l:>4d} {total_d:>4d} {overall_wr:>7.1f}% {total_time:>5.0f}s")
 
     # Build structured rows for SQLite (exclude error rows which have len==3)
     rows_with_stats = []
     for r in rows:
-        if len(r) == 6:
-            label, w, l, d, wr, t = r
-            rows_with_stats.append((label, int(w), int(l), int(d), float(wr.rstrip('%')), t))
+        if len(r) == 7:
+            label, w, l, d, wr, t, _html = r
+            rows_with_stats.append((label, int(w), int(l), int(d), float(wr), t))
 
     # Save to SQLite (primary storage)
     from rl.results_db import ResultsDB
     db = ResultsDB()
-    db.add_tournament(
+    tournament_id = db.add_tournament(
         timestamp=datetime.now().strftime('%Y-%m-%d %H:%M'),
         agent=our_path,
         games_per_opp=args.games,
@@ -174,8 +335,34 @@ def main():
                   for label, w, l, d, wr, _ in rows_with_stats],
         overall={"w": total_w, "l": total_l, "d": total_d, "wr": overall_wr},
         total_time=total_time)
+
+    # Save full replay data for each game
+    # Fetch matchup IDs in insertion order (rowid) to handle duplicate opponent names
+    all_matchup_rows = db.conn.execute(
+        "SELECT id, opponent FROM matchups WHERE tournament_id = ? ORDER BY rowid",
+        (tournament_id,)).fetchall()
+    matchup_iter = iter(all_matchup_rows)
+    n_matches_saved = 0
+    for label, game_results in all_game_results:
+        # Get next matchup in insertion order
+        matchup_row = next(matchup_iter, None)
+        if not matchup_row:
+            continue
+        matchup_id = matchup_row["id"]
+
+        for gr in game_results:
+            save_match_replay(
+                db=db,
+                matchup_id=matchup_id,
+                game_index=gr["game_index"],
+                our_side=gr["our_side"],
+                result=gr["result"],
+                replay_json=gr["replay_json"],
+            )
+            n_matches_saved += 1
+
     db.close()
-    print(f"\nResults saved to model/results.db")
+    print(f"\nResults saved to model/results.db ({n_matches_saved} match replays)")
 
     # Optional: also append to eval_results.txt (backup)
     if args.txt_backup:
