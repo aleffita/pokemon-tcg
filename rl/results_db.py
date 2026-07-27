@@ -608,7 +608,7 @@ class ResultsDB:
         for deck_id, elo in deck_elos.items():
             self.conn.execute(
                 "INSERT OR REPLACE INTO deck_elo (deck_id, elo, games_played, wins, losses, win_rate, source) VALUES (?, ?, 0, 0, 0, 0, ?)",
-                (deck_id, source))
+                (deck_id, elo, source))
         self.conn.commit()
         return deck_elos
 

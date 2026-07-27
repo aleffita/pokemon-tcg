@@ -52,14 +52,15 @@ def process_zip(db, zip_path):
                 rewards = data.get('rewards', [0, 0])
                 if len(steps) < 2:
                     continue
-                # Extract deck choices from step 0 and 1
-                decks = []
-                for side in (0, 1):
-                    action = steps[0][side].get('action', [])
-                    if len(action) == 60:
-                        decks.append([int(c) for c in action])
-                    else:
-                        decks.append(None)
+                # Extract deck choices (60-card action) — find the step with deck selection
+                decks = [None, None]
+                for step in steps:
+                    for side in (0, 1):
+                        if decks[side] is not None:
+                            continue
+                        action = step[side].get('action', [])
+                        if len(action) == 60:
+                            decks[side] = [int(c) for c in action]
                 if not decks[0] or not decks[1]:
                     continue
                 # Determine result from our perspective (side 0)
@@ -68,7 +69,7 @@ def process_zip(db, zip_path):
                 deck0_id = identify_or_create_deck(db, decks[0])
                 deck1_id = identify_or_create_deck(db, decks[1])
                 cur = db.conn.execute(
-                    "INSERT INTO matches (source, our_agent, our_deck_id, opp_agent, opp_deck_id, our_side, result, n_steps) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+                    "INSERT INTO matches (source, game_index, our_agent, our_deck_id, opp_agent, opp_deck_id, our_side, result, n_steps) VALUES (?, 0, ?, ?, ?, ?, 0, ?, ?)",
                     ('remote', ep_id, deck0_id, 'opponent', deck1_id, result, len(steps)))
                 match_id = cur.lastrowid
                 # Record card usage
@@ -114,9 +115,9 @@ def main():
 
     if total > 0:
         print("Computing card Elo...")
-        db.compute_card_elo()
+        db.compute_card_elo(source='remote')
         print("Computing deck Elo...")
-        db.compute_deck_elo()
+        db.compute_deck_elo(source='remote')
 
         top = db.get_top_cards(10)
         print("\nTop 10 cards by Elo:")
