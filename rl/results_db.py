@@ -16,7 +16,7 @@ from typing import Optional
 DB_PATH = Path(__file__).resolve().parent.parent / "model" / "results.db"
 
 K = 32
-INITIAL_ELO = 1000
+INITIAL_ELO = 600
 
 
 def _extract_lb_score(label: str) -> Optional[int]:
@@ -178,7 +178,7 @@ class ResultsDB:
             CREATE TABLE IF NOT EXISTS card_elo (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 card_id INTEGER NOT NULL REFERENCES cards(id),
-                elo REAL NOT NULL DEFAULT 1000.0,
+                elo REAL NOT NULL DEFAULT 600.0,
                 games_played INTEGER NOT NULL DEFAULT 0,
                 wins INTEGER NOT NULL DEFAULT 0,
                 losses INTEGER NOT NULL DEFAULT 0,
@@ -191,7 +191,7 @@ class ResultsDB:
             CREATE TABLE IF NOT EXISTS deck_elo (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 deck_id INTEGER NOT NULL REFERENCES decks(id),
-                elo REAL NOT NULL DEFAULT 1000.0,
+                elo REAL NOT NULL DEFAULT 600.0,
                 games_played INTEGER NOT NULL DEFAULT 0,
                 wins INTEGER NOT NULL DEFAULT 0,
                 losses INTEGER NOT NULL DEFAULT 0,
@@ -527,7 +527,7 @@ class ResultsDB:
         # Initialize all card elos
         card_elos = {}
         for row in self.conn.execute("SELECT id FROM cards").fetchall():
-            card_elos[row[0]] = 1000.0
+            card_elos[row[0]] = INITIAL_ELO
 
         for match_row in matches:
             match_id, result = match_row
@@ -549,8 +549,8 @@ class ResultsDB:
                 continue
 
             # Average Elo of each deck
-            winner_avg = sum(card_elos.get(c, 1000) for c, _ in winner_cards) / len(winner_cards)
-            loser_avg = sum(card_elos.get(c, 1000) for c, _ in loser_cards) / len(loser_cards)
+            winner_avg = sum(card_elos.get(c, INITIAL_ELO) for c, _ in winner_cards) / len(winner_cards)
+            loser_avg = sum(card_elos.get(c, INITIAL_ELO) for c, _ in loser_cards) / len(loser_cards)
 
             # Elo delta
             ea = 1 / (1 + 10 ** ((loser_avg - winner_avg) / 400))
@@ -558,9 +558,9 @@ class ResultsDB:
 
             # Apply to each card (weighted by quantity)
             for card_id, qty in winner_cards:
-                card_elos[card_id] = card_elos.get(card_id, 1000) + delta * qty / 4
+                card_elos[card_id] = card_elos.get(card_id, INITIAL_ELO) + delta * qty / 4
             for card_id, qty in loser_cards:
-                card_elos[card_id] = card_elos.get(card_id, 1000) - delta * qty / 4
+                card_elos[card_id] = card_elos.get(card_id, INITIAL_ELO) - delta * qty / 4
 
         # Save to card_elo table
         for card_id, elo in card_elos.items():
@@ -585,14 +585,14 @@ class ResultsDB:
         deck_elos = {}
 
         matches = self.conn.execute(
-            "SELECT id, our_deck_id, opp_deck_id, result FROM matches WHERE our_deck_id IS NOT NULL AND opp_deck_id IS NOT NULL"
-        ).fetchall()
+            "SELECT id, our_deck_id, opp_deck_id, result FROM matches WHERE our_deck_id IS NOT NULL AND opp_deck_id IS NOT NULL AND source = ?",
+            (source,)).fetchall()
 
         for match_id, our_deck, opp_deck, result in matches:
             if our_deck not in deck_elos:
-                deck_elos[our_deck] = 1000.0
+                deck_elos[our_deck] = INITIAL_ELO
             if opp_deck not in deck_elos:
-                deck_elos[opp_deck] = 1000.0
+                deck_elos[opp_deck] = INITIAL_ELO
 
             if result == 0:
                 continue
