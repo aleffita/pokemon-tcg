@@ -81,6 +81,38 @@ def run_app():
         return cards
 
     @st.cache_data(ttl=5)
+    def load_dual_elos(n=50):
+        """Load cards with both local and remote Elo side by side."""
+        from rl.results_db import ResultsDB
+        db = ResultsDB()
+        remote = db.get_top_cards(n, "remote")
+        local = db.get_top_cards(n, "local")
+        db.close()
+        # Index by card id
+        remote_map = {c["id"]: c for c in remote}
+        local_map = {c["id"]: c for c in local}
+        # Merge: start from remote, fill local
+        all_ids = sorted(set(list(remote_map.keys()) + list(local_map.keys())),
+                         key=lambda cid: remote_map.get(cid, {}).get("elo", 0), reverse=True)
+        result = []
+        for cid in all_ids:
+            r = remote_map.get(cid, {})
+            l = local_map.get(cid, {})
+            result.append({
+                "id": cid,
+                "name": r.get("name") or l.get("name", "?"),
+                "category": r.get("category") or l.get("category", ""),
+                "energy_type": r.get("energy_type") or l.get("energy_type", ""),
+                "elo_remote": r.get("elo", 0) or 0,
+                "elo_local": l.get("elo", 0) or 0,
+                "games_remote": r.get("games_played", 0) or 0,
+                "games_local": l.get("games_played", 0) or 0,
+                "win_rate_remote": r.get("win_rate", 0) or 0,
+                "win_rate_local": l.get("win_rate", 0) or 0,
+            })
+        return result
+
+    @st.cache_data(ttl=5)
     def load_top_decks(n=20, source="remote"):
         from rl.results_db import ResultsDB
         db = ResultsDB()
@@ -223,29 +255,74 @@ def run_app():
 
     @st.cache_data(ttl=30)
     def load_builder_cards():
-        """Load all cards from SQLite for the deck builder."""
+        """Load all cards from SQLite for the deck builder with dual Elo."""
         from rl.results_db import ResultsDB
         db = ResultsDB()
         rows = db.conn.execute(
             "SELECT id, name, category, stage, hp, energy_type FROM cards ORDER BY name"
         ).fetchall()
-        elo_rows = db.conn.execute(
-            "SELECT card_id, MAX(elo) as elo FROM card_elo GROUP BY card_id"
+        elo_remote_rows = db.conn.execute(
+            "SELECT card_id, elo, games_played, win_rate FROM card_elo WHERE source = 'remote'"
+        ).fetchall()
+        elo_local_rows = db.conn.execute(
+            "SELECT card_id, elo, games_played, win_rate FROM card_elo WHERE source = 'local'"
         ).fetchall()
         db.close()
-        elos = {r[0]: r[1] for r in elo_rows}
+        elo_remote = {r[0]: {"elo": r[1], "games": r[2], "wr": r[3]} for r in elo_remote_rows}
+        elo_local = {r[0]: {"elo": r[1], "games": r[2], "wr": r[3]} for r in elo_local_rows}
         cards = []
         for r in rows:
+            er = elo_remote.get(r[0], {})
+            el = elo_local.get(r[0], {})
             cards.append({
                 "id": r[0], "name": r[1], "category": r[2],
                 "stage": r[3], "hp": r[4], "energy_type": r[5],
-                "elo": elos.get(r[0], 0),
+                "elo_remote": er.get("elo", 0) or 0,
+                "elo_local": el.get("elo", 0) or 0,
+                "elo": max(er.get("elo", 0) or 0, el.get("elo", 0) or 0),
+                "games_remote": er.get("games", 0) or 0,
+                "games_local": el.get("games", 0) or 0,
             })
         return cards
 
     def extract_lb_score(label):
         m = re.search(r"lb(\d+)", label)
         return int(m.group(1)) if m else None
+
+    @st.cache_data(ttl=60)
+    def load_base_deck():
+        """Load the current agent/deck.csv as a dict {card_id: quantity}."""
+        deck_path = ROOT / "agent" / "deck.csv"
+        if not deck_path.exists():
+            return {}
+        deck = {}
+        for line in deck_path.read_text().strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                cid = int(line)
+                deck[cid] = deck.get(cid, 0) + 1
+            except ValueError:
+                continue
+        return deck
+
+    def compute_deck_strength(builder_deck, all_cards):
+        """Compute average local and remote Elo for cards in the deck."""
+        if not builder_deck:
+            return 0.0, 0.0
+        card_map = {c["id"]: c for c in all_cards}
+        total_qty = sum(builder_deck.values())
+        if total_qty == 0:
+            return 0.0, 0.0
+        weighted_local = 0.0
+        weighted_remote = 0.0
+        for cid, qty in builder_deck.items():
+            c = card_map.get(cid)
+            if c:
+                weighted_local += c["elo_local"] * qty
+                weighted_remote += c["elo_remote"] * qty
+        return weighted_local / total_qty, weighted_remote / total_qty
 
     # ── main tabs ────────────────────────────────────────────────
     tab_overview, tab_cards, tab_decks, tab_deck_builder, tab_agents, tab_arena, tab_replays, tab_config = st.tabs(
@@ -326,21 +403,19 @@ def run_app():
     # TAB 2: CARDS
     # ════════════════════════════════════════════════════════════════
     with tab_cards:
-        st.subheader("Cards by Elo")
+        st.subheader("Cards by Elo (Dual Source)")
 
         # Filters
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         with c1:
-            category_filter = st.selectbox("Category", ["All", "Pokemon", "Trainer", "Energy"], index=0)
+            category_filter = st.selectbox("Category", ["All", "Pokemon", "Trainer", "Energy"], index=0, key="cards_cat")
         with c2:
-            energy_types = ["All", "Fire", "Water", "Grass", "Lightning", "Psychic", "Fighting",
+            energy_types_cards = ["All", "Fire", "Water", "Grass", "Lightning", "Psychic", "Fighting",
                            "Darkness", "Metal", "Fairy", "Dragon", "Colorless"]
-            energy_filter = st.selectbox("Energy Type", energy_types, index=0)
-        with c3:
-            source = st.selectbox("Elo Source", ["remote", "local", "replay"], index=0)
+            energy_filter = st.selectbox("Energy Type", energy_types_cards, index=0, key="cards_energy")
 
-        # Load and filter cards
-        all_cards = load_top_cards(200, source)
+        # Load dual Elo data
+        all_cards = load_dual_elos(200)
         if not all_cards:
             st.info("No card Elo data. Run matches first.")
         else:
@@ -354,9 +429,14 @@ def run_app():
                 st.info("No cards match the filters.")
             else:
                 st.dataframe(
-                    df[["name", "category", "energy_type", "elo", "games_played", "win_rate"]].rename(columns={
+                    df[["name", "category", "energy_type",
+                        "elo_remote", "elo_local",
+                        "games_remote", "games_local",
+                        "win_rate_remote", "win_rate_local"]].rename(columns={
                         "name": "Name", "category": "Category", "energy_type": "Type",
-                        "elo": "Elo", "games_played": "Games", "win_rate": "Win Rate"
+                        "elo_remote": "Elo (remote)", "elo_local": "Elo (local)",
+                        "games_remote": "Games (remote)", "games_local": "Games (local)",
+                        "win_rate_remote": "Win Rate (remote)", "win_rate_local": "Win Rate (local)"
                     }),
                     use_container_width=True, hide_index=True
                 )
@@ -365,22 +445,26 @@ def run_app():
 
                 # Card detail
                 card_names = df["name"].tolist()
-                selected_card = st.selectbox("Select a card for details", card_names)
+                selected_card = st.selectbox("Select a card for details", card_names, key="cards_detail_select")
 
                 if selected_card:
                     card_row = df[df["name"] == selected_card].iloc[0]
                     card_id = int(card_row["id"])
 
                     st.subheader(f"Card: {selected_card}")
-                    c1, c2, c3, c4 = st.columns(4)
+                    c1, c2, c3, c4, c5, c6 = st.columns(6)
                     with c1:
-                        st.metric("Elo", f"{card_row['elo']:.1f}")
+                        st.metric("Elo (remote)", f"{card_row['elo_remote']:.1f}")
                     with c2:
-                        st.metric("Games", f"{card_row['games_played']}")
+                        st.metric("Elo (local)", f"{card_row['elo_local']:.1f}")
                     with c3:
-                        wr = card_row['win_rate'] or 0
-                        st.metric("Win Rate", f"{wr:.1%}" if wr else "—")
+                        st.metric("Games (remote)", f"{card_row['games_remote']}")
                     with c4:
+                        st.metric("Games (local)", f"{card_row['games_local']}")
+                    with c5:
+                        wr = card_row['win_rate_remote'] or 0
+                        st.metric("Win Rate (remote)", f"{wr:.1%}" if wr else "—")
+                    with c6:
                         st.metric("Category", card_row['category'] or "—")
 
                     elo_data, decks = load_card_usage(card_id)
@@ -458,6 +542,12 @@ def run_app():
                             }),
                             use_container_width=True, hide_index=True
                         )
+
+                        # Load in Builder button
+                        if st.button("Load in Builder", key=f"load_in_builder_{deck_id}", type="primary"):
+                            st.session_state.builder_deck = {c["id"]: c["qty"] for c in deck_cards}
+                            st.session_state.builder_deck_name = selected_deck
+                            st.success(f"Deck '{selected_deck}' loaded — go to Deck Builder tab")
                     else:
                         st.info("No card composition data for this deck.")
 
@@ -470,6 +560,8 @@ def run_app():
             st.session_state.builder_deck = {}
         if "builder_deck_name" not in st.session_state:
             st.session_state.builder_deck_name = ""
+        if "builder_show_compare" not in st.session_state:
+            st.session_state.builder_show_compare = False
 
         deck = st.session_state.builder_deck
 
@@ -478,6 +570,9 @@ def run_app():
         all_stages = sorted(set(c["stage"] for c in all_builder_cards if c["stage"]))
         energy_types = ["All", "Fire", "Water", "Grass", "Lightning", "Psychic",
                         "Fighting", "Darkness", "Metal", "Fairy", "Dragon", "Colorless"]
+
+        # Compute deck strength
+        avg_local, avg_remote = compute_deck_strength(deck, all_builder_cards)
 
         # ── Left panel: deck management (sidebar) ─────────────────
         with st.sidebar:
@@ -569,6 +664,17 @@ def run_app():
 
             st.divider()
 
+            # Deck Strength Estimation
+            if total_cards > 0:
+                st.subheader("Deck Strength")
+                s1, s2 = st.columns(2)
+                with s1:
+                    st.metric("Avg Elo (local)", f"{avg_local:.0f}")
+                with s2:
+                    st.metric("Avg Elo (remote)", f"{avg_remote:.0f}")
+
+            st.divider()
+
             # Action buttons
             act1, act2, act3 = st.columns(3)
             with act1:
@@ -591,6 +697,69 @@ def run_app():
             with act3:
                 st.toggle("Deck only", key="builder_deck_only",
                           help="Show only cards in deck")
+
+            # Compare with base deck
+            if total_cards > 0:
+                st.divider()
+                if st.button("Compare with base deck", key="builder_compare_btn"):
+                    st.session_state.builder_show_compare = True
+
+                if st.session_state.get("builder_show_compare", False):
+                    base = load_base_deck()
+                    if not base:
+                        st.info("No agent/deck.csv found.")
+                    else:
+                        card_map = {c["id"]: c for c in all_builder_cards}
+                        all_ids = sorted(set(list(deck.keys()) + list(base.keys())),
+                                         key=lambda cid: card_map.get(cid, {}).get("name", ""))
+                        rows = []
+                        for cid in all_ids:
+                            name = card_map.get(cid, {}).get("name", str(cid))
+                            builder_qty = deck.get(cid, 0)
+                            base_qty = base.get(cid, 0)
+                            diff = builder_qty - base_qty
+                            elo_l = card_map.get(cid, {}).get("elo_local", 0)
+                            elo_r = card_map.get(cid, {}).get("elo_remote", 0)
+                            changed = builder_qty != base_qty
+                            rows.append({
+                                "Card": name,
+                                "Builder": builder_qty,
+                                "Base": base_qty,
+                                "Diff": diff,
+                                "Elo (local)": elo_l,
+                                "Elo (remote)": elo_r,
+                                "_changed": changed,
+                            })
+                        compare_df = pd.DataFrame(rows)
+                        st.markdown("**Builder vs Base Deck (agent/deck.csv):**")
+                        # Highlight changed rows
+                        def highlight_diff(row):
+                            if row.get("_changed", False):
+                                return ["background-color: #3d2b1f"] * len(row)
+                            return [""] * len(row)
+                        st.dataframe(
+                            compare_df[["Card", "Builder", "Base", "Diff", "Elo (local)", "Elo (remote)"]],
+                            use_container_width=True, hide_index=True,
+                            row_config={"Diff": st.column_config.NumberColumn(
+                                "Diff", help="Positive = in builder but not base, negative = vice versa")}
+                        )
+                        st.info("Yellow-highlighted rows are cards that differ between builder and base deck.")
+                    if st.button("Close comparison", key="builder_close_compare"):
+                        st.session_state.builder_show_compare = False
+                        st.rerun()
+
+            # Use this deck button
+            if total_cards == 60:
+                st.divider()
+                if st.button("Use this deck in tournament", key="builder_use_deck", type="primary"):
+                    csv_lines = []
+                    for cid, qty in deck.items():
+                        for _ in range(qty):
+                            csv_lines.append(str(cid))
+                    csv_text = "\n".join(csv_lines) + "\n"
+                    deck_path = ROOT / "agent" / "deck.csv"
+                    deck_path.write_text(csv_text)
+                    st.success(f"Deck saved to {deck_path} ({total_cards} cards)")
 
         # ── Right panel: card browser ─────────────────────────────
         st.subheader("Card Browser")
@@ -643,14 +812,14 @@ def run_app():
                         meta_parts = [str(card_id)]
                         if card["category"]:
                             meta_parts.append(card["category"])
-                        if card["stage"]:
-                            meta_parts.append(card["stage"])
                         if card["hp"]:
                             meta_parts.append(f"{card['hp']}HP")
                         if card["energy_type"]:
                             meta_parts.append(card["energy_type"])
-                        if card["elo"] and card["elo"] > 0:
-                            meta_parts.append(f"Elo:{card['elo']:.0f}")
+                        if card["elo_remote"] and card["elo_remote"] > 0:
+                            meta_parts.append(f"R:{card['elo_remote']:.0f}")
+                        if card["elo_local"] and card["elo_local"] > 0:
+                            meta_parts.append(f"L:{card['elo_local']:.0f}")
                         st.caption(" | ".join(meta_parts))
 
                         current_qty = deck.get(card_id, 0)
@@ -765,6 +934,55 @@ def run_app():
                 )
             else:
                 st.info("No self-play matches recorded.")
+
+            # ── Deck Performance Summary ────────────────────────────
+            st.divider()
+            st.subheader("Deck Performance (from matches)")
+
+            try:
+                from rl.results_db import ResultsDB
+                db = ResultsDB()
+                deck_perf_rows = db.conn.execute(
+                    """SELECT d.name as deck_name,
+                              m.opp_agent,
+                              COUNT(*) as games,
+                              SUM(CASE WHEN m.result = 1 THEN 1 ELSE 0 END) as wins,
+                              SUM(CASE WHEN m.result = -1 THEN 1 ELSE 0 END) as losses,
+                              SUM(CASE WHEN m.result = 0 THEN 1 ELSE 0 END) as draws
+                       FROM matches m
+                       LEFT JOIN decks d ON m.our_deck_id = d.id
+                       WHERE m.our_deck_id IS NOT NULL
+                       GROUP BY d.name, m.opp_agent"""
+                ).fetchall()
+                db.close()
+
+                if deck_perf_rows:
+                    deck_df = pd.DataFrame([dict(r) for r in deck_perf_rows])
+                    deck_df["win_rate"] = deck_df["wins"] / deck_df["games"].replace(0, float("nan"))
+
+                    # Best deck by overall win rate
+                    deck_summary = deck_df.groupby("deck_name").agg({
+                        "games": "sum", "wins": "sum", "losses": "sum", "draws": "sum"
+                    }).reset_index()
+                    deck_summary["win_rate"] = deck_summary["wins"] / deck_summary["games"].replace(0, float("nan"))
+                    deck_summary = deck_summary.sort_values("win_rate", ascending=False)
+
+                    best_deck = deck_summary.iloc[0]
+                    st.metric("Best Deck", best_deck["deck_name"],
+                              f"{best_deck['win_rate']:.1%} win rate ({best_deck['games']} games)")
+
+                    st.markdown("**Per-Deck Breakdown:**")
+                    st.dataframe(
+                        deck_df[["deck_name", "opp_agent", "games", "wins", "losses", "draws", "win_rate"]].rename(columns={
+                            "deck_name": "Deck", "opp_agent": "Opponent", "games": "Games",
+                            "wins": "Wins", "losses": "Losses", "draws": "Draws", "win_rate": "Win Rate"
+                        }).sort_values(["Deck", "Win Rate"], ascending=[True, False]),
+                        use_container_width=True, hide_index=True
+                    )
+                else:
+                    st.info("No deck-specific match data yet.")
+            except Exception as e:
+                st.info(f"Deck performance unavailable: {e}")
 
     # ════════════════════════════════════════════════════════════════
     # TAB 7: REPLAYS
