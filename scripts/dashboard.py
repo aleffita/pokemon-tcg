@@ -73,7 +73,7 @@ def run_app():
         return elos
 
     @st.cache_data(ttl=5)
-    def load_top_cards(n=50, source="replay"):
+    def load_top_cards(n=50, source="remote"):
         from rl.results_db import ResultsDB
         db = ResultsDB()
         cards = db.get_top_cards(n, source)
@@ -81,7 +81,7 @@ def run_app():
         return cards
 
     @st.cache_data(ttl=5)
-    def load_top_decks(n=20, source="replay"):
+    def load_top_decks(n=20, source="remote"):
         from rl.results_db import ResultsDB
         db = ResultsDB()
         decks = db.get_top_decks(n, source)
@@ -121,7 +121,7 @@ def run_app():
         from rl.results_db import ResultsDB
         db = ResultsDB()
         elo_row = db.conn.execute(
-            "SELECT elo, games_played, wins, losses, win_rate FROM card_elo WHERE card_id = ? AND source = 'replay'",
+            "SELECT elo, games_played, wins, losses, win_rate FROM card_elo WHERE card_id = ? AND source = 'remote'",
             (card_id,)).fetchone()
         decks = db.conn.execute(
             """SELECT DISTINCT d.name FROM deck_cards dc JOIN decks d ON dc.deck_id = d.id
@@ -229,7 +229,7 @@ def run_app():
             "SELECT id, name, category, stage, hp, energy_type FROM cards ORDER BY name"
         ).fetchall()
         elo_rows = db.conn.execute(
-            "SELECT card_id, elo FROM card_elo WHERE source = 'replay'"
+            "SELECT card_id, elo FROM card_elo WHERE source = 'remote'"
         ).fetchall()
         db.close()
         elos = {r[0]: r[1] for r in elo_rows}
@@ -336,7 +336,7 @@ def run_app():
                            "Darkness", "Metal", "Fairy", "Dragon", "Colorless"]
             energy_filter = st.selectbox("Energy Type", energy_types, index=0)
         with c3:
-            source = st.selectbox("Elo Source", ["replay"], index=0)
+            source = st.selectbox("Elo Source", ["remote"], index=0)
 
         # Load and filter cards
         all_cards = load_top_cards(200, source)
@@ -401,7 +401,7 @@ def run_app():
             sources = ["All"] + sorted(set(d["source"] for d in all_decks if d["source"]))
             source_filter = st.selectbox("Source", sources, index=0)
         with c2:
-            source_elo = st.selectbox("Elo Source", ["replay"], index=0, key="deck_elo_source")
+            source_elo = st.selectbox("Elo Source", ["remote"], index=0, key="deck_elo_source")
 
         # Load decks
         top_decks = load_top_decks(100, source_elo)
