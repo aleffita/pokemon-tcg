@@ -19,6 +19,7 @@ and only the remaining episodes are processed.
 """
 import argparse
 import os
+from pathlib import Path
 import sys
 import json
 import shutil
@@ -45,8 +46,8 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="Build BC dataset from zipped Kaggle replay archives"
     )
-    p.add_argument("out", help="Output directory or .npz file")
-    p.add_argument("zips", nargs="+", help="Zip file(s) containing replay episodes")
+    p.add_argument("out", nargs="?", default=None, help="Output directory (default: data_dir from config + latest date)")
+    p.add_argument("zips", nargs="*", default=None, help="Zip file(s) (default: all in replay_zip_dir)")
     p.add_argument("--config", default=None, help="Path to JSON config file")
     p.add_argument("--workers", type=int, default=None,
                    help="Number of worker processes (default: config or 8)")
@@ -205,8 +206,6 @@ def _merge_shards(shard_dir, out_path, n_shards):
 
 def main():
     args = parse_args()
-    OUT = args.out
-    ZIPS = args.zips
 
     # Load config: CLI > config file > defaults
     cli = {}
@@ -219,6 +218,18 @@ def main():
     if args.ep_timeout is not None:
         cli["bc_ep_timeout"] = args.ep_timeout
     cfg = load_config(cli_overrides=cli, config_path=args.config)
+
+    # Resolve output dir and zips from config defaults
+    from datetime import datetime
+    OUT = args.out or os.path.join(cfg.data_dir, f"bc_{datetime.now().strftime('%Y_%m_%d')}")
+    if args.zips:
+        ZIPS = [Path(z) for z in args.zips]
+    else:
+        zip_dir = Path(cfg.replay_zip_dir)
+        ZIPS = sorted(zip_dir.glob("*.zip"))
+        if not ZIPS:
+            print(f"No zip files found in {zip_dir}")
+            return
 
     WORKERS = cfg.bc_workers
     CAP = cfg.max_episodes
