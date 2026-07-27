@@ -78,6 +78,25 @@ def play(env, a, b) -> tuple[int, str]:
 from collections import Counter
 
 
+def _identify_deck(db, card_ids):
+    """Identify a deck from a 60-card list. Returns deck_id."""
+    card_counter = Counter(card_ids)
+    # Try to match against known decks
+    decks = db.conn.execute("SELECT id FROM decks").fetchall()
+    for (deck_id,) in decks:
+        known = db.conn.execute("SELECT card_id, quantity FROM deck_cards WHERE deck_id = ?", (deck_id,)).fetchall()
+        known_counter = Counter({cid: qty for cid, qty in known})
+        overlap = sum((card_counter & known_counter).values())
+        total = max(sum(card_counter.values()), sum(known_counter.values()))
+        if total > 0 and overlap / total >= 0.9:
+            return deck_id
+    # Create new deck
+    name = f"arena_deck_{hash(frozenset(card_counter.items())) % 100000}"
+    deck_id = db.add_deck(name, "arena", archetype=None)
+    db.add_deck_cards(deck_id, list(card_counter.items()))
+    return deck_id
+
+
 def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json, our_deck_id=None, opp_deck_id=None):
     """Save full replay data from a completed game to SQLite.
 
@@ -112,7 +131,8 @@ def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json,
     if not match_id:
         return match_id
 
-    # Save card usage from deck choices in the replay
+    # Identify decks from replay and save card usage
+    deck_ids = {}
     for step in steps:
         for side, player_data in enumerate(step):
             if isinstance(player_data, dict):
@@ -120,11 +140,24 @@ def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json,
             else:
                 action = getattr(player_data, 'action', [])
             if len(action) == 60:  # deck choice action
+                # Save card usage
                 for card_id, qty in Counter(action).items():
                     db.conn.execute(
                         "INSERT OR IGNORE INTO match_card_usage (match_id, card_id, player_side, quantity) VALUES (?, ?, ?, ?)",
                         (match_id, int(card_id), side, qty))
-                break  # only need the deck choice step
+                # Identify or create deck
+                from rl.results_db import ResultsDB
+                deck_ids[side] = _identify_deck(db, action)
+        if deck_ids:
+            break
+
+    # Update match with deck IDs
+    if deck_ids:
+        our_id = deck_ids.get(our_side)
+        opp_id = deck_ids.get(1 - our_side)
+        db.conn.execute(
+            "UPDATE matches SET our_deck_id = ?, opp_deck_id = ? WHERE id = ?",
+            (our_id, opp_id, match_id))
 
     # Save steps
     for step_num, step in enumerate(steps):
