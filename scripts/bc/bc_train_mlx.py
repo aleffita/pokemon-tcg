@@ -489,6 +489,13 @@ def main() -> None:
     _accum_loss_sum: float = 0.0
     _tbptt_memory = None  # F.3: persistent memory for TBPTT training
 
+    # Rich progress bar
+    try:
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+        _rich_available = True
+    except ImportError:
+        _rich_available = False
+
     for ep in range(start_epoch, a.epochs):
         ep_t0: float = time.time()
         ep_step: int = 0  # optimizer steps in this epoch
@@ -501,6 +508,31 @@ def main() -> None:
         _accum_loss_sum = 0.0
         _tbptt_memory = None  # F.3: reset memory at epoch start
         print(f"[bc-train-mlx] === epoch {ep + 1}/{a.epochs} ===", flush=True)
+
+        # Rich progress bar for this epoch
+        _progress_bar = None
+        _progress_task = None
+        if _rich_available:
+            _progress_bar = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]Epoch {task.fields[epoch]}/{task.fields[total_epochs]}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TextColumn("Loss: {task.fields[loss]}"),
+                TextColumn("LR: {task.fields[lr]}"),
+                TextColumn("ETA: {task.fields[eta]}"),
+                TimeRemainingColumn(),
+            )
+            _progress_bar.start()
+            _progress_task = _progress_bar.add_task(
+                "training",
+                epoch=ep + 1,
+                total_epochs=a.epochs,
+                total=total_opt_steps,
+                loss="--",
+                lr="--",
+                eta="--",
+            )
 
         # Flatten all batches from all slabs into a single generator
         # so we can accumulate across slab boundaries
@@ -642,6 +674,16 @@ def main() -> None:
                 print(f"[bc-train-mlx]   opt_step {ep_step}/{total_opt_steps} "
                       f"micro={ep_micro} loss={avg:.4f} lr={optimizer.learning_rate:.2e} "
                       f"elapsed={el_str} ETA={eta_str_s}", flush=True)
+                # Rich progress bar update
+                if _progress_bar is not None:
+                    _progress_bar.update(
+                        _progress_task,
+                        completed=ep_step,
+                        loss=f"{avg:.4f}",
+                        lr=f"{optimizer.learning_rate:.2e}",
+                        elapsed=el_str,
+                        eta=eta_str_s,
+                    )
 
         # ---- validation ----
         model.eval()
@@ -713,6 +755,9 @@ def main() -> None:
         print(f"[bc-train-mlx] ep{ep} val_acc={acc:.4f} equiv={eq:.4f} top3={t3:.4f} "
               f"atk={atk:.4f} ko={ko:.4f} loss={vloss / max(tot, 1):.4f} "
               f"t={ep_time:.0f}s ETA={eta_str} gstep={gstep}", flush=True)
+        # Stop Rich progress bar for this epoch
+        if _progress_bar is not None:
+            _progress_bar.stop()
 
     # Save final best
     if a.out and os.path.exists(a.out):
