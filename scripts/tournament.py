@@ -66,22 +66,49 @@ def resolve(name: str):
     return load_agent(name)
 
 
+def _parse_deck_lines(lines) -> list[int] | None:
+    """Parse deck.csv lines into a sorted list of 60 card IDs, or None."""
+    card_ids = []
+    for line in lines:
+        line = line.strip().rstrip(",")
+        if line:
+            try:
+                card_ids.append(int(line))
+            except ValueError:
+                continue
+    if len(card_ids) != 60:
+        return None
+    return sorted(card_ids)
+
+
 def _read_deck_csv(path: str) -> list[int] | None:
     """Read a deck.csv file and return a sorted list of 60 card IDs, or None if not found."""
     if not os.path.exists(path):
         return None
-    card_ids = []
     with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    card_ids.append(int(line))
-                except ValueError:
-                    continue
-    if len(card_ids) != 60:
+        return _parse_deck_lines(f)
+
+
+def _read_deck_from_tar(tar_path: str) -> list[int] | None:
+    """Read deck.csv from inside a submission tarball.
+
+    Packaged submissions carry their deck at the archive root, so unlike a
+    plain agent directory there is no sibling file to read.
+    """
+    import tarfile
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            member = next((m for m in tar.getmembers()
+                           if os.path.basename(m.name) == "deck.csv"
+                           and m.name.count("/") <= 1), None)
+            if member is None:
+                return None
+            fh = tar.extractfile(member)
+            if fh is None:
+                return None
+            return _parse_deck_lines(fh.read().decode("utf-8").splitlines())
+    except (tarfile.TarError, OSError, UnicodeDecodeError):
         return None
-    return sorted(card_ids)
 
 
 def _find_or_create_deck(db, card_ids: list[int]) -> int:
@@ -430,9 +457,10 @@ def main():
                    help="Also append results to eval_results.txt (backup)")
     args = p.parse_args()
 
-    # Our agent
+    # Our agent. Keep the module too: the deck sweep rewrites deck.csv between
+    # runs, and the agent caches its deck at import.
     our_path = os.path.join(AGENT_DIR, "main.py")
-    our_agent = load_agent(our_path)
+    our_agent, our_module = load_agent(our_path, return_module=True)
     env = make_env()
 
     # Auto-update: ensure remote card/deck data is populated
@@ -471,15 +499,15 @@ def main():
         if opp_path in ("random", "first"):
             opp_deck_ids[label] = None
             continue
-        opp_dir = os.path.dirname(opp_path) if opp_path.endswith(".tar.gz") else opp_path
-        if os.path.isdir(opp_dir):
-            opp_card_ids = _read_deck_csv(os.path.join(opp_dir, "deck.csv"))
-            if opp_card_ids:
-                opp_deck_ids[label] = _find_or_create_deck(db, opp_card_ids)
-            else:
-                opp_deck_ids[label] = None
+        if opp_path.endswith((".tar.gz", ".tgz")):
+            # Packaged submission: the deck lives inside the archive.
+            opp_card_ids = _read_deck_from_tar(opp_path)
         else:
-            opp_deck_ids[label] = None
+            # "…/agent/main.py" sits next to its deck.csv; a bare directory is
+            # already the right place to look.
+            opp_dir = opp_path if os.path.isdir(opp_path) else os.path.dirname(opp_path)
+            opp_card_ids = _read_deck_csv(os.path.join(opp_dir, "deck.csv"))
+        opp_deck_ids[label] = _find_or_create_deck(db, opp_card_ids) if opp_card_ids else None
 
     total_w = total_l = total_d = 0
     rows = []
@@ -508,21 +536,29 @@ def main():
                     deck_id = _find_or_create_deck(db, default_card_ids)
                 deck_label = f"{label} [deck:{deck_id}]"
 
-                # Swap agent/deck.csv
+                # Swap agent/deck.csv. The agent caches its deck at import, so
+                # the swap only takes effect once it reloads — without this the
+                # whole sweep replays the deck present when the module loaded.
                 deck_csv = os.path.join(AGENT_DIR, "deck.csv")
                 try:
                     with open(deck_csv, "w") as f:
                         f.write("\n".join(str(c) for c in card_ids) + "\n")
+                    played = our_module.reload_deck(deck_csv)
+                    if sorted(played) != sorted(card_ids):
+                        raise RuntimeError(
+                            f"deck reload mismatch for deck {deck_id}: agent holds "
+                            f"{len(played)} cards, expected {len(card_ids)}")
 
                     t0 = time.time()
                     w, l, d, replay_html, game_results = run_matchup(
                         env, our_agent, opp_agent, args.games)
                     elapsed = time.time() - t0
                 finally:
-                    # Always restore original deck
+                    # Always restore original deck, in the file and in the agent
                     if original_deck is not None:
                         with open(deck_csv, "w") as f:
                             f.write(original_deck)
+                        our_module.reload_deck(deck_csv)
 
                 wr = w / max(w + l, 1) * 100
                 total_w += w; total_l += l; total_d += d

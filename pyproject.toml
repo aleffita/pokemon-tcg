@@ -5,11 +5,18 @@ build-backend = "hatchling.build"
 [project]
 name = "tcg-pokemon-agent"
 version = "0.1.0"
-requires-python = ">=3.13"
+# Match the Kaggle submission sandbox (gcr.io/kaggle-images/python), which runs
+# Python 3.12. Keeping dev on the same minor avoids shipping code that only
+# parses on 3.13.
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "kaggle>=2.2.4",
     "kaggle-environments>=1.32.0",
-    "mlx>=0.32.0",
+    # MLX resolves to a platform-specific backend: mlx-metal on macOS, mlx-cpu
+    # on Linux. The Kaggle sandbox has neither, so the submission bundle vendors
+    # its own wheels — see vendor/wheels/ and scripts/build_submission.py.
+    "mlx>=0.32.0 ; sys_platform == 'darwin'",
+    "mlx[cpu]>=0.32.0 ; sys_platform == 'linux'",
     "numpy>=2.5.1",
     "pandas>=3.0.3",
     "pymupdf>=1.28.0",

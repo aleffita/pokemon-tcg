@@ -521,87 +521,122 @@ class ResultsDB:
                  "games_played": r[5], "win_rate": r[6]} for r in rows]
 
     def compute_card_elo(self, source='replay'):
-        """Compute Elo for all cards from match results."""
+        """Recompute card Elo and record counters, from scratch, for one source.
+
+        `matches.result` is from *our* perspective, and `matches.our_side` says
+        which engine seat that was — so the winning seat is only side 0 when we
+        played side 0 and won, or played side 1 and lost. Deriving it from
+        `result` alone silently credits the loser in every mirrored game.
+
+        Every card starts at INITIAL_ELO and each decided match nudges both
+        decks' cards, so a card that has played one game already ranks.
+        """
         K = 32
-        # Get all remote matches with results
         matches = self.conn.execute(
-            "SELECT id, result FROM matches WHERE source = ?"
-        , (source,)).fetchall()
+            "SELECT id, result, our_side FROM matches WHERE source = ?",
+            (source,)).fetchall()
 
         if not matches:
             return {}
 
-        # Initialize all card elos
         card_elos = {}
-        for row in self.conn.execute("SELECT id FROM cards").fetchall():
-            card_elos[row[0]] = INITIAL_ELO
+        stats = {}  # card_id -> [wins, losses, draws]
 
-        for match_row in matches:
-            match_id, result = match_row
-            if result == 0:
-                continue  # skip draws
+        def _seat_cards(match_id, side):
+            return self.conn.execute(
+                "SELECT card_id, quantity FROM match_card_usage "
+                "WHERE match_id = ? AND player_side = ?",
+                (match_id, side)).fetchall()
 
-            # Get cards for each side
-            winner_side = 0 if result == 1 else 1
-            loser_side = 1 - winner_side
-
-            winner_cards = self.conn.execute(
-                "SELECT card_id, quantity FROM match_card_usage WHERE match_id = ? AND player_side = ?",
-                (match_id, winner_side)).fetchall()
-            loser_cards = self.conn.execute(
-                "SELECT card_id, quantity FROM match_card_usage WHERE match_id = ? AND player_side = ?",
-                (match_id, loser_side)).fetchall()
-
-            if not winner_cards or not loser_cards:
+        for match_id, result, our_side in matches:
+            our_side = our_side if our_side in (0, 1) else 0
+            our_cards = _seat_cards(match_id, our_side)
+            opp_cards = _seat_cards(match_id, 1 - our_side)
+            if not our_cards or not opp_cards:
                 continue
 
-            # Average Elo of each deck
-            winner_avg = sum(card_elos.get(c, INITIAL_ELO) for c, _ in winner_cards) / len(winner_cards)
-            loser_avg = sum(card_elos.get(c, INITIAL_ELO) for c, _ in loser_cards) / len(loser_cards)
+            for card_id, _qty in our_cards + opp_cards:
+                card_elos.setdefault(card_id, INITIAL_ELO)
+                stats.setdefault(card_id, [0, 0, 0])
 
-            # Elo delta
+            if result == 0:
+                for card_id, _qty in our_cards + opp_cards:
+                    stats[card_id][2] += 1
+                continue
+
+            if result == 1:
+                winner_cards, loser_cards = our_cards, opp_cards
+            else:
+                winner_cards, loser_cards = opp_cards, our_cards
+
+            for card_id, _qty in winner_cards:
+                stats[card_id][0] += 1
+            for card_id, _qty in loser_cards:
+                stats[card_id][1] += 1
+
+            winner_avg = sum(card_elos[c] for c, _ in winner_cards) / len(winner_cards)
+            loser_avg = sum(card_elos[c] for c, _ in loser_cards) / len(loser_cards)
+
             ea = 1 / (1 + 10 ** ((loser_avg - winner_avg) / 400))
             delta = K * (1 - ea)
 
-            # Apply to each card (weighted by quantity)
+            # Weighted by copies: a 4-of carries more of the result than a 1-of.
             for card_id, qty in winner_cards:
-                card_elos[card_id] = card_elos.get(card_id, INITIAL_ELO) + delta * qty / 4
+                card_elos[card_id] += delta * qty / 4
             for card_id, qty in loser_cards:
-                card_elos[card_id] = card_elos.get(card_id, INITIAL_ELO) - delta * qty / 4
+                card_elos[card_id] -= delta * qty / 4
 
-        # Save to card_elo table
+        # Replace this source's rows wholesale: this is a full recompute, and
+        # leaving stale rows behind would keep cards that no longer have
+        # evidence in the ranking.
+        self.conn.execute("DELETE FROM card_elo WHERE source = ?", (source,))
         for card_id, elo in card_elos.items():
-            wins = self.conn.execute(
-                "SELECT COUNT(DISTINCT m.id) FROM matches m JOIN match_card_usage mcu ON m.id = mcu.match_id WHERE mcu.card_id = ? AND m.source = ? AND ((mcu.player_side = 0 AND m.result = 1) OR (mcu.player_side = 1 AND m.result = -1))",
-                (card_id, source)).fetchone()[0]
-            losses = self.conn.execute(
-                "SELECT COUNT(DISTINCT m.id) FROM matches m JOIN match_card_usage mcu ON m.id = mcu.match_id WHERE mcu.card_id = ? AND m.source = ? AND ((mcu.player_side = 0 AND m.result = -1) OR (mcu.player_side = 1 AND m.result = 1))",
-                (card_id, source)).fetchone()[0]
-            games = wins + losses
-            wr = wins / games if games > 0 else 0.0
-
+            wins, losses, draws = stats[card_id]
+            games = wins + losses + draws
+            wr = wins / games if games else 0.0
             self.conn.execute(
-                "INSERT OR REPLACE INTO card_elo (card_id, elo, games_played, wins, losses, win_rate, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO card_elo (card_id, elo, games_played, wins, losses, "
+                "win_rate, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (card_id, elo, games, wins, losses, wr, source))
         self.conn.commit()
         return card_elos
 
     def compute_deck_elo(self, source='replay'):
-        """Compute Elo for all decks from matches."""
+        """Recompute deck Elo and record counters, from scratch, for one source.
+
+        Deck Elo is outcome evidence for a composition — it is not an average of
+        its cards' ratings. A deck ranks from its first game; everything starts
+        at INITIAL_ELO.
+        """
         K = 32
         deck_elos = {}
+        stats = {}  # deck_id -> [wins, losses, draws]
 
         matches = self.conn.execute(
-            "SELECT id, our_deck_id, opp_deck_id, result FROM matches WHERE our_deck_id IS NOT NULL AND opp_deck_id IS NOT NULL AND source = ?",
+            "SELECT id, our_deck_id, opp_deck_id, result FROM matches "
+            "WHERE our_deck_id IS NOT NULL AND opp_deck_id IS NOT NULL AND source = ?",
             (source,)).fetchall()
 
-        for match_id, our_deck, opp_deck, result in matches:
-            if our_deck not in deck_elos:
-                deck_elos[our_deck] = INITIAL_ELO
-            if opp_deck not in deck_elos:
-                deck_elos[opp_deck] = INITIAL_ELO
+        for _match_id, our_deck, opp_deck, result in matches:
+            for deck_id in (our_deck, opp_deck):
+                deck_elos.setdefault(deck_id, INITIAL_ELO)
+                stats.setdefault(deck_id, [0, 0, 0])
 
             if result == 0:
+                stats[our_deck][2] += 1
+                stats[opp_deck][2] += 1
+                continue
+
+            if result == 1:
+                stats[our_deck][0] += 1
+                stats[opp_deck][1] += 1
+            else:
+                stats[our_deck][1] += 1
+                stats[opp_deck][0] += 1
+
+            # A deck mirror (both seats on the same composition) would have the
+            # rating cancel out anyway, but the counters above still record it.
+            if our_deck == opp_deck:
                 continue
 
             ra = deck_elos[our_deck]
@@ -612,10 +647,17 @@ class ResultsDB:
             deck_elos[our_deck] += delta
             deck_elos[opp_deck] -= delta
 
+        # Full recompute: drop this source's previous rows rather than leaving
+        # ratings for decks that no longer have evidence.
+        self.conn.execute("DELETE FROM deck_elo WHERE source = ?", (source,))
         for deck_id, elo in deck_elos.items():
+            wins, losses, draws = stats[deck_id]
+            games = wins + losses + draws
+            wr = wins / games if games else 0.0
             self.conn.execute(
-                "INSERT OR REPLACE INTO deck_elo (deck_id, elo, games_played, wins, losses, win_rate, source) VALUES (?, ?, 0, 0, 0, 0, ?)",
-                (deck_id, elo, source))
+                "INSERT INTO deck_elo (deck_id, elo, games_played, wins, losses, "
+                "win_rate, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (deck_id, elo, games, wins, losses, wr, source))
         self.conn.commit()
         return deck_elos
 

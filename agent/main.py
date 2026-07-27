@@ -12,10 +12,6 @@ import os
 import sys
 from typing import Any
 
-import numpy as np
-import mlx.core as mx
-import mlx.nn as nn
-
 
 # ---- path setup (Kaggle-safe: __file__ is not defined when exec'd) ----
 def _find_dir(filename: str = "deck.csv") -> str:
@@ -38,6 +34,17 @@ else:
     _PROJECT_ROOT = os.path.dirname(_AGENT_DIR)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+
+# The Kaggle sandbox image ships no MLX, so the submission bundle carries its
+# own unpacked wheels. Append (not insert): a locally installed MLX wins, which
+# keeps development on the Metal backend. Must run before `import mlx`.
+_VENDOR_DIR = os.path.join(_AGENT_DIR, "_vendor")
+if os.path.isdir(_VENDOR_DIR) and _VENDOR_DIR not in sys.path:
+    sys.path.append(_VENDOR_DIR)
+
+import numpy as np
+import mlx.core as mx
+import mlx.nn as nn
 
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import TokenEncoder, GameTracker, AbilityTracker, SUBMIT_ACTION
@@ -133,6 +140,18 @@ def load_deck(path: str = _DECK_PATH) -> list[int]:
 
 DECK: list[int] = load_deck()
 
+
+def reload_deck(path: str = _DECK_PATH) -> list[int]:
+    """Re-read deck.csv into DECK and return it.
+
+    On Kaggle the deck never changes, so DECK is read once at import. Local
+    tooling that swaps deck.csv between runs (the tournament deck sweep) must
+    call this, or every swept deck plays the composition present at import.
+    """
+    global DECK
+    DECK = load_deck(path)
+    return DECK
+
 # ---- per-side state (reset when deck is submitted) ----
 _TRACKERS: dict[int, dict] = {}  # side -> {"tracker": GameTracker, "ability": AbilityTracker, "deck": list}
 
@@ -144,8 +163,16 @@ def _get_tracker(side: int):
             "ability": AbilityTracker(),
             "deck": None,
             "memory": None,  # F.1: persistent scratch register state
+            "stale": True,   # needs a reset before its first decision
         }
-    return _TRACKERS[side]
+    st = _TRACKERS[side]
+    if st["stale"]:
+        st["tracker"].reset()
+        st["ability"].reset()
+        st["deck"] = list(DECK)
+        st["memory"] = None  # F.1: clean memory at match start
+        st["stale"] = False
+    return st
 
 
 def _build_mlx_tensors(encoded: dict, int_keys: set) -> dict[str, mx.array]:
@@ -299,15 +326,14 @@ def agent(obs: dict[str, Any]) -> list[int]:
     select = obs.get("select")
     current = obs.get("current")
 
-    # Deck submission (new match)
+    # Deck submission (new match). The observation carries no side here, so
+    # only mark state stale: _get_tracker resets each side lazily, on its first
+    # decision. Eagerly clearing both sides is wrong whenever one process
+    # serves both players (local self-play), because the second player's deck
+    # submission would wipe the first player's live memory mid-match.
     if select is None:
-        # Reset trackers for both sides (F.1: also reset memory)
-        for side in (0, 1):
-            st = _get_tracker(side)
-            st["tracker"].reset()
-            st["ability"].reset()
-            st["deck"] = list(DECK)
-            st["memory"] = None  # F.1: clean memory at match start
+        for st in _TRACKERS.values():
+            st["stale"] = True
         return list(DECK)
 
     # E.2: Pass complete logs from observation to choose()

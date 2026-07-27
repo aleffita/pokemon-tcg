@@ -307,6 +307,58 @@ def run_app():
                 continue
         return deck
 
+    @st.cache_data(ttl=60)
+    def load_agent_deck():
+        """Load agent/deck.csv as a sorted card-id list, for identity comparison."""
+        deck_path = ROOT / "agent" / "deck.csv"
+        if not deck_path.exists():
+            return []
+        cards = []
+        for line in deck_path.read_text().splitlines():
+            line = line.strip().rstrip(",")
+            if line:
+                try:
+                    cards.append(int(line))
+                except ValueError:
+                    continue
+        return sorted(cards)
+
+    @st.cache_data(ttl=60)
+    def load_arena_deck_ranking():
+        """Rank decks by local arena Elo, with their compositions.
+
+        Local evidence only: remote games say nothing about how a deck performs
+        against the agents we actually run here. Every deck that has played at
+        least one local game ranks — they all start at 600, so a short record
+        simply sits near its starting point instead of being hidden.
+        """
+        from rl.results_db import ResultsDB
+        with ResultsDB() as db:
+            rows = db.conn.execute(
+                "SELECT de.deck_id, d.name, de.elo, de.games_played, de.wins, "
+                "       de.losses, de.win_rate "
+                "FROM deck_elo de JOIN decks d ON de.deck_id = d.id "
+                "WHERE de.source = 'local' AND de.games_played > 0 "
+                "ORDER BY de.elo DESC"
+            ).fetchall()
+            ranking = []
+            for r in rows:
+                cards = []
+                for cid, qty in db.conn.execute(
+                    "SELECT card_id, quantity FROM deck_cards WHERE deck_id = ?",
+                    (r["deck_id"],)
+                ):
+                    cards.extend([cid] * qty)
+                if len(cards) != 60:
+                    continue  # incomplete composition: cannot be shipped
+                ranking.append({
+                    "id": r["deck_id"], "name": r["name"], "elo": r["elo"],
+                    "games_played": r["games_played"], "wins": r["wins"],
+                    "losses": r["losses"], "win_rate": r["win_rate"] * 100,
+                    "cards": sorted(cards),
+                })
+            return ranking
+
     def compute_deck_strength(builder_deck, all_cards):
         """Compute average local and remote Elo for cards in the deck."""
         if not builder_deck:
@@ -751,6 +803,8 @@ def run_app():
             # Use this deck button
             if total_cards == 60:
                 st.divider()
+                st.caption("Overwrites agent/deck.csv — the deck the submission ships. "
+                           "The previous one is kept as deck.csv.bak.")
                 if st.button("Use this deck in tournament", key="builder_use_deck", type="primary"):
                     csv_lines = []
                     for cid, qty in deck.items():
@@ -758,6 +812,12 @@ def run_app():
                             csv_lines.append(str(cid))
                     csv_text = "\n".join(csv_lines) + "\n"
                     deck_path = ROOT / "agent" / "deck.csv"
+                    # Back up first: this button silently replaced a tournament-
+                    # validated deck once, with no way to tell afterwards.
+                    if deck_path.exists():
+                        backup = deck_path.with_suffix(".csv.bak")
+                        backup.write_text(deck_path.read_text())
+                        st.info(f"Previous deck backed up to {backup.name}")
                     deck_path.write_text(csv_text)
                     st.success(f"Deck saved to {deck_path} ({total_cards} cards)")
 
@@ -888,6 +948,58 @@ def run_app():
     # TAB 6: ARENA
     # ════════════════════════════════════════════════════════════════
     with tab_arena:
+        st.subheader("Arena Deck")
+
+        current_deck = load_agent_deck()
+        arena_decks = load_arena_deck_ranking()
+
+        if not arena_decks:
+            st.info("No local arena evidence yet. Run a tournament to rank decks.")
+        else:
+            current_id = None
+            for d in arena_decks:
+                if d["cards"] == current_deck:
+                    current_id = d["id"]
+                    break
+
+            rank_df = pd.DataFrame([{
+                "": "▶" if d["id"] == current_id else "",
+                "Deck": d["name"],
+                "Elo": round(d["elo"], 1),
+                "Games": d["games_played"],
+                "W": d["wins"],
+                "L": d["losses"],
+                "Win Rate": d["win_rate"],
+            } for d in arena_decks])
+            st.dataframe(rank_df, use_container_width=True, hide_index=True,
+                         column_config={"Win Rate": st.column_config.NumberColumn(format="%.1f%%")})
+            st.caption("Local arena evidence only. ▶ marks the deck in agent/deck.csv — "
+                       "the one the submission ships.")
+
+            best = arena_decks[0]
+            if current_id == best["id"]:
+                st.success(f"agent/deck.csv already holds the top deck: **{best['name']}** "
+                           f"(Elo {best['elo']:.0f}, {best['wins']}W-{best['losses']}L)")
+            else:
+                current_name = next((d["name"] for d in arena_decks if d["id"] == current_id),
+                                    "not ranked yet")
+                st.warning(
+                    f"Top arena deck is **{best['name']}** "
+                    f"(Elo {best['elo']:.0f}, {best['wins']}W-{best['losses']}L), "
+                    f"but agent/deck.csv holds **{current_name}**."
+                )
+                if st.button(f"Use best arena deck ({best['name']})",
+                             key="arena_use_best", type="primary"):
+                    deck_path = ROOT / "agent" / "deck.csv"
+                    if deck_path.exists():
+                        backup = deck_path.with_suffix(".csv.bak")
+                        backup.write_text(deck_path.read_text())
+                    deck_path.write_text("\n".join(str(c) for c in best["cards"]) + "\n")
+                    st.success(f"agent/deck.csv now holds {best['name']} "
+                               f"({len(best['cards'])} cards). Previous deck saved as deck.csv.bak.")
+                    st.rerun()
+
+        st.divider()
         st.subheader("Arena Matchup Matrix")
 
         matchup_data = load_matchup_matrix()

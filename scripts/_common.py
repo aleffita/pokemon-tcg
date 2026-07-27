@@ -43,13 +43,16 @@ def _extract_submission(tar_path: str) -> str:
     return tmp
 
 
-def load_agent(path: str):
+def load_agent(path: str, return_module: bool = False):
     """Import an agent from a .py file or a submission.tar.gz.
 
     Supports:
       - Direct .py path: agent/main.py
       - Submission tar.gz: submissions/lb881_alakazam_v1/submission.tar.gz
       - Directory with main.py: submissions/lb881_alakazam_v1/
+
+    Returns the agent callable, or (callable, module) when `return_module` is
+    set — callers that swap deck.csv between runs need the module to reload it.
     """
     path = os.path.abspath(path)
 
@@ -80,7 +83,7 @@ def load_agent(path: str):
         spec.loader.exec_module(module)
     finally:
         os.chdir(old_cwd)
-    return module.agent
+    return (module.agent, module) if return_module else module.agent
 
 
 def make_env():
