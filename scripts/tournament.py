@@ -66,6 +66,98 @@ def resolve(name: str):
     return load_agent(name)
 
 
+def _read_deck_csv(path: str) -> list[int] | None:
+    """Read a deck.csv file and return a sorted list of 60 card IDs, or None if not found."""
+    if not os.path.exists(path):
+        return None
+    card_ids = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    card_ids.append(int(line))
+                except ValueError:
+                    continue
+    if len(card_ids) != 60:
+        return None
+    return sorted(card_ids)
+
+
+def _find_or_create_deck(db, card_ids: list[int]) -> int:
+    """Find an existing deck by card composition or create a new one. Returns deck_id.
+
+    Uses quantity-aware matching: overlap = sum(min(c1, c2)) for each card,
+    total = sum(max(c1, c2)) across all cards in both decks.
+    """
+    from collections import Counter
+    card_counter = Counter(card_ids)
+    decks = db.conn.execute("SELECT id FROM decks").fetchall()
+    for (deck_id,) in decks:
+        known = db.conn.execute(
+            "SELECT card_id, quantity FROM deck_cards WHERE deck_id = ?", (deck_id,)
+        ).fetchall()
+        known_counter = Counter({cid: qty for cid, qty in known})
+        # Quantity-aware overlap: sum of min quantities per card
+        overlap = sum(min(card_counter.get(c, 0), known_counter.get(c, 0))
+                      for c in set(card_counter) | set(known_counter))
+        total = sum(max(card_counter.get(c, 0), known_counter.get(c, 0))
+                    for c in set(card_counter) | set(known_counter))
+        if total > 0 and overlap / total >= 0.9:
+            return deck_id
+    name = f"arena_deck_{hash(frozenset(card_counter.items())) % 100000}"
+    deck_id = db.add_deck(name, "arena", archetype=None)
+    db.add_deck_cards(deck_id, list(card_counter.items()))
+    return deck_id
+
+
+def _get_test_decks(db) -> list[tuple[list[int], int | None]]:
+    """Get test decks for sweep: [default_deck] + top 3 from local deck Elo.
+
+    Returns list of (card_ids, deck_id) tuples. deck_id may be None for the
+    default deck if it hasn't been added to the DB yet.
+    Deduplicates using Counter-based matching (same as _find_or_create_deck).
+    """
+    from collections import Counter
+
+    decks = []
+    default_card_ids = _read_deck_csv(os.path.join(AGENT_DIR, "deck.csv"))
+    if default_card_ids:
+        decks.append((default_card_ids, None))  # deck_id resolved later
+
+    # Build Counter for default deck for dedup
+    seen_counters = []
+    if default_card_ids:
+        seen_counters.append(Counter(default_card_ids))
+
+    top = db.get_top_decks(n=3, source='local')
+    for d in top:
+        deck_id = d["id"]
+        known = db.conn.execute(
+            "SELECT card_id, quantity FROM deck_cards WHERE deck_id = ?",
+            (deck_id,)
+        ).fetchall()
+        card_ids = []
+        for cid, qty in known:
+            card_ids.extend([cid] * qty)
+        counter = Counter(card_ids)
+
+        # Skip if composition matches an already-queued deck
+        is_dup = False
+        for seen_c in seen_counters:
+            all_cards = set(counter) | set(seen_c)
+            overlap = sum(min(counter.get(c, 0), seen_c.get(c, 0)) for c in all_cards)
+            total = sum(max(counter.get(c, 0), seen_c.get(c, 0)) for c in all_cards)
+            if total > 0 and overlap / total >= 0.9:
+                is_dup = True
+                break
+        if not is_dup:
+            seen_counters.append(counter)
+            decks.append((card_ids, deck_id))
+
+    return decks
+
+
 def play(env, a, b) -> tuple[int, str]:
     """Run one game; return (result, html_replay). result: +1=P0 wins, -1=loses, 0=draw."""
     env.reset()
@@ -79,15 +171,19 @@ from collections import Counter
 
 
 def _identify_deck(db, card_ids):
-    """Identify a deck from a 60-card list. Returns deck_id."""
+    """Identify a deck from a 60-card list. Returns deck_id.
+
+    Uses quantity-aware matching: overlap = sum(min(c1, c2)) for each card,
+    total = sum(max(c1, c2)) across all cards in both decks.
+    """
     card_counter = Counter(card_ids)
-    # Try to match against known decks
     decks = db.conn.execute("SELECT id FROM decks").fetchall()
     for (deck_id,) in decks:
         known = db.conn.execute("SELECT card_id, quantity FROM deck_cards WHERE deck_id = ?", (deck_id,)).fetchall()
         known_counter = Counter({cid: qty for cid, qty in known})
-        overlap = sum((card_counter & known_counter).values())
-        total = max(sum(card_counter.values()), sum(known_counter.values()))
+        all_cards = set(card_counter) | set(known_counter)
+        overlap = sum(min(card_counter.get(c, 0), known_counter.get(c, 0)) for c in all_cards)
+        total = sum(max(card_counter.get(c, 0), known_counter.get(c, 0)) for c in all_cards)
         if total > 0 and overlap / total >= 0.9:
             return deck_id
     # Create new deck
@@ -131,33 +227,52 @@ def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json,
     if not match_id:
         return match_id
 
-    # Identify decks from replay and save card usage
-    deck_ids = {}
-    for step in steps:
-        for side, player_data in enumerate(step):
-            if isinstance(player_data, dict):
-                action = player_data.get('action', [])
-            else:
-                action = getattr(player_data, 'action', [])
-            if len(action) == 60:  # deck choice action
-                # Save card usage
-                for card_id, qty in Counter(action).items():
-                    db.conn.execute(
-                        "INSERT OR IGNORE INTO match_card_usage (match_id, card_id, player_side, quantity) VALUES (?, ?, ?, ?)",
-                        (match_id, int(card_id), side, qty))
-                # Identify or create deck
-                from rl.results_db import ResultsDB
-                deck_ids[side] = _identify_deck(db, action)
-        if deck_ids:
-            break
-
-    # Update match with deck IDs
-    if deck_ids:
-        our_id = deck_ids.get(our_side)
-        opp_id = deck_ids.get(1 - our_side)
+    if our_deck_id is not None:
+        # Pre-computed deck ID(s) — use them and save card usage from replay
+        for step in steps:
+            for side, player_data in enumerate(step):
+                if isinstance(player_data, dict):
+                    action = player_data.get('action', [])
+                else:
+                    action = getattr(player_data, 'action', [])
+                if len(action) == 60:
+                    for card_id, qty in Counter(action).items():
+                        db.conn.execute(
+                            "INSERT OR IGNORE INTO match_card_usage (match_id, card_id, player_side, quantity) VALUES (?, ?, ?, ?)",
+                            (match_id, int(card_id), side, qty))
+            # Only need the first step with a deck action
+            if any(
+                len(s[0].get('action', []) if isinstance(s[0], dict) else getattr(s[0], 'action', []) or []) == 60
+                for s in steps[:1]
+            ):
+                break
         db.conn.execute(
             "UPDATE matches SET our_deck_id = ?, opp_deck_id = ? WHERE id = ?",
-            (our_id, opp_id, match_id))
+            (our_deck_id, opp_deck_id, match_id))
+    else:
+        # No pre-computed IDs — identify decks from replay content
+        deck_ids = {}
+        for step in steps:
+            for side, player_data in enumerate(step):
+                if isinstance(player_data, dict):
+                    action = player_data.get('action', [])
+                else:
+                    action = getattr(player_data, 'action', [])
+                if len(action) == 60:
+                    for card_id, qty in Counter(action).items():
+                        db.conn.execute(
+                            "INSERT OR IGNORE INTO match_card_usage (match_id, card_id, player_side, quantity) VALUES (?, ?, ?, ?)",
+                            (match_id, int(card_id), side, qty))
+                    from rl.results_db import ResultsDB
+                    deck_ids[side] = _identify_deck(db, action)
+            if deck_ids:
+                break
+        if deck_ids:
+            our_id = deck_ids.get(our_side)
+            opp_id = deck_ids.get(1 - our_side)
+            db.conn.execute(
+                "UPDATE matches SET our_deck_id = ?, opp_deck_id = ? WHERE id = ?",
+                (our_id, opp_id, match_id))
 
     # Save steps
     for step_num, step in enumerate(steps):
@@ -309,6 +424,8 @@ def main():
                    help="Single opponent path (skip tournament)")
     p.add_argument("--note", type=str, default=None,
                    help="Annotation for this run (saved in SQLite)")
+    p.add_argument("--no-sweep", action="store_true", default=False,
+                   help="Disable deck sweep (only use default deck)")
     p.add_argument("--txt-backup", action="store_true", default=False,
                    help="Also append results to eval_results.txt (backup)")
     args = p.parse_args()
@@ -328,7 +445,7 @@ def main():
         import subprocess as _sp
         today = datetime.now().strftime("%Y-%m-%d")
         _sp.run([sys.executable, "-m", "scripts.build_card_stats", "--date", today],
-                cwd=str(Path(__file__).resolve().parent.parent), check=False)
+                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), check=False)
         print("[auto-update] Remote data updated.\n")
 
     # Baselines + public agents
@@ -339,13 +456,43 @@ def main():
     else:
         opponents.extend(find_agents())
 
+    # Prepare test decks for sweep
+    from rl.results_db import ResultsDB
+    db = ResultsDB()
+    test_decks = _get_test_decks(db)
+    default_card_ids = _read_deck_csv(os.path.join(AGENT_DIR, "deck.csv"))
+
+    # Read original deck to restore after sweep
+    original_deck = open(os.path.join(AGENT_DIR, "deck.csv")).read() if os.path.exists(os.path.join(AGENT_DIR, "deck.csv")) else None
+
+    # Read opponent deck IDs (deck.csv from their agent dir, if available)
+    opp_deck_ids = {}
+    for label, opp_path in opponents:
+        if opp_path in ("random", "first"):
+            opp_deck_ids[label] = None
+            continue
+        opp_dir = os.path.dirname(opp_path) if opp_path.endswith(".tar.gz") else opp_path
+        if os.path.isdir(opp_dir):
+            opp_card_ids = _read_deck_csv(os.path.join(opp_dir, "deck.csv"))
+            if opp_card_ids:
+                opp_deck_ids[label] = _find_or_create_deck(db, opp_card_ids)
+            else:
+                opp_deck_ids[label] = None
+        else:
+            opp_deck_ids[label] = None
+
     total_w = total_l = total_d = 0
     rows = []
-    all_game_results = []  # (label, game_results) pairs for replay saving
+    all_game_results = []  # (label, deck_id, game_results) tuples
     start_time = time.time()
 
     if args.note:
         print(f"Note: {args.note}", flush=True)
+
+    do_sweep = (not args.no_sweep) and len(test_decks) > 1
+    if do_sweep:
+        print(f"Sweep: {len(test_decks)} decks per opponent "
+              f"(default + {len(test_decks) - 1} from deck_elo)\n", flush=True)
 
     for label, opp_path in opponents:
         try:
@@ -354,14 +501,54 @@ def main():
             rows.append((label, "ERROR", str(e)))
             continue
 
-        t0 = time.time()
-        w, l, d, replay_html, game_results = run_matchup(env, our_agent, opp_agent, args.games)
-        elapsed = time.time() - t0
-        wr = w / max(w + l, 1) * 100
-        total_w += w; total_l += l; total_d += d
-        rows.append((label, w, l, d, wr, elapsed, replay_html))
-        all_game_results.append((label, game_results))
-        print(f"  {label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s)", flush=True)
+        if do_sweep:
+            # Run each test deck against this opponent
+            for card_ids, deck_id in test_decks:
+                if deck_id is None and default_card_ids is not None:
+                    deck_id = _find_or_create_deck(db, default_card_ids)
+                deck_label = f"{label} [deck:{deck_id}]"
+
+                # Swap agent/deck.csv
+                deck_csv = os.path.join(AGENT_DIR, "deck.csv")
+                try:
+                    with open(deck_csv, "w") as f:
+                        f.write("\n".join(str(c) for c in card_ids) + "\n")
+
+                    t0 = time.time()
+                    w, l, d, replay_html, game_results = run_matchup(
+                        env, our_agent, opp_agent, args.games)
+                    elapsed = time.time() - t0
+                finally:
+                    # Always restore original deck
+                    if original_deck is not None:
+                        with open(deck_csv, "w") as f:
+                            f.write(original_deck)
+
+                wr = w / max(w + l, 1) * 100
+                total_w += w; total_l += l; total_d += d
+                rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
+                all_game_results.append((label, deck_id, game_results))
+                print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s)",
+                      flush=True)
+        else:
+            # No sweep: run with default deck only
+            t0 = time.time()
+            w, l, d, replay_html, game_results = run_matchup(
+                env, our_agent, opp_agent, args.games)
+            elapsed = time.time() - t0
+            wr = w / max(w + l, 1) * 100
+            total_w += w; total_l += l; total_d += d
+
+            if default_card_ids:
+                deck_id = _find_or_create_deck(db, default_card_ids)
+            else:
+                deck_id = None
+
+            deck_label = f"{label} [deck:{deck_id}]" if deck_id else label
+            rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
+            all_game_results.append((label, deck_id, game_results))
+            print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s)",
+                  flush=True)
 
     total_time = time.time() - start_time
     overall_wr = total_w / max(total_w + total_l, 1) * 100
@@ -379,6 +566,37 @@ def main():
     print("-" * len(header))
     print(f"{'OVERALL':40s} {total_w:>4d} {total_l:>4d} {total_d:>4d} {overall_wr:>7.1f}% {total_time:>5.0f}s")
 
+    # Deck performance summary (when sweep is active)
+    if do_sweep and all_game_results:
+        deck_stats = {}  # deck_id -> {w, l, d, n_opponents}
+        for _label, deck_id, game_results in all_game_results:
+            if deck_id not in deck_stats:
+                deck_stats[deck_id] = {"w": 0, "l": 0, "d": 0, "n_opponents": 0,
+                                       "opponents": set()}
+            ds = deck_stats[deck_id]
+            for gr in game_results:
+                r = gr["result"]
+                ds["w"] += r == 1
+                ds["l"] += r == -1
+                ds["d"] += r == 0
+            if _label not in ds["opponents"]:
+                ds["opponents"].add(_label)
+                ds["n_opponents"] = len(ds["opponents"])
+
+        print()
+        print(f"{'DECK PERFORMANCE SUMMARY':^70s}")
+        print("-" * 70)
+        print(f"{'Deck ID':>8s} {'W':>4s} {'L':>4s} {'D':>4s} {'WinRate':>8s} {'Opps':>5s}")
+        print("-" * 70)
+        for deck_id, ds in sorted(deck_stats.items(),
+                                   key=lambda x: x[1]["w"] / max(x[1]["w"] + x[1]["l"], 1),
+                                   reverse=True):
+            total_games = ds["w"] + ds["l"] + ds["d"]
+            wr = ds["w"] / max(ds["w"] + ds["l"], 1) * 100
+            print(f"  {deck_id:>6d} {ds['w']:>4d} {ds['l']:>4d} {ds['d']:>4d} "
+                  f"{wr:>7.1f}% {ds['n_opponents']:>5d}")
+        print("-" * 70)
+
     # Build structured rows for SQLite (exclude error rows which have len==3)
     rows_with_stats = []
     for r in rows:
@@ -387,8 +605,6 @@ def main():
             rows_with_stats.append((label, int(w), int(l), int(d), float(wr), t))
 
     # Save to SQLite (primary storage)
-    from rl.results_db import ResultsDB
-    db = ResultsDB()
     tournament_id = db.add_tournament(
         timestamp=datetime.now().strftime('%Y-%m-%d %H:%M'),
         agent=our_path,
@@ -406,12 +622,13 @@ def main():
         (tournament_id,)).fetchall()
     matchup_iter = iter(all_matchup_rows)
     n_matches_saved = 0
-    for label, game_results in all_game_results:
+    for label, deck_id, game_results in all_game_results:
         # Get next matchup in insertion order
         matchup_row = next(matchup_iter, None)
         if not matchup_row:
             continue
         matchup_id = matchup_row["id"]
+        opp_did = opp_deck_ids.get(label)
 
         for gr in game_results:
             save_match_replay(
@@ -421,6 +638,8 @@ def main():
                 our_side=gr["our_side"],
                 result=gr["result"],
                 replay_json=gr["replay_json"],
+                our_deck_id=deck_id,
+                opp_deck_id=opp_did,
             )
             n_matches_saved += 1
 

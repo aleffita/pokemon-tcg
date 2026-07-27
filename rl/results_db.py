@@ -347,8 +347,12 @@ class ResultsDB:
                   our_agent: str, our_deck_id: int | None,
                   opp_agent: str, opp_deck_id: int | None,
                   our_side: int, result: int, n_steps: int = 0) -> int:
-        """Add a single match. Returns match id."""
-        cur = self.conn.execute(
+        """Add a single match. Returns match id.
+
+        Always fetches the match id by querying after insert to avoid
+        lastrowid issues with INSERT OR IGNORE on duplicates.
+        """
+        self.conn.execute(
             """INSERT OR IGNORE INTO matches
                (matchup_id, game_index, source, our_agent, our_deck_id,
                 opp_agent, opp_deck_id, our_side, result, n_steps)
@@ -356,7 +360,10 @@ class ResultsDB:
             (matchup_id, game_index, source, our_agent, our_deck_id,
              opp_agent, opp_deck_id, our_side, result, n_steps))
         self.conn.commit()
-        return cur.lastrowid
+        row = self.conn.execute(
+            "SELECT id FROM matches WHERE matchup_id = ? AND game_index = ?",
+            (matchup_id, game_index)).fetchone()
+        return row["id"] if row else None
 
     def add_match_steps(self, match_id: int, steps_data: list[dict]):
         """Add steps for a match. steps_data is a list of dicts with keys:
