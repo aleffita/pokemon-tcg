@@ -318,6 +318,19 @@ def main():
     our_agent = load_agent(our_path)
     env = make_env()
 
+    # Auto-update: ensure remote card/deck data is populated
+    from rl.results_db import ResultsDB as _DB
+    _db = _DB()
+    _remote_count = _db.conn.execute("SELECT COUNT(*) FROM card_elo WHERE source='remote'").fetchone()[0]
+    _db.close()
+    if _remote_count == 0:
+        print("\n[auto-update] No remote card Elo data. Processing Kaggle replays...")
+        import subprocess as _sp
+        today = datetime.now().strftime("%Y-%m-%d")
+        _sp.run([sys.executable, "-m", "scripts.build_card_stats", "--date", today],
+                cwd=str(Path(__file__).resolve().parent.parent), check=False)
+        print("[auto-update] Remote data updated.\n")
+
     # Baselines + public agents
     opponents = [("random", "random"), ("first", "first")]
     if args.opponent:
