@@ -75,6 +75,9 @@ def play(env, a, b) -> tuple[int, str]:
     return (1 if r0 > r1 else (-1 if r0 < r1 else 0)), html
 
 
+from collections import Counter
+
+
 def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json, our_deck_id=None, opp_deck_id=None):
     """Save full replay data from a completed game to SQLite.
 
@@ -108,6 +111,20 @@ def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json,
 
     if not match_id:
         return match_id
+
+    # Save card usage from deck choices in the replay
+    for step in steps:
+        for side, player_data in enumerate(step):
+            if isinstance(player_data, dict):
+                action = player_data.get('action', [])
+            else:
+                action = getattr(player_data, 'action', [])
+            if len(action) == 60:  # deck choice action
+                for card_id, qty in Counter(action).items():
+                    db.conn.execute(
+                        "INSERT OR IGNORE INTO match_card_usage (match_id, card_id, player_side, quantity) VALUES (?, ?, ?, ?)",
+                        (match_id, int(card_id), side, qty))
+                break  # only need the deck choice step
 
     # Save steps
     for step_num, step in enumerate(steps):
@@ -360,6 +377,11 @@ def main():
                 replay_json=gr["replay_json"],
             )
             n_matches_saved += 1
+
+    # Compute Elo for local matches
+    if n_matches_saved > 0:
+        db.compute_card_elo(source='local')
+        db.compute_deck_elo(source='local')
 
     db.close()
     print(f"\nResults saved to model/results.db ({n_matches_saved} match replays)")
