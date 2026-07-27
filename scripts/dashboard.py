@@ -1,6 +1,6 @@
 """Pokemon TCG MLX — Complete Dashboard (Streamlit).
 
-7 tabs: Overview, Cards, Decks, Agents, Arena, Replays, Config.
+8 tabs: Overview, Cards, Decks, Deck Builder, Agents, Arena, Replays, Config.
 Reads all data from SQLite (model/results.db). No sidebar.
 
 Usage:
@@ -220,13 +220,35 @@ def run_app():
             return {}
         return json.loads(SCHEMA_FILE.read_text())
 
+    @st.cache_data(ttl=30)
+    def load_builder_cards():
+        """Load all cards from SQLite for the deck builder."""
+        from rl.results_db import ResultsDB
+        db = ResultsDB()
+        rows = db.conn.execute(
+            "SELECT id, name, category, stage, hp, energy_type FROM cards ORDER BY name"
+        ).fetchall()
+        elo_rows = db.conn.execute(
+            "SELECT card_id, elo FROM card_elo WHERE source = 'replay'"
+        ).fetchall()
+        db.close()
+        elos = {r[0]: r[1] for r in elo_rows}
+        cards = []
+        for r in rows:
+            cards.append({
+                "id": r[0], "name": r[1], "category": r[2],
+                "stage": r[3], "hp": r[4], "energy_type": r[5],
+                "elo": elos.get(r[0], 0),
+            })
+        return cards
+
     def extract_lb_score(label):
         m = re.search(r"lb(\d+)", label)
         return int(m.group(1)) if m else None
 
     # ── main tabs ────────────────────────────────────────────────
-    tab_overview, tab_cards, tab_decks, tab_agents, tab_arena, tab_replays, tab_config = st.tabs(
-        ["Overview", "Cards", "Decks", "Agents", "Arena", "Replays", "Config"])
+    tab_overview, tab_cards, tab_decks, tab_deck_builder, tab_agents, tab_arena, tab_replays, tab_config = st.tabs(
+        ["Overview", "Cards", "Decks", "Deck Builder", "Agents", "Arena", "Replays", "Config"])
 
     # ════════════════════════════════════════════════════════════════
     # TAB 1: OVERVIEW
@@ -439,7 +461,213 @@ def run_app():
                         st.info("No card composition data for this deck.")
 
     # ════════════════════════════════════════════════════════════════
-    # TAB 4: AGENTS
+    # TAB 4: DECK BUILDER
+    # ════════════════════════════════════════════════════════════════
+    with tab_deck_builder:
+        # Initialize session state for deck builder
+        if "builder_deck" not in st.session_state:
+            st.session_state.builder_deck = {}
+        if "builder_deck_name" not in st.session_state:
+            st.session_state.builder_deck_name = ""
+
+        deck = st.session_state.builder_deck
+
+        # Load card data
+        all_builder_cards = load_builder_cards()
+        all_stages = sorted(set(c["stage"] for c in all_builder_cards if c["stage"]))
+        energy_types = ["All", "Fire", "Water", "Grass", "Lightning", "Psychic",
+                        "Fighting", "Darkness", "Metal", "Fairy", "Dragon", "Colorless"]
+
+        # ── Left panel: deck management (sidebar) ─────────────────
+        with st.sidebar:
+            st.header("Deck Builder")
+
+            # Save controls
+            st.subheader("Save Deck")
+            save_col1, save_col2 = st.columns([2, 1])
+            with save_col1:
+                deck_name_input = st.text_input(
+                    "Deck name", value=st.session_state.builder_deck_name,
+                    key="builder_name_input", label_visibility="collapsed",
+                    placeholder="Enter deck name...")
+            with save_col2:
+                if st.button("Save", key="builder_save_btn", type="primary"):
+                    total = sum(deck.values())
+                    if total != 60:
+                        st.error(f"Deck must have exactly 60 cards (has {total})")
+                    elif not deck_name_input.strip():
+                        st.error("Enter a deck name")
+                    else:
+                        try:
+                            from rl.results_db import ResultsDB
+                            db = ResultsDB()
+                            deck_id = db.add_deck(
+                                deck_name_input.strip(), "builder", card_count=60)
+                            card_qtys = [(cid, qty) for cid, qty in deck.items()]
+                            db.add_deck_cards(deck_id, card_qtys)
+                            db.close()
+                            st.session_state.builder_deck_name = deck_name_input.strip()
+                            st.success(f"Saved '{deck_name_input.strip()}'")
+                            st.cache_data.clear()
+                        except Exception as e:
+                            st.error(f"Error saving: {e}")
+
+            # Load controls
+            st.subheader("Load Deck")
+            all_decks_data = load_all_decks()
+            deck_names = ["— select —"] + [d["name"] for d in all_decks_data]
+            load_choice = st.selectbox("Existing decks", deck_names,
+                                       key="builder_load_select", label_visibility="collapsed")
+            if load_choice != "— select —" and st.button("Load selected deck",
+                                                          key="builder_load_btn"):
+                target = next(d for d in all_decks_data if d["name"] == load_choice)
+                cards_data = load_deck_cards(target["id"])
+                deck.clear()
+                for c in cards_data:
+                    deck[c["id"]] = c["qty"]
+                st.session_state.builder_deck_name = load_choice
+                st.success(f"Loaded '{load_choice}' ({sum(deck.values())} cards)")
+                st.rerun()
+
+            st.divider()
+
+            # Deck composition
+            total_cards = sum(deck.values())
+            st.subheader(f"Deck ({total_cards}/60)")
+
+            # Validation messages
+            if total_cards > 0:
+                over4 = {cid: q for cid, q in deck.items() if q > 4}
+                if over4:
+                    names = ", ".join(
+                        f"{next((c['name'] for c in all_builder_cards if c['id'] == cid), str(cid))} x{q}"
+                        for cid, q in over4.items())
+                    st.warning(f"Max 4 copies: {names}")
+
+            if not deck:
+                st.caption("Click a card to add it")
+            else:
+                # Sort by name
+                sorted_deck = sorted(deck.items(),
+                                     key=lambda x: next((c["name"] for c in all_builder_cards if c["id"] == x[0]), ""))
+                for cid, qty in sorted_deck:
+                    card_info = next((c for c in all_builder_cards if c["id"] == cid), None)
+                    cname = card_info["name"] if card_info else str(cid)
+                    cstage = card_info["stage"] if card_info else ""
+                    c1, c2, c3 = st.columns([4, 2, 1])
+                    with c1:
+                        st.caption(f"**{cname}**")
+                    with c2:
+                        st.caption(f"{qty}x {cstage[:12]}")
+                    with c3:
+                        if st.button("x", key=f"builder_rm_{cid}"):
+                            deck[cid] -= 1
+                            if deck[cid] <= 0:
+                                del deck[cid]
+                            st.rerun()
+
+            st.divider()
+
+            # Action buttons
+            act1, act2, act3 = st.columns(3)
+            with act1:
+                if st.button("Clear", key="builder_clear_btn"):
+                    deck.clear()
+                    st.session_state.builder_deck_name = ""
+                    st.rerun()
+            with act2:
+                if total_cards == 60:
+                    csv_lines = []
+                    for cid, qty in deck.items():
+                        for _ in range(qty):
+                            csv_lines.append(str(cid))
+                    csv_text = "\n".join(csv_lines) + "\n"
+                    st.download_button("Export CSV", csv_text, "deck.csv", "text/csv",
+                                       key="builder_export_btn")
+                else:
+                    st.button("Export CSV", key="builder_export_disabled",
+                              disabled=True)
+            with act3:
+                st.toggle("Deck only", key="builder_deck_only",
+                          help="Show only cards in deck")
+
+        # ── Right panel: card browser ─────────────────────────────
+        st.subheader("Card Browser")
+
+        # Filters
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            search_query = st.text_input("Search cards",
+                                         key="builder_search",
+                                         placeholder="Name or ID...")
+        with f2:
+            category_filter = st.selectbox("Category",
+                ["All", "Pokemon", "Trainer", "Energy"], key="builder_cat")
+        with f3:
+            energy_filter = st.selectbox("Energy Type", energy_types,
+                                         key="builder_energy")
+
+        # Filter cards
+        filtered = all_builder_cards
+        if search_query:
+            q = search_query.lower()
+            filtered = [c for c in filtered
+                       if q in c["name"].lower() or q in str(c["id"])]
+        if category_filter != "All":
+            filtered = [c for c in filtered if c["category"] == category_filter]
+        if energy_filter != "All":
+            filtered = [c for c in filtered if c["energy_type"] == energy_filter]
+        if st.session_state.get("builder_deck_only", False):
+            filtered = [c for c in filtered if deck.get(c["id"], 0) > 0]
+
+        st.caption(f"Showing {len(filtered)} of {len(all_builder_cards)} cards")
+
+        if not filtered:
+            st.info("No cards match the current filters.")
+        else:
+            CARDS_PER_ROW = 4
+            for row_start in range(0, len(filtered), CARDS_PER_ROW):
+                row_cards = filtered[row_start:row_start + CARDS_PER_ROW]
+                cols = st.columns(CARDS_PER_ROW)
+                for i, card in enumerate(row_cards):
+                    with cols[i]:
+                        card_id = card["id"]
+                        img_path = ROOT / "scripts" / "deck_builder" / "card_images" / f"{card_id}.jpg"
+                        if img_path.exists():
+                            st.image(str(img_path), use_container_width=True)
+                        else:
+                            st.caption(f"[No image {card_id}]")
+
+                        st.markdown(f"**{card['name']}**")
+                        meta_parts = [str(card_id)]
+                        if card["category"]:
+                            meta_parts.append(card["category"])
+                        if card["stage"]:
+                            meta_parts.append(card["stage"])
+                        if card["hp"]:
+                            meta_parts.append(f"{card['hp']}HP")
+                        if card["energy_type"]:
+                            meta_parts.append(card["energy_type"])
+                        if card["elo"] and card["elo"] > 0:
+                            meta_parts.append(f"Elo:{card['elo']:.0f}")
+                        st.caption(" | ".join(meta_parts))
+
+                        current_qty = deck.get(card_id, 0)
+                        btn_label = f"Add ({current_qty}/4)" if current_qty > 0 else "Add"
+                        if current_qty >= 4:
+                            st.button(btn_label, key=f"builder_add_{card_id}",
+                                      disabled=True, use_container_width=True)
+                        elif sum(deck.values()) >= 60:
+                            st.button("Deck full", key=f"builder_full_{card_id}",
+                                      disabled=True, use_container_width=True)
+                        else:
+                            if st.button(btn_label, key=f"builder_add_{card_id}",
+                                         use_container_width=True):
+                                deck[card_id] = deck.get(card_id, 0) + 1
+                                st.rerun()
+
+    # ════════════════════════════════════════════════════════════════
+    # TAB 5: AGENTS
     # ════════════════════════════════════════════════════════════════
     with tab_agents:
         st.subheader("Agent Performance")
@@ -487,7 +715,7 @@ def run_app():
                 )
 
     # ════════════════════════════════════════════════════════════════
-    # TAB 5: ARENA
+    # TAB 6: ARENA
     # ════════════════════════════════════════════════════════════════
     with tab_arena:
         st.subheader("Arena Matchup Matrix")
@@ -538,7 +766,7 @@ def run_app():
                 st.info("No self-play matches recorded.")
 
     # ════════════════════════════════════════════════════════════════
-    # TAB 6: REPLAYS
+    # TAB 7: REPLAYS
     # ════════════════════════════════════════════════════════════════
     with tab_replays:
         st.subheader("Match Replays")
@@ -652,7 +880,7 @@ def run_app():
                             st.divider()
 
     # ════════════════════════════════════════════════════════════════
-    # TAB 7: CONFIG
+    # TAB 8: CONFIG
     # ════════════════════════════════════════════════════════════════
     with tab_config:
         st.subheader("Configuration")
