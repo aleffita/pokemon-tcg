@@ -1,27 +1,37 @@
-"""Submit agent to the Pokemon TCG AI Battle Challenge on Kaggle.
+"""Build the agent bundle for the Pokemon TCG AI Battle Challenge, and
+optionally upload it to Kaggle.
 
-Builds submission.tar.gz using the existing build logic, then uploads
-to the competition via the Kaggle API.
+Packaging is delegated to scripts/build_submission.py — the single place that
+knows how to bundle the agent (vendored MLX, checkpoint paths, archive layout)
+and validate the result. This module only adds the upload step.
 
 Usage:
-    uv run tcg-submit                     # build + submit
-    uv run tcg-submit --message "v4"      # custom message
-    uv run tcg-submit --dry-run           # build only, no upload
-    uv run tcg-submit --help
+    uv run tcg-build                          # build + validate submission.tar.gz
+    uv run tcg-build --upload                 # ...and upload (asks to confirm)
+    uv run tcg-build --upload -m "v4"         # custom submission message
+    uv run tcg-build --help
+
+Building never uploads. Sending is opt-in through --upload.
 """
 from __future__ import annotations
 
 import argparse
 import os
 import sys
-import tarfile
 from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
 
 _ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 console = Console()
+
+# Competition limits, from the competition's own submission FAQ.
+SIZE_LIMIT_MIB = 197.7
+DAILY_LIMIT = 5
 
 
 def _get_api():
@@ -46,99 +56,59 @@ def _get_api():
     return api
 
 
-def _collect_files(base_dir: str, prefix: str) -> list[tuple[str, str]]:
-    """Walk a directory and return (abs_path, archive_name) pairs."""
-    files = []
-    for dirpath, _dirs, names in os.walk(base_dir):
-        if "__pycache__" in dirpath:
-            continue
-        for name in names:
-            if name.endswith(".pyc") or name == ".DS_Store":
-                continue
-            full = os.path.join(dirpath, name)
-            arc = os.path.join(prefix, os.path.relpath(full, base_dir)).replace(
-                os.sep, "/"
-            )
-            files.append((full, arc))
-    return files
-
-
 def build_submission(out_path: str) -> bool:
-    """Build submission.tar.gz. Returns True on success."""
-    agent_dir = str(_ROOT / "agent")
-    rl_dir = str(_ROOT / "rl")
-    model_dir = str(_ROOT / "model")
-    required = ["main.py", "deck.csv"]
+    """Build and validate the bundle via build_submission.py. True on success.
 
-    files: list[tuple[str, str]] = []
+    That module owns packaging: vendored MLX, checkpoint archive paths, the
+    size ceiling, and an extract-and-run validation. Duplicating any of it here
+    is how this script previously drifted into shipping an unusable bundle.
+    """
+    from scripts.build_submission import main as build_main
 
-    # 1. agent/ contents at top level (main.py, deck.csv)
-    files.extend(_collect_files(agent_dir, ""))
+    argv = sys.argv
+    sys.argv = ["build_submission.py", "-o", out_path]
+    try:
+        build_main()
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            console.print(f"[bold red]Build failed:[/] {exc}")
+            return False
+    finally:
+        sys.argv = argv
 
-    # 2. rl/ directory (encoder, policy, lr_schedule, etc.)
-    if os.path.isdir(rl_dir):
-        files.extend(_collect_files(rl_dir, "rl"))
-    else:
-        console.print("[yellow]WARNING: rl/ not found — submission may fail on Kaggle[/]")
-
-    # 3. Model checkpoint (prefer MLX, fallback PyTorch)
-    checkpoint = None
-    for candidate in [
-        os.path.join(model_dir, "bc_model", "bc_best_mlx_final.pkl"),
-        os.path.join(model_dir, "checkpoint", "bc_best_mlx.pkl"),
-        os.path.join(model_dir, "bc_model", "bc_best_final.pkl"),
-        os.path.join(model_dir, "checkpoint", "bc_best.pt"),
-    ]:
-        if os.path.exists(candidate):
-            checkpoint = candidate
-            break
-
-    if checkpoint:
-        # Determine archive name based on extension
-        ext = os.path.splitext(checkpoint)[1]
-        arc_name = f"model/bc_best{ext}"
-        files.append((checkpoint, arc_name))
-    else:
-        console.print("[yellow]WARNING: no model checkpoint found — agent will use fallback policy[/]")
-
-    # Validate required files
-    arcnames = {arc for _, arc in files}
-    missing = [r for r in required if r not in arcnames]
-    if missing:
-        console.print(f"[bold red]ERROR: missing required file(s) at top level: {missing}[/]")
+    if not os.path.exists(out_path):
+        console.print(f"[bold red]Build produced no archive at {out_path}[/]")
         return False
-
-    # Validate deck
-    deck_path = os.path.join(agent_dir, "deck.csv")
-    with open(deck_path) as f:
-        n = len([ln for ln in f if ln.strip()])
-    if n != 60:
-        console.print(f"[bold red]ERROR: deck.csv has {n} cards, expected 60.[/]")
-        return False
-
-    # 4. EN_Card_Data.csv (needed by card_features.py at runtime)
-    csv_path = str(_ROOT / "EN_Card_Data.csv")
-    if os.path.exists(csv_path):
-        files.append((csv_path, "EN_Card_Data.csv"))
-    else:
-        console.print("[yellow]WARNING: EN_Card_Data.csv not found[/]")
-
-    # Write tarball
-    with tarfile.open(out_path, "w:gz") as tar:
-        for full, arc in sorted(files, key=lambda x: x[1]):
-            tar.add(full, arcname=arc)
-
-    size_mb = os.path.getsize(out_path) / (1024 * 1024)
-    console.print(f"[green]Wrote {out_path}[/] ({size_mb:.1f} MB, {len(files)} files)")
-
-    if size_mb > 197.7:
-        console.print(f"[bold yellow]WARNING: submission is {size_mb:.1f} MB (limit is 197.7 MB)[/]")
-
     return True
+
+
+def _describe_bundle(out_path: str) -> None:
+    """Print what is about to be uploaded, so it can be checked before sending."""
+    import hashlib
+    import tarfile
+
+    size_mib = os.path.getsize(out_path) / (1024 * 1024)
+    digest = hashlib.sha256(Path(out_path).read_bytes()).hexdigest()[:12]
+
+    deck_path = _ROOT / "agent" / "deck.csv"
+    deck_cards = [ln.strip() for ln in deck_path.read_text().splitlines() if ln.strip()]
+
+    with tarfile.open(out_path, "r:gz") as tar:
+        names = tar.getnames()
+    checkpoint = next((n for n in names if n.endswith(".pkl")), "none")
+
+    console.print("\n[bold]Bundle[/]")
+    console.print(f"  archive     {out_path}")
+    console.print(f"  size        {size_mib:.1f} MiB of {SIZE_LIMIT_MIB} MiB")
+    console.print(f"  sha256      {digest}…")
+    console.print(f"  checkpoint  {checkpoint}")
+    console.print(f"  deck        {len(deck_cards)} cards from agent/deck.csv")
+    console.print(f"  vendored    {sum(1 for n in names if n.startswith('_vendor/'))} files")
 
 
 def main():
     p = argparse.ArgumentParser(
+        prog="tcg-build",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -153,9 +123,14 @@ def main():
         help="Output path for submission archive (default: submission.tar.gz)",
     )
     p.add_argument(
-        "--dry-run",
+        "--upload",
         action="store_true",
-        help="Build only, do not upload to Kaggle",
+        help="Upload to Kaggle after building (default: build only)",
+    )
+    p.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip the upload confirmation prompt (only with --upload)",
     )
     p.add_argument(
         "--competition",
@@ -169,15 +144,36 @@ def main():
     if not build_submission(args.out):
         sys.exit(1)
 
-    if args.dry_run:
-        console.print("\n[dim]Dry run — skipping upload[/]")
+    _describe_bundle(args.out)
+
+    if not args.upload:
+        console.print(f"\n[green]Ready.[/] Upload with [bold]--upload[/], or manually at")
+        console.print(f"  https://www.kaggle.com/competitions/{args.competition}/submissions")
         sys.exit(0)
 
-    # 2. Upload to Kaggle
+    message = args.message or f"MLX agent {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+    # 2. Confirm. Uploading is public, irreversible, and spends one of the
+    # competition's daily submission slots.
+    if not args.yes:
+        console.print(
+            f"\n[bold yellow]About to upload to '{args.competition}'.[/] "
+            f"This is public, cannot be undone, and uses one of "
+            f"{DAILY_LIMIT} submissions today."
+        )
+        console.print(f"  message: [italic]{message}[/]")
+        try:
+            reply = input("Type 'submit' to confirm: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]Cancelled.[/]")
+            sys.exit(1)
+        if reply != "submit":
+            console.print("[dim]Cancelled — nothing uploaded.[/]")
+            sys.exit(1)
+
+    # 3. Upload to Kaggle
     console.print("\n[bold cyan]Submitting to Kaggle...[/]")
     api = _get_api()
-
-    message = args.message or f"MLX agent {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
     try:
         result = api.competitions.submit(

@@ -8,9 +8,11 @@ This script also bundles:
 
 The cg/ SDK is NOT bundled — it's already in the Kaggle sandbox via kaggle_environments.
 
-Usage:
-    python scripts/build_submission.py            # -> submission.tar.gz
-    python scripts/build_submission.py -o out.tar.gz
+This is the packaging implementation, driven by `scripts/submit.py`. Use the
+entry point rather than calling it directly:
+
+    uv run tcg-build              # -> submission.tar.gz
+    uv run tcg-build --upload     # ...and send it to Kaggle
 """
 
 import argparse

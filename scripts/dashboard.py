@@ -1261,8 +1261,7 @@ def run_app():
             ("tcg-train", "MLX Metal GPU trainer"),
             ("tcg-evaluate", "1v1 evaluation"),
             ("tcg-tournament", "Multi-opponent tournament"),
-            ("tcg-submission", "Build submission.tar.gz"),
-            ("tcg-submit", "Submit to Kaggle"),
+            ("tcg-build", "Build submission.tar.gz (--upload to send to Kaggle)"),
             ("tcg-dashboard", "This dashboard"),
         ]
         st.dataframe(
