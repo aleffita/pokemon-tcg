@@ -176,18 +176,22 @@ def main():
     api = _get_api()
 
     try:
-        result = api.competitions.submit(
-            competition=args.competition,
+        # kaggle 2.x exposes this as a flat method; the old api.competitions.submit
+        # namespace no longer exists.
+        result = api.competition_submit(
             file_name=args.out,
             message=message,
+            competition=args.competition,
         )
-        console.print(f"\n[bold green]Submission successful![/]")
-        console.print(f"  Submission ID: {result.ref}")
-        console.print(f"  Status: {result.status}")
-        console.print(f"  Message: {result.description}")
+        console.print("\n[bold green]Submission successful![/]")
+        for label, attr in (("Status", "status"), ("Message", "message"),
+                            ("Ref", "ref"), ("Url", "url")):
+            value = getattr(result, attr, None)
+            if value:
+                console.print(f"  {label}: {value}")
         console.print(
-            f"\n  [link=https://www.kaggle.com/competitions/{args.competition}/submissions]"
-            f"View on Kaggle[/link]"
+            f"\n  Track it at https://www.kaggle.com/competitions/"
+            f"{args.competition}/submissions"
         )
     except Exception as exc:
         console.print(f"[bold red]Submission failed:[/] {exc}")

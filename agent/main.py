@@ -245,16 +245,31 @@ def _autoregressive_select(
         if action == SUBMIT_ACTION and len(results) >= min_count:
             break
 
-        # If SUBMIT was chosen but min_count not met, or if all options masked,
-        # we cannot proceed further — return what we have
-        if logits_np[action] <= -1e9:
-            break
+        # SUBMIT chosen too early, or everything masked: take the best real
+        # option instead of stopping. Breaking here returns fewer than
+        # min_count picks, which the engine rejects as an INVALID action.
+        if action == SUBMIT_ACTION or logits_np[action] <= -1e9:
+            fallback = [i for i in range(n) if i not in picked_set]
+            if not fallback:
+                break
+            legal = [i for i in fallback if i < len(action_mask) and action_mask[i] >= 0.5]
+            pool = legal or fallback
+            action = max(pool, key=lambda i: logits_np[i] if i < len(logits_np) else -1e9)
 
         picked_set.add(action)
         results.append(action)
 
         if len(results) >= max_count:
             break
+
+    # Never hand back fewer picks than the engine demands.
+    if len(results) < min_count:
+        for i in range(n):
+            if len(results) >= min_count:
+                break
+            if i not in picked_set:
+                picked_set.add(i)
+                results.append(i)
 
     return results, current_memory
 
@@ -312,17 +327,24 @@ def choose(select: dict[str, Any], current: dict | None, logs: list | None = Non
 
     # F.1: Pass memory and store memory_out
     memory_in = st["memory"]
-    results, memory_out = _autoregressive_select(
-        _LOADED_MODEL, encoded, int_keys, options, min_count, max_count,
-        memory_in=memory_in,
-    )
-    st["memory"] = memory_out  # F.1: persist memory for next decision
+    try:
+        results, memory_out = _autoregressive_select(
+            _LOADED_MODEL, encoded, int_keys, options, min_count, max_count,
+            memory_in=memory_in,
+        )
+        st["memory"] = memory_out  # F.1: persist memory for next decision
+    except Exception:
+        results = []
+
+    # Last line of defence before the engine: an action short of min_count is
+    # INVALID and forfeits the game, so fall back to the first legal indices.
+    if len(results) < min_count:
+        results = list(range(max(min_count, min(max_count, n))))
 
     return results
 
 
-def agent(obs: dict[str, Any]) -> list[int]:
-    """Engine entry point. Returns deck or chosen option indices."""
+def _agent_impl(obs: dict[str, Any]) -> list[int]:
     select = obs.get("select")
     current = obs.get("current")
 
@@ -339,3 +361,29 @@ def agent(obs: dict[str, Any]) -> list[int]:
     # E.2: Pass complete logs from observation to choose()
     logs = obs.get("logs", [])
     return choose(select, current, logs=logs)
+
+
+# Must stay the last callable defined in this module: the Kaggle harness picks
+# whichever callable is defined last (kaggle_environments/agent.py).
+def agent(obs: dict[str, Any]) -> list[int]:
+    """Engine entry point. Returns deck or chosen option indices.
+
+    Wraps the implementation so no exception can escape: the harness turns a
+    raised exception into an INVALID action, which forfeits the game outright.
+    The traceback goes to stdout, where the episode's agent logs capture it.
+    """
+    try:
+        return _agent_impl(obs)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+
+        select = obs.get("select") if hasattr(obs, "get") else getattr(obs, "select", None)
+        if select is None:
+            return list(DECK)
+        get = (lambda k, d: select.get(k, d)) if hasattr(select, "get") \
+            else (lambda k, d: getattr(select, k, d))
+        n = len(get("option", []) or [])
+        min_count = get("minCount", 1) or 1
+        max_count = get("maxCount", 1) or 1
+        return list(range(max(min_count, min(max_count, n))))

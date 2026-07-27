@@ -42,11 +42,15 @@ CHECKPOINT_CANDIDATES = [
 
 # MLX is absent from the Kaggle image (see kaggle_requirements.txt in
 # Kaggle/docker-python), so it ships inside the bundle. Both wheels unpack into
-# the same directory: core.cpython-312-*.so has RUNPATH $ORIGIN/lib pointing at
+# the same directory: core.cpython-311-*.so has RUNPATH $ORIGIN/lib pointing at
 # libmlx.so, which in turn has RUNPATH $ORIGIN/../../mlx_cpu.libs for BLAS.
-# Wheels target the sandbox: Python 3.12, linux x86_64, glibc >= 2.35.
+#
+# Python 3.11 is the sandbox interpreter, observed in a validation episode log
+# on 2026-07-27 (kaggle_environments under /usr/local/lib/python3.11/
+# dist-packages). The binding is version-specific: a cp312 wheel is simply
+# invisible to it. mlx_cpu is py3-none and works with any of them.
 VENDOR_WHEELS = [
-    "mlx-0.32.0-cp312-cp312-manylinux_2_35_x86_64.whl",
+    "mlx-0.32.0-cp311-cp311-manylinux_2_35_x86_64.whl",
     "mlx_cpu-0.32.0-py3-none-manylinux_2_35_x86_64.whl",
 ]
 
@@ -203,7 +207,6 @@ def _validate_archive(tar_path: str) -> None:
             "rl/encoder/encoding.py",
             "rl/policy_mlx.py",
             # RUNPATH chain: core.so -> mlx/lib/libmlx.so -> mlx_cpu.libs/
-            "_vendor/mlx/core.cpython-312-x86_64-linux-gnu.so",
             "_vendor/mlx/lib/libmlx.so",
             "_vendor/mlx/nn/__init__.py",
         ]
@@ -212,7 +215,25 @@ def _validate_archive(tar_path: str) -> None:
                 raise SystemExit(f"  ERROR: archive is missing {rel}")
         if not os.path.isdir(os.path.join(staging, "_vendor", "mlx_cpu.libs")):
             raise SystemExit("  ERROR: archive is missing _vendor/mlx_cpu.libs/")
+
+        # One binding per interpreter version. Checking a single hardcoded
+        # version is what let a cp312-only bundle pass here and then fail on a
+        # Python 3.11 sandbox with ModuleNotFoundError.
+        vendor_mlx = os.path.join(staging, "_vendor", "mlx")
+        bindings = sorted(
+            f for f in os.listdir(vendor_mlx)
+            if f.startswith("core.cpython-") and f.endswith("-x86_64-linux-gnu.so")
+        )
+        expected_versions = {
+            w.split("-cp")[1].split("-")[0] for w in VENDOR_WHEELS if "-cp" in w
+        }
+        found_versions = {b.split("cpython-")[1].split("-")[0] for b in bindings}
+        if found_versions != expected_versions:
+            raise SystemExit(
+                f"  ERROR: vendored bindings {sorted(found_versions)} do not match "
+                f"the wheels declared in VENDOR_WHEELS {sorted(expected_versions)}")
         print(f"  OK: {len(expected) + 1} required paths present")
+        print(f"  OK: MLX bindings for Python {', '.join(sorted(found_versions))}")
 
         checkpoints = [
             arc for _, arc in CHECKPOINT_CANDIDATES
@@ -242,6 +263,16 @@ def _validate_archive(tar_path: str) -> None:
                 raise SystemExit("  ERROR: agent found no checkpoint and would play randomly")
             if module._LOADED_MODEL is None:
                 raise SystemExit("  ERROR: checkpoint present but model failed to load")
+
+            # The harness calls whichever callable is defined last, not the one
+            # named `agent` (kaggle_environments/agent.py: get_last_callable).
+            # Defining a helper below it silently swaps out the entry point.
+            last_callable = [v for v in vars(module).values() if callable(v)][-1]
+            if getattr(last_callable, "__name__", None) != "agent":
+                raise SystemExit(
+                    f"  ERROR: last callable in main.py is "
+                    f"'{getattr(last_callable, '__name__', '?')}', not 'agent' — "
+                    f"the harness would call the wrong function")
 
             result = module.agent({"select": None})
             if not (isinstance(result, list) and len(result) == 60):
