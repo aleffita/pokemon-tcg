@@ -11,6 +11,7 @@ Usage:
       --d-model 128 --static --split-heads --epochs 8 --batch 128
 """
 
+from rich.progress import TimeElapsedColumn
 import argparse
 import os
 from pathlib import Path
@@ -410,7 +411,7 @@ def main() -> None:
     )
 
     # Optimizer
-    optimizer = optim.AdamW(learning_rate=a.lr)
+    optimizer = optim.Muon(learning_rate=a.lr)
 
     # Restore optimizer state if present in checkpoint (C.5)
     if a.resume:
@@ -677,8 +678,30 @@ def main() -> None:
     except ImportError:
         _rich_available = False
 
+    ep_t0: float = time.time()
+
+    epp = 0
+
+    # Rich progress bar for this epoch
+    _progress_bar = None
+    _progress_task = None
+    if _rich_available:
+        _progress_bar = Progress(
+            SpinnerColumn(),
+            TextColumn(
+                "[bold blue]Epoch {task.fields[epoch]} (run {task.fields[local_epoch]}/{task.fields[total_epochs]})"
+            ),
+            BarColumn(),
+            TaskProgressColumn(),
+            TextColumn("Loss: {task.fields[loss]}"),
+            TextColumn("LR: {task.fields[lr]}"),
+            TextColumn("ETA: {task.fields[eta]}"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        )
+        _progress_bar.start()
+
     for ep in range(start_epoch, run_end_epoch):
-        ep_t0: float = time.time()
         ep_step: int = 0  # optimizer steps in this epoch
         ep_micro: int = 0  # microbatches processed in this epoch
         _running_loss = 0.0
@@ -690,33 +713,18 @@ def main() -> None:
         _tbptt_memory = None  # F.3: reset memory at epoch start
         print(f"[bc-train-mlx] === epoch {ep + 1}/{a.epochs} ===", flush=True)
 
-        # Rich progress bar for this epoch
-        _progress_bar = None
-        _progress_task = None
-        if _rich_available:
-            _progress_bar = Progress(
-                SpinnerColumn(),
-                TextColumn(
-                    "[bold blue]Epoch {task.fields[epoch]} (run {task.fields[local_epoch]}/{task.fields[total_epochs]})"
-                ),
-                BarColumn(),
-                TaskProgressColumn(),
-                TextColumn("Loss: {task.fields[loss]}"),
-                TextColumn("LR: {task.fields[lr]}"),
-                TextColumn("ETA: {task.fields[eta]}"),
-                TimeRemainingColumn(),
-            )
-            _progress_bar.start()
+        if _progress_bar is not None:
             _progress_task = _progress_bar.add_task(
                 "training",
                 epoch=ep + 1,
                 local_epoch=ep - start_epoch + 1,
                 total_epochs=run_epochs,
-                total=total_opt_steps,
+                total=total_opt_steps * (run_end_epoch - (start_epoch + epp)),
                 loss="--",
                 lr="--",
                 eta="--",
             )
+            epp += 1
 
         # Flatten all batches from all slabs into a single generator
         # so we can accumulate across slab boundaries
@@ -898,13 +906,14 @@ def main() -> None:
                     eta=eta_str_s,
                 )
 
-            if ep_step % a.log_interval == 0 and ep_step > 0:
-                print(
-                    f"[bc-train-mlx]   opt_step {ep_step}/{total_opt_steps} "
-                    f"micro={ep_micro} loss={avg:.4f} lr={optimizer.learning_rate:.2e} "
-                    f"elapsed={el_str} ETA={eta_str_s}",
-                    flush=True,
-                )
+            if a.log_interval > 0:
+                if ep_step % a.log_interval == 0 and ep_step > 0:
+                    print(
+                        f"[bc-train-mlx]   opt_step {ep_step}/{total_opt_steps} "
+                        f"micro={ep_micro} loss={avg:.4f} lr={optimizer.learning_rate:.2e} "
+                        f"elapsed={el_str} ETA={eta_str_s}",
+                        flush=True,
+                    )
 
         # ---- validation ----
         model.eval()
