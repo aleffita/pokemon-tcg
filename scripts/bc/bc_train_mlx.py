@@ -11,39 +11,37 @@ Usage:
       --d-model 128 --static --split-heads --epochs 8 --batch 128
 """
 
-from rich.progress import TimeElapsedColumn
-from datetime import timedelta
-
-from rich.progress import ProgressColumn
-from rich.text import Text
 import argparse
 import os
-from pathlib import Path
 import queue
 import shutil
 import threading
 import time
+from collections import defaultdict
+from pathlib import Path
 
-import numpy as np
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
+import numpy as np
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from rl.encoder.card_features import get_card_table
-from rl.encoder.encoding import TokenEncoder
 from rl.encoder.enc_constants import OPT_WK
-from rl.policy_mlx import build_token_net_mlx
+from rl.encoder.encoding import TokenEncoder
 from rl.lr_schedule import lr_at
+from rl.policy_mlx import build_token_net_mlx
 from rl.train_config import load_config
 
 WK_LO, WK_HI = OPT_WK, OPT_WK + 3
-
-
-def _format_progress_duration(seconds: float | None) -> str:
-    """Format a duration like Rich's elapsed-time column."""
-    if seconds is None:
-        return "-:--:--"
-    return str(timedelta(seconds=max(0, int(seconds))))
 
 
 def _format_compact_duration(seconds: float | None) -> str:
@@ -57,34 +55,35 @@ def _format_compact_duration(seconds: float | None) -> str:
     return f"{minutes}m{seconds:02d}s"
 
 
-class _GlobalElapsedColumn(ProgressColumn):
-    """Elapsed time since this training invocation started."""
-
-    def __init__(self, started_at: float):
-        super().__init__()
-        self.started_at = started_at
-
-    def render(self, task) -> Text:
-        elapsed = time.monotonic() - self.started_at
-        return Text(_format_progress_duration(elapsed), style="yellow")
+def _ceil_div(numerator: int, denominator: int) -> int:
+    """Return ceil(numerator / denominator) for non-negative work counts."""
+    if numerator < 0:
+        raise ValueError(f"numerator must be non-negative, got {numerator}")
+    if denominator <= 0:
+        raise ValueError(f"denominator must be positive, got {denominator}")
+    return (numerator + denominator - 1) // denominator
 
 
-class _GlobalTimeRemainingColumn(ProgressColumn):
-    """ETA for the complete run, independent of the current epoch task."""
+def _standard_microbatch_count(
+    slab_bounds: list[tuple[int, int]], batch_size: int
+) -> int:
+    """Count the batches actually yielded across all slab boundaries."""
+    return sum(_ceil_div(stop - start, batch_size) for start, stop in slab_bounds)
 
-    def __init__(self, started_at: float, progress_state: dict, total_steps: int):
-        super().__init__()
-        self.started_at = started_at
-        self.progress_state = progress_state
-        self.total_steps = max(1, total_steps)
 
-    def render(self, task) -> Text:
-        elapsed = max(0.0, time.monotonic() - self.started_at)
-        completed = min(self.total_steps, self.progress_state["completed"])
-        if completed <= 0:
-            return Text("-:--:--", style="blue")
-        remaining = elapsed * (self.total_steps - completed) / completed
-        return Text(_format_progress_duration(remaining), style="blue")
+def _build_tbptt_groups(episode_meta: np.ndarray, train_rows: int) -> list[np.ndarray]:
+    """Build the exact ordered row groups consumed by the TBPTT generator."""
+    groups: dict[tuple[int, int], list[int]] = defaultdict(list)
+    episode_ids = episode_meta["episode_id"][:train_rows]
+    sides = episode_meta["side"][:train_rows]
+    for row_index, (episode_id, side) in enumerate(zip(episode_ids, sides)):
+        groups[(int(episode_id), int(side))].append(row_index)
+    return [np.asarray(groups[key], dtype=np.int64) for key in sorted(groups)]
+
+
+def _tbptt_microbatch_count(groups: list[np.ndarray], chunk_size: int) -> int:
+    """Count chunks yielded by TBPTT, including each partial final chunk."""
+    return sum(_ceil_div(len(rows), chunk_size) for rows in groups)
 
 
 def read_rows(arr: np.ndarray, start: int, stop: int) -> np.ndarray:
@@ -372,7 +371,7 @@ def main() -> None:
     meta_path = os.path.join(a.data, "episode_meta.npy") if mmapped else None
     if meta_path and os.path.exists(meta_path):
         try:
-            meta = np.load(meta_path)
+            meta = np.load(meta_path, mmap_mode="r")
             new_ep = meta["new_episode"]
             boundaries = np.where(new_ep)[0]
             valid_boundaries = boundaries[boundaries <= N - nval]
@@ -575,17 +574,46 @@ def main() -> None:
 
         print(f"[bc-train-mlx] compiled train_step with state capture", flush=True)
 
-    # --- slab boundaries and total optimizer steps (C.4) ---
+    # --- exact work plan and optimizer-step schedule (C.4 / F.3) ---
     slab_bounds = [(s, min(s + a.slab_rows, v0)) for s in range(0, v0, a.slab_rows)]
-    steps_per_epoch = max(
-        1, sum((e0 - s0 + a.batch - 1) // a.batch for s0, e0 in slab_bounds)
+    tbptt_meta_path = os.path.join(a.data, "episode_meta.npy") if mmapped else None
+    _use_tbptt = bool(
+        a.tbptt_chunk > 0 and tbptt_meta_path and os.path.exists(tbptt_meta_path)
     )
-    total_opt_steps = run_epochs * max(1, steps_per_epoch // a.accum_steps)
-    warmup_steps = min(a.warmup_steps, max(1, total_opt_steps // 5))
+    _tbptt_groups: list[np.ndarray] = []
+    if _use_tbptt:
+        tbptt_meta = np.load(tbptt_meta_path, mmap_mode="r")
+        _tbptt_groups = _build_tbptt_groups(tbptt_meta, v0)
+        microbatches_per_epoch = _tbptt_microbatch_count(_tbptt_groups, a.tbptt_chunk)
+        progress_mode = (
+            f"TBPTT chunks (size<={a.tbptt_chunk}, groups={len(_tbptt_groups):,})"
+        )
+    else:
+        microbatches_per_epoch = _standard_microbatch_count(slab_bounds, a.batch)
+        progress_mode = f"shuffled batches (batch<={a.batch:,})"
+
+    if microbatches_per_epoch <= 0:
+        raise ValueError("training split produced no microbatches")
+
+    optimizer_steps_per_epoch = _ceil_div(microbatches_per_epoch, a.accum_steps)
+    run_microbatches = run_epochs * microbatches_per_epoch
+    run_optimizer_steps = run_epochs * optimizer_steps_per_epoch
+    run_start_gstep = gstep
+    scheduler_total_steps = run_start_gstep + run_optimizer_steps
+    warmup_steps = min(a.warmup_steps, max(1, scheduler_total_steps // 5))
     run_end_epoch = start_epoch + run_epochs
     print(
         f"[bc-train-mlx] global epoch range: {start_epoch + 1}-{run_end_epoch} "
         f"(local epochs={run_epochs})",
+        flush=True,
+    )
+    print(
+        f"[bc-train-mlx] progress plan: {progress_mode}; "
+        f"microbatches/epoch={microbatches_per_epoch:,}; "
+        f"optimizer_steps/epoch={optimizer_steps_per_epoch:,}; "
+        f"run_microbatches={run_microbatches:,}; "
+        f"run_optimizer_steps={run_optimizer_steps:,}; "
+        f"gstep={run_start_gstep:,}->{scheduler_total_steps:,}",
         flush=True,
     )
 
@@ -600,6 +628,9 @@ def main() -> None:
             "seed": a.seed,
             "dataset_path": a.data,
             "accum_steps": a.accum_steps,
+            "microbatches_per_epoch": microbatches_per_epoch,
+            "optimizer_steps_per_epoch": optimizer_steps_per_epoch,
+            "scheduler_total_steps": scheduler_total_steps,
         }
 
     def _save_checkpoint(path: str, epoch: int, val_acc: float) -> None:
@@ -655,7 +686,7 @@ def main() -> None:
         if a.lr_schedule != "none":
             optimizer.learning_rate = lr_at(
                 gstep,
-                total_opt_steps,
+                scheduler_total_steps,
                 a.lr,
                 a.lr_schedule,
                 warmup_steps,
@@ -701,36 +732,8 @@ def main() -> None:
 
     # ---- F.3: TBPTT batch generator ----
     def _tbptt_batches(chunk_size: int):
-        """Yield (ob, yb, memory_in) groups in episode order for TBPTT.
-
-        Loads episode_meta.npy (must have 'episode_id', 'side', 'new_episode').
-        Groups rows by (episode_id, side), iterates in order, yields chunks.
-        Memory is carried between chunks within the same (episode, side) group.
-        """
-        meta_path = os.path.join(a.data, "episode_meta.npy")
-        if not mmapped or not os.path.exists(meta_path):
-            print(
-                f"[bc-train-mlx] F.3: no episode_meta.npy found, falling back to shuffled"
-            )
-            return
-
-        meta = np.load(meta_path)
-        ep_ids = np.asarray(meta["episode_id"][:v0])
-        sides = np.asarray(meta["side"][:v0])
-
-        # Group row indices by (episode_id, side)
-        from collections import defaultdict
-
-        groups: dict[tuple, list[int]] = defaultdict(list)
-        for i in range(v0):
-            key = (int(ep_ids[i]), int(sides[i]))
-            groups[key].append(i)
-
-        # Sort groups by episode_id then side for deterministic order
-        sorted_keys = sorted(groups.keys())
-
-        for key in sorted_keys:
-            row_indices = groups[key]
+        """Yield the same pre-counted ordered chunks used by the work plan."""
+        for row_indices in _tbptt_groups:
             # Process this (episode, side) group in chunks
             # Yield (ob, yb, is_new_group) so trainer can reset memory at group boundary
             for ci in range(0, len(row_indices), chunk_size):
@@ -757,25 +760,11 @@ def main() -> None:
     _accum_loss_sum: float = 0.0
     _tbptt_memory = None  # F.3: persistent memory for TBPTT training
 
-    # Rich progress bar
-    try:
-        from rich.progress import (
-            Progress,
-            SpinnerColumn,
-            TextColumn,
-            BarColumn,
-            TaskProgressColumn,
-            TimeRemainingColumn,
-        )
-
-        _rich_available = True
-    except ImportError:
-        _rich_available = False
-
-    ep_t0: float = time.time()
+    validation_batches = _ceil_div(nval, a.batch)
     train_t0 = time.time()
 
     for ep in range(start_epoch, run_end_epoch):
+        ep_t0: float = time.time()
         ep_step: int = 0  # optimizer steps in this epoch
         ep_micro: int = 0  # microbatches processed in this epoch
         _running_loss = 0.0
@@ -785,38 +774,43 @@ def main() -> None:
         _accum_examples = 0
         _accum_loss_sum = 0.0
         _tbptt_memory = None  # F.3: reset memory at epoch start
-        print(f"[bc-train-mlx] === epoch {ep + 1}/{a.epochs} ===", flush=True)
+        local_epoch = ep - start_epoch + 1
+        print(
+            f"[bc-train-mlx] === epoch {ep + 1} (run {local_epoch}/{run_epochs}) ===",
+            flush=True,
+        )
 
-        # Rich progress bar for this epoch
-        _progress_bar = None
-        _progress_task = None
-        if _rich_available:
-            _progress_bar = Progress(
-                SpinnerColumn(),
-                TextColumn(
-                    "[bold blue]Epoch {task.fields[epoch]} (run {task.fields[local_epoch]}/{task.fields[total_epochs]})"
-                ),
-                BarColumn(),
-                TaskProgressColumn(),
-                TextColumn("Loss: {task.fields[loss]}"),
-                TextColumn("LR: {task.fields[lr]}"),
-                TextColumn("ETA: {task.fields[eta]}"),
-                TimeElapsedColumn(),
-                TimeRemainingColumn(),
-            )
-            _progress_bar.start()
-
-        if _progress_bar is not None:
-            _progress_task = _progress_bar.add_task(
-                "training",
-                epoch=ep + 1,
-                local_epoch=ep - start_epoch + 1,
-                total_epochs=run_epochs,
-                total=total_opt_steps,
-                loss="--",
-                lr="--",
-                eta="--",
-            )
+        # One phase-aware task per epoch. The bar is reset for validation and
+        # checkpointing, so 100% always means the displayed phase is complete.
+        _progress_bar = Progress(
+            SpinnerColumn(),
+            TextColumn(
+                "[bold blue]Epoch {task.fields[epoch]} "
+                "(run {task.fields[local_epoch]}/{task.fields[total_epochs]})"
+            ),
+            TextColumn("[bold magenta]{task.fields[phase]}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TextColumn("{task.fields[unit]}"),
+            TextColumn("Opt: {task.fields[opt]}"),
+            TextColumn("Loss: {task.fields[loss]}"),
+            TextColumn("LR: {task.fields[lr]}"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        )
+        _progress_bar.start()
+        _progress_task = _progress_bar.add_task(
+            "epoch",
+            epoch=ep + 1,
+            local_epoch=local_epoch,
+            total_epochs=run_epochs,
+            phase="train",
+            total=microbatches_per_epoch,
+            unit=f"micro 0/{microbatches_per_epoch:,}",
+            opt=f"0/{optimizer_steps_per_epoch:,}",
+            loss="--",
+            lr=f"{float(optimizer.learning_rate):.2e}",
+        )
 
         # Flatten all batches from all slabs into a single generator
         # so we can accumulate across slab boundaries
@@ -869,21 +863,19 @@ def main() -> None:
                 for ob, yb in batches(obs_np, group_np, 0, order, a.batch):
                     yield ob, yb
 
-        # F.3: TBPTT training path (opt-in, when --tbptt-chunk > 0 and episode_meta exists)
-        _use_tbptt = (
-            a.tbptt_chunk > 0
-            and mmapped
-            and os.path.exists(os.path.join(a.data, "episode_meta.npy"))
-        )
-
         if _use_tbptt:
             print(
-                f"[bc-train-mlx] F.3: TBPTT enabled (chunk={a.tbptt_chunk})", flush=True
+                f"[bc-train-mlx] F.3: TBPTT enabled "
+                f"(chunk={a.tbptt_chunk}, microbatches={microbatches_per_epoch:,}, "
+                f"optimizer_steps={optimizer_steps_per_epoch:,})",
+                flush=True,
             )
 
         _batch_iter = _tbptt_batches(a.tbptt_chunk) if _use_tbptt else _all_batches()
 
         for _batch_tuple in _batch_iter:
+            optimizer_updated = False
+            is_final_microbatch = ep_micro + 1 == microbatches_per_epoch
             if _use_tbptt:
                 ob, yb, is_new_group = _batch_tuple  # TBPTT path: 3-tuple
                 if is_new_group:
@@ -938,9 +930,10 @@ def main() -> None:
                 _micro_count += 1
 
                 # Accumulate in FP32 for numerical stability
-                if _micro_count % a.accum_steps == 0:
+                if _micro_count % a.accum_steps == 0 or is_final_microbatch:
                     optimizer_step(_accum_grads, a.accum_steps, _accum_examples)
                     ep_step += 1
+                    optimizer_updated = True
                     _running_loss += _accum_loss_sum
                     _running_n += _accum_examples
                     _accum_grads = None
@@ -967,6 +960,7 @@ def main() -> None:
                 grads = clip_grads(grads, a.max_grad_norm)
                 optimizer_step(grads, 1, micro_n)
                 ep_step += 1
+                optimizer_updated = True
                 _running_loss += loss_val * micro_n
                 _running_n += micro_n
 
@@ -977,35 +971,69 @@ def main() -> None:
 
             avg = _running_loss / max(_running_n, 1)
             elapsed_s = time.time() - ep_t0
-            steps_left = max(0, total_opt_steps - ep_step)
-            eta_step = (elapsed_s / max(ep_step, 1)) * steps_left
-            el_m, el_s = divmod(int(elapsed_s), 60)
-            el_h, el_m = divmod(el_m, 60)
-            el_str = f"{el_h}h{el_m:02d}m" if el_h else f"{el_m}m{el_s:02d}s"
-            eta_m_s, eta_s_s = divmod(int(eta_step), 60)
-            eta_h, eta_m_s = divmod(eta_m_s, 60)
-            eta_str_s = (
-                f"{eta_h}h{eta_m_s:02d}m" if eta_h else f"{eta_m_s}m{eta_s_s:02d}s"
+            microbatches_left = max(0, microbatches_per_epoch - ep_micro)
+            train_eta_s = (elapsed_s / max(ep_micro, 1)) * microbatches_left
+            elapsed_str = _format_compact_duration(elapsed_s)
+            train_eta_str = _format_compact_duration(train_eta_s)
+            _progress_bar.update(
+                _progress_task,
+                completed=ep_micro,
+                unit=f"micro {ep_micro:,}/{microbatches_per_epoch:,}",
+                opt=f"{ep_step:,}/{optimizer_steps_per_epoch:,}",
+                loss=f"{avg:.4f}",
+                lr=f"{float(optimizer.learning_rate):.2e}",
             )
-            # Rich progress bar update
-            if _progress_bar is not None:
-                _progress_bar.update(
-                    _progress_task,
-                    completed=ep_step,
-                    loss=f"{avg:.4f}",
-                    lr=f"{optimizer.learning_rate:.2e}",
-                    elapsed=el_str,
-                    eta=eta_str_s,
+
+            if (
+                a.log_interval > 0
+                and optimizer_updated
+                and ep_step % a.log_interval == 0
+            ):
+                print(
+                    f"[bc-train-mlx]   opt_step "
+                    f"{ep_step:,}/{optimizer_steps_per_epoch:,} "
+                    f"(run {gstep - run_start_gstep:,}/{run_optimizer_steps:,}) "
+                    f"micro={ep_micro:,}/{microbatches_per_epoch:,} "
+                    f"loss={avg:.4f} lr={float(optimizer.learning_rate):.2e} "
+                    f"elapsed={elapsed_str} train_ETA={train_eta_str}",
+                    flush=True,
                 )
 
-            if a.log_interval > 0:
-                if ep_step % a.log_interval == 0 and ep_step > 0:
-                    print(
-                        f"[bc-train-mlx]   opt_step {ep_step}/{total_opt_steps} "
-                        f"micro={ep_micro} loss={avg:.4f} lr={optimizer.learning_rate:.2e} "
-                        f"elapsed={el_str} ETA={eta_str_s}",
-                        flush=True,
-                    )
+        if ep_micro != microbatches_per_epoch:
+            _progress_bar.stop()
+            raise RuntimeError(
+                f"progress plan mismatch: expected {microbatches_per_epoch:,} "
+                f"microbatches, processed {ep_micro:,}"
+            )
+        if ep_step != optimizer_steps_per_epoch:
+            _progress_bar.stop()
+            raise RuntimeError(
+                f"optimizer-step plan mismatch: expected "
+                f"{optimizer_steps_per_epoch:,}, completed {ep_step:,}"
+            )
+        if _accum_grads is not None or _accum_examples != 0:
+            _progress_bar.stop()
+            raise RuntimeError("gradient accumulation was not flushed at epoch end")
+
+        print(
+            f"[bc-train-mlx] training complete: epoch {ep + 1}, "
+            f"microbatches={ep_micro:,}, optimizer_steps={ep_step:,}, "
+            f"gstep={gstep:,}; starting validation",
+            flush=True,
+        )
+        _progress_bar.reset(
+            _progress_task,
+            total=validation_batches,
+            completed=0,
+            epoch=ep + 1,
+            local_epoch=local_epoch,
+            total_epochs=run_epochs,
+            phase="validate",
+            unit=f"batch 0/{validation_batches:,}",
+            opt=f"{ep_step:,}/{optimizer_steps_per_epoch:,}",
+            loss="--",
+            lr="--",
+        )
 
         # ---- validation ----
         model.eval()
@@ -1013,7 +1041,10 @@ def main() -> None:
         am_all: list[np.ndarray] = []
         vloss: float = 0.0
         tot: int = 0
-        for ob, yb in batches(val_np, gv_np, v0, np.arange(nval), a.batch):
+        for val_batch, (ob, yb) in enumerate(
+            batches(val_np, gv_np, v0, np.arange(nval), a.batch),
+            start=1,
+        ):
             lg, _, _ = model.logits_value(ob)
             lg_np = np.asarray(lg)
             yb_np = np.asarray(yb)
@@ -1029,7 +1060,25 @@ def main() -> None:
                 np.stack([correct.astype(float), in_top3.astype(float)], axis=1)
             )
             am_all.append(np.argmax(lg_np, axis=1))
+            _progress_bar.update(
+                _progress_task,
+                completed=val_batch,
+                unit=f"batch {val_batch:,}/{validation_batches:,}",
+            )
 
+        _progress_bar.reset(
+            _progress_task,
+            total=1,
+            completed=0,
+            epoch=ep + 1,
+            local_epoch=local_epoch,
+            total_epochs=run_epochs,
+            phase="metrics",
+            unit="aggregating",
+            opt=f"{ep_step:,}/{optimizer_steps_per_epoch:,}",
+            loss="--",
+            lr="--",
+        )
         pr = np.concatenate(preds)
         c1, c3 = pr[:, 0], pr[:, 1]
         acc: float = float(c1.mean())
@@ -1042,16 +1091,19 @@ def main() -> None:
             yv_group = gv_np[np.arange(len(vi)), y[vi]]
             eq = float((gv_np[np.arange(len(vi)), am_cat] == yv_group).mean())
 
-        # Flush any remaining accumulated gradients before validation
-        if a.accum_steps > 1 and _accum_grads is not None and _accum_examples > 0:
-            optimizer_step(_accum_grads, a.accum_steps, _accum_examples)
-            ep_step += 1
-            _running_loss += _accum_loss_sum
-            _running_n += _accum_examples
-            _accum_grads = None
-            _accum_examples = 0
-            _accum_loss_sum = 0.0
-
+        _progress_bar.reset(
+            _progress_task,
+            total=1,
+            completed=0,
+            epoch=ep + 1,
+            local_epoch=local_epoch,
+            total_epochs=run_epochs,
+            phase="checkpoint",
+            unit="saving",
+            opt=f"{ep_step:,}/{optimizer_steps_per_epoch:,}",
+            loss=f"{_running_loss / max(_running_n, 1):.4f}",
+            lr=f"{float(optimizer.learning_rate):.2e}",
+        )
         # Complete checkpoint: save model, optimizer, arch_config, scheduler, seed (C.5)
         if acc > best:
             _save_checkpoint(a.out, ep, acc)
@@ -1060,7 +1112,6 @@ def main() -> None:
         # Also retain periodic snapshots so an interrupted run can resume
         # close to its latest epoch even when validation accuracy did not
         # improve. The final epoch is always retained as well.
-        local_epoch = ep - start_epoch + 1
         if local_epoch % a.checkpoint_every_epochs == 0 or ep == run_end_epoch - 1:
             periodic_path = _periodic_checkpoint_path(ep)
             _save_checkpoint(periodic_path, ep, acc)
@@ -1075,18 +1126,24 @@ def main() -> None:
         completed: int = ep - start_epoch + 1
         remaining: int = run_end_epoch - ep - 1
         eta_s: float = (elapsed / max(completed, 1)) * remaining
-        eta_m, eta_s = divmod(int(eta_s), 60)
-        eta_str: str = f"{eta_m}m{eta_s:02d}s" if eta_m else f"{eta_s}s"
+        eta_str = _format_compact_duration(eta_s)
+        _progress_bar.update(
+            _progress_task,
+            total=1,
+            completed=1,
+            phase="done",
+            unit="epoch complete",
+        )
         print(
-            f"[bc-train-mlx] ep{ep} val_acc={acc:.4f} equiv={eq:.4f} top3={t3:.4f} "
+            f"[bc-train-mlx] epoch {ep + 1} complete: "
+            f"val_acc={acc:.4f} equiv={eq:.4f} top3={t3:.4f} "
             f"atk={atk:.4f} ko={ko:.4f} loss={vloss / max(tot, 1):.4f} "
-            f"t={ep_time:.0f}s ETA={eta_str} gstep={gstep}",
+            f"t={_format_compact_duration(ep_time)} run_ETA={eta_str} "
+            f"gstep={gstep:,}",
             flush=True,
         )
 
-        # Stop Rich progress bar for this epoch
-        if _progress_bar is not None:
-            _progress_bar.stop()
+        _progress_bar.stop()
 
     # Save final best
     if a.out and os.path.exists(a.out):
