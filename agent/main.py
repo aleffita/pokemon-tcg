@@ -43,13 +43,27 @@ if os.path.isdir(_VENDOR_DIR) and _VENDOR_DIR not in sys.path:
     sys.path.append(_VENDOR_DIR)
 
 import numpy as np
-import mlx.core as mx
-import mlx.nn as nn
+
+# PyTorch is the default inference backend for local tournaments and
+# submissions. Set PTCG_INFERENCE_BACKEND=mlx to run the legacy MLX path for
+# comparison; keeping the import conditional makes the backend choice explicit
+# rather than silently mixing runtimes.
+_INFERENCE_BACKEND = os.environ.get("PTCG_INFERENCE_BACKEND", "torch").strip().lower()
+if _INFERENCE_BACKEND not in {"mlx", "torch"}:
+    raise ValueError(
+        f"PTCG_INFERENCE_BACKEND must be 'mlx' or 'torch', got {_INFERENCE_BACKEND!r}"
+    )
+if _INFERENCE_BACKEND == "mlx":
+    import mlx.core as mx
+    import mlx.nn as nn
+    from rl.policy_mlx import build_token_net_mlx
+else:
+    import torch
+    from rl.policy_infer_torch import load_mlx_checkpoint
 
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import TokenEncoder, GameTracker, AbilityTracker, SUBMIT_ACTION
 from rl.encoder.enc_constants import MAX_OPTIONS
-from rl.policy_mlx import build_token_net_mlx
 from rl.train_config import TrainConfig
 
 _DECK_PATH = os.path.join(_AGENT_DIR, "deck.csv")
@@ -88,11 +102,8 @@ _DEFAULT_CFG: dict[str, Any] = {
 }
 
 
-def _load_model():
-    """Load the BC model from MLX checkpoint."""
-    if _MODEL_PATH is None:
-        return None
-
+def _load_model_mlx():
+    """Load the BC model from an MLX checkpoint (default backend)."""
     import pickle
     with open(_MODEL_PATH, "rb") as f:
         state = pickle.load(f)
@@ -129,6 +140,27 @@ def _load_model():
     acc = state.get("val_acc", "?")
     print(f"[bc-agent] loaded MLX model {_MODEL_PATH} (val_acc={acc})")
     return net
+
+
+def _load_model_torch():
+    """Load the same checkpoint into the strict PyTorch inference mirror.
+
+    Loading is strict: a shape/parameter mismatch raises rather than falling
+    back to a partial model, so a broken checkpoint is loud, not silent.
+    """
+    net, cfg = load_mlx_checkpoint(_MODEL_PATH, _CARD_TABLE)
+    print(f"[bc-agent] loaded PyTorch mirror {_MODEL_PATH} "
+          f"(nlayers={cfg['nlayers']}, scratch={cfg['scratch_registers']})")
+    return net
+
+
+def _load_model():
+    """Load the BC model for the selected backend."""
+    if _MODEL_PATH is None:
+        return None
+    if _INFERENCE_BACKEND == "mlx":
+        return _load_model_mlx()
+    return _load_model_torch()
 
 
 _LOADED_MODEL = _load_model()
@@ -175,16 +207,35 @@ def _get_tracker(side: int):
     return st
 
 
-def _build_mlx_tensors(encoded: dict, int_keys: set) -> dict[str, mx.array]:
-    """Convert encoded numpy arrays to MLX arrays with FP16 for numerics (E.4)."""
+def _build_tensors(encoded: dict, int_keys: set) -> dict:
+    """Convert encoded numpy arrays to backend tensors with FP16 numerics (E.4).
+
+    IDs stay integer; every numeric feature is FP16 in both backends, matching
+    the project's FP16 inference contract.
+    """
     ob = {}
-    for k, v in encoded.items():
-        arr = np.asarray(v)
-        if k in int_keys:
-            ob[k] = mx.array(arr.astype(np.int32)).reshape(1, *arr.shape)
-        else:
-            ob[k] = mx.array(arr.astype(np.float16)).reshape(1, *arr.shape)
+    if _INFERENCE_BACKEND == "mlx":
+        for k, v in encoded.items():
+            arr = np.asarray(v)
+            if k in int_keys:
+                ob[k] = mx.array(arr.astype(np.int32)).reshape(1, *arr.shape)
+            else:
+                ob[k] = mx.array(arr.astype(np.float16)).reshape(1, *arr.shape)
+    else:
+        for k, v in encoded.items():
+            arr = np.asarray(v)
+            if k in int_keys:
+                ob[k] = torch.as_tensor(arr.astype(np.int64)).reshape(1, *arr.shape)
+            else:
+                ob[k] = torch.as_tensor(arr.astype(np.float16)).reshape(1, *arr.shape)
     return ob
+
+
+def _logits_to_numpy(logits) -> np.ndarray:
+    """Flatten backend logits to a 1-D numpy vector for masking/argmax."""
+    if _INFERENCE_BACKEND == "mlx":
+        return np.asarray(logits).flatten()
+    return logits.detach().to(torch.float32).numpy().flatten()
 
 
 def _autoregressive_select(
@@ -194,8 +245,8 @@ def _autoregressive_select(
     options: list,
     min_count: int,
     max_count: int,
-    memory_in: mx.array | None = None,
-) -> tuple[list[int], mx.array | None]:
+    memory_in=None,
+) -> tuple[list[int], Any]:
     """Autoregressive multi-select: pick options one at a time, masking already-picked.
 
     For each substep:
@@ -221,13 +272,17 @@ def _autoregressive_select(
     current_memory = memory_in
 
     for _substep in range(max_count):
-        # Build MLX tensors (FP16 for numerics)
-        ob = _build_mlx_tensors(encoded, int_keys)
+        # Build backend tensors (FP16 for numerics)
+        ob = _build_tensors(encoded, int_keys)
 
         # Forward pass with memory
-        logits, _, memory_out = model.logits_value(ob, memory_in=current_memory)
+        if _INFERENCE_BACKEND == "torch":
+            with torch.inference_mode():
+                logits, _, memory_out = model.logits_value(ob, memory_in=current_memory)
+        else:
+            logits, _, memory_out = model.logits_value(ob, memory_in=current_memory)
         current_memory = memory_out
-        logits_np = np.asarray(logits).flatten()
+        logits_np = _logits_to_numpy(logits)
 
         # Mask illegal options
         action_mask = np.asarray(encoded["action_mask"]).flatten()
