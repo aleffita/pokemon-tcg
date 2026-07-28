@@ -78,6 +78,7 @@ class TrainConfig:
     # Output
     checkpoint_dir: str = "model/checkpoint"
     model_dir: str = "model/bc_model"
+    checkpoint_every_epochs: int = 1
 
     # Kaggle
     kaggle_competition: str = "pokemon-tcg-ai-battle"

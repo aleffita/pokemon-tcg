@@ -11,7 +11,7 @@
   "prefetch": true,
   "compile": false,
   "log_interval": -1,
-  "epochs": 100,
+  "epochs": 1,
   "batch_size": 8192,
   "accum_steps": 1,
   "lr": 0.0002457,
@@ -32,9 +32,10 @@
   "bc_both_sides": true,
   "value_atoms": 51,
   "value_vmax": 1.0,
-  "tbptt_chunk": 128,
+  "tbptt_chunk": 32,
   "data_dir": "data/bc_data",
   "replay_zip_dir": "data/bc_replay_zip",
   "checkpoint_dir": "model/checkpoint",
-  "model_dir": "model/bc_model"
+  "model_dir": "model/bc_model",
+  "checkpoint_every_epochs": 10
 }

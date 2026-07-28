@@ -12,6 +12,10 @@ Usage:
 """
 
 from rich.progress import TimeElapsedColumn
+from datetime import timedelta
+
+from rich.progress import ProgressColumn
+from rich.text import Text
 import argparse
 import os
 from pathlib import Path
@@ -33,6 +37,54 @@ from rl.lr_schedule import lr_at
 from rl.train_config import load_config
 
 WK_LO, WK_HI = OPT_WK, OPT_WK + 3
+
+
+def _format_progress_duration(seconds: float | None) -> str:
+    """Format a duration like Rich's elapsed-time column."""
+    if seconds is None:
+        return "-:--:--"
+    return str(timedelta(seconds=max(0, int(seconds))))
+
+
+def _format_compact_duration(seconds: float | None) -> str:
+    """Format a duration for the human-readable ETA field."""
+    if seconds is None:
+        return "--"
+    minutes, seconds = divmod(max(0, int(seconds)), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m{seconds:02d}s"
+
+
+class _GlobalElapsedColumn(ProgressColumn):
+    """Elapsed time since this training invocation started."""
+
+    def __init__(self, started_at: float):
+        super().__init__()
+        self.started_at = started_at
+
+    def render(self, task) -> Text:
+        elapsed = time.monotonic() - self.started_at
+        return Text(_format_progress_duration(elapsed), style="yellow")
+
+
+class _GlobalTimeRemainingColumn(ProgressColumn):
+    """ETA for the complete run, independent of the current epoch task."""
+
+    def __init__(self, started_at: float, progress_state: dict, total_steps: int):
+        super().__init__()
+        self.started_at = started_at
+        self.progress_state = progress_state
+        self.total_steps = max(1, total_steps)
+
+    def render(self, task) -> Text:
+        elapsed = max(0.0, time.monotonic() - self.started_at)
+        completed = min(self.total_steps, self.progress_state["completed"])
+        if completed <= 0:
+            return Text("-:--:--", style="blue")
+        remaining = elapsed * (self.total_steps - completed) / completed
+        return Text(_format_progress_duration(remaining), style="blue")
 
 
 def read_rows(arr: np.ndarray, start: int, stop: int) -> np.ndarray:
@@ -156,6 +208,12 @@ def main() -> None:
     # Output
     p.add_argument("--out", default=None)
     p.add_argument("--resume", default=None)
+    p.add_argument(
+        "--checkpoint-every-epochs",
+        type=int,
+        default=None,
+        help="Save a numbered checkpoint every N epochs (default: config or 1)",
+    )
     a = p.parse_args()
 
     # Load config: CLI > config file > defaults
@@ -187,6 +245,7 @@ def main() -> None:
         "val_frac": "val_frac",
         "slab_rows": "slab_rows",
         "max_rows": "max_rows",
+        "checkpoint_every_epochs": "checkpoint_every_epochs",
     }
     cli = {}
     for cli_attr, cfg_key in _CLI_MAP.items():
@@ -228,6 +287,15 @@ def main() -> None:
     a.val_frac = a.val_frac if a.val_frac is not None else cfg.val_frac
     a.slab_rows = a.slab_rows if a.slab_rows is not None else cfg.slab_rows
     a.max_rows = a.max_rows if a.max_rows is not None else cfg.max_rows
+    a.checkpoint_every_epochs = (
+        a.checkpoint_every_epochs
+        if a.checkpoint_every_epochs is not None
+        else cfg.checkpoint_every_epochs
+    )
+    if a.checkpoint_every_epochs <= 0:
+        raise ValueError(
+            f"checkpoint_every_epochs must be positive, got {a.checkpoint_every_epochs}"
+        )
     a.out = a.out or "model/checkpoint/bc_best_mlx.pkl"
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
@@ -521,7 +589,33 @@ def main() -> None:
         flush=True,
     )
 
-    train_t0 = time.time()
+    def _checkpoint_payload(epoch: int, val_acc: float) -> dict:
+        return {
+            "model": model.parameters(),
+            "optimizer": optimizer.state,
+            "arch_config": model.get_config(),
+            "epoch": epoch,
+            "gstep": gstep,
+            "val_acc": val_acc,
+            "seed": a.seed,
+            "dataset_path": a.data,
+            "accum_steps": a.accum_steps,
+        }
+
+    def _save_checkpoint(path: str, epoch: int, val_acc: float) -> None:
+        import pickle
+
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(_checkpoint_payload(epoch, val_acc), f)
+
+    def _periodic_checkpoint_path(epoch: int) -> str:
+        out_path = Path(a.out)
+        return str(
+            out_path.with_name(
+                f"{out_path.stem}_epoch_{epoch + 1:04d}{out_path.suffix}"
+            )
+        )
 
     # --- graph-safe gradient clipping (C.3) ---
     def clip_grads(grads, max_norm):
@@ -679,27 +773,7 @@ def main() -> None:
         _rich_available = False
 
     ep_t0: float = time.time()
-
-    epp = 0
-
-    # Rich progress bar for this epoch
-    _progress_bar = None
-    _progress_task = None
-    if _rich_available:
-        _progress_bar = Progress(
-            SpinnerColumn(),
-            TextColumn(
-                "[bold blue]Epoch {task.fields[epoch]} (run {task.fields[local_epoch]}/{task.fields[total_epochs]})"
-            ),
-            BarColumn(),
-            TaskProgressColumn(),
-            TextColumn("Loss: {task.fields[loss]}"),
-            TextColumn("LR: {task.fields[lr]}"),
-            TextColumn("ETA: {task.fields[eta]}"),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-        )
-        _progress_bar.start()
+    train_t0 = time.time()
 
     for ep in range(start_epoch, run_end_epoch):
         ep_step: int = 0  # optimizer steps in this epoch
@@ -713,18 +787,36 @@ def main() -> None:
         _tbptt_memory = None  # F.3: reset memory at epoch start
         print(f"[bc-train-mlx] === epoch {ep + 1}/{a.epochs} ===", flush=True)
 
+        # Rich progress bar for this epoch
+        _progress_bar = None
+        _progress_task = None
+        if _rich_available:
+            _progress_bar = Progress(
+                SpinnerColumn(),
+                TextColumn(
+                    "[bold blue]Epoch {task.fields[epoch]} (run {task.fields[local_epoch]}/{task.fields[total_epochs]})"
+                ),
+                BarColumn(),
+                TaskProgressColumn(),
+                TextColumn("Loss: {task.fields[loss]}"),
+                TextColumn("LR: {task.fields[lr]}"),
+                TextColumn("ETA: {task.fields[eta]}"),
+                TimeElapsedColumn(),
+                TimeRemainingColumn(),
+            )
+            _progress_bar.start()
+
         if _progress_bar is not None:
             _progress_task = _progress_bar.add_task(
                 "training",
                 epoch=ep + 1,
                 local_epoch=ep - start_epoch + 1,
                 total_epochs=run_epochs,
-                total=total_opt_steps * (run_end_epoch - (start_epoch + epp)),
+                total=total_opt_steps,
                 loss="--",
                 lr="--",
                 eta="--",
             )
-            epp += 1
 
         # Flatten all batches from all slabs into a single generator
         # so we can accumulate across slab boundaries
@@ -962,24 +1054,21 @@ def main() -> None:
 
         # Complete checkpoint: save model, optimizer, arch_config, scheduler, seed (C.5)
         if acc > best:
-            import pickle
-
-            with open(a.out, "wb") as f:
-                pickle.dump(
-                    {
-                        "model": model.parameters(),
-                        "optimizer": optimizer.state,
-                        "arch_config": model.get_config(),
-                        "epoch": ep,
-                        "gstep": gstep,
-                        "val_acc": acc,
-                        "seed": a.seed,
-                        "dataset_path": a.data,
-                        "accum_steps": a.accum_steps,
-                    },
-                    f,
-                )
+            _save_checkpoint(a.out, ep, acc)
         best = max(best, acc)
+
+        # Also retain periodic snapshots so an interrupted run can resume
+        # close to its latest epoch even when validation accuracy did not
+        # improve. The final epoch is always retained as well.
+        local_epoch = ep - start_epoch + 1
+        if local_epoch % a.checkpoint_every_epochs == 0 or ep == run_end_epoch - 1:
+            periodic_path = _periodic_checkpoint_path(ep)
+            _save_checkpoint(periodic_path, ep, acc)
+            print(
+                f"[bc-train-mlx] checkpoint saved: {periodic_path} "
+                f"(epoch {ep + 1}, val_acc={acc:.4f})",
+                flush=True,
+            )
 
         ep_time: float = time.time() - ep_t0
         elapsed: float = time.time() - train_t0
@@ -994,6 +1083,7 @@ def main() -> None:
             f"t={ep_time:.0f}s ETA={eta_str} gstep={gstep}",
             flush=True,
         )
+
         # Stop Rich progress bar for this epoch
         if _progress_bar is not None:
             _progress_bar.stop()

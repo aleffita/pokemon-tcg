@@ -5,6 +5,10 @@
   "description": "Configuration schema for the Pokémon TCG MLX training pipeline. Hierarchy: CLI args > --config file > configs/train_config.json > hardcoded defaults.",
   "type": "object",
   "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional JSON Schema reference embedded in the configuration file."
+    },
     "d_model": {
       "type": "integer",
       "default": 128,
@@ -187,6 +191,13 @@
       "type": "string",
       "default": "model/bc_model",
       "description": "Directory for the final best model. Copied from checkpoint_dir at end of training."
+    },
+    "checkpoint_every_epochs": {
+      "type": "integer",
+      "default": 1,
+      "description": "Save a numbered training checkpoint every N epochs. The final epoch is always saved, and --out remains reserved for the best checkpoint.",
+      "minimum": 1,
+      "maximum": 1000
     },
     "bc_workers": {
       "type": "integer",
