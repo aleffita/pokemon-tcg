@@ -139,11 +139,13 @@ def _find_or_create_deck(db, card_ids: list[int]) -> int:
 
 
 def _get_test_decks(db) -> list[tuple[list[int], int | None]]:
-    """Get test decks for sweep: [default_deck] + top 3 from local deck Elo.
+    """Get alternative decks for OUR agent's deck sweep only.
 
-    Returns list of (card_ids, deck_id) tuples. deck_id may be None for the
-    default deck if it hasn't been added to the DB yet.
-    Deduplicates using Counter-based matching (same as _find_or_create_deck).
+    Returns ``(card_ids, deck_id)`` tuples. The caller rewrites only
+    ``agent/deck.csv`` and calls our module's ``reload_deck()``. Opponent
+    callables are loaded once and their own deck files are never rewritten.
+    deck_id may be None for the default deck if it has not been added to the
+    DB yet. Entries are deduplicated by quantity-aware composition matching.
     """
     from collections import Counter
 
@@ -487,7 +489,10 @@ def main():
     # Prepare test decks for sweep
     from rl.results_db import ResultsDB
     db = ResultsDB()
-    test_decks = _get_test_decks(db)
+    # The sweep belongs exclusively to our agent. Opponent agents are resolved
+    # once below and their own deck files/callables remain fixed for every
+    # alternative deck we test against them.
+    our_test_decks = _get_test_decks(db)
     default_card_ids = _read_deck_csv(os.path.join(AGENT_DIR, "deck.csv"))
 
     # Read original deck to restore after sweep
@@ -517,10 +522,10 @@ def main():
     if args.note:
         print(f"Note: {args.note}", flush=True)
 
-    do_sweep = (not args.no_sweep) and len(test_decks) > 1
+    do_sweep = (not args.no_sweep) and len(our_test_decks) > 1
     if do_sweep:
-        print(f"Sweep: {len(test_decks)} decks per opponent "
-              f"(default + {len(test_decks) - 1} from deck_elo)\n", flush=True)
+        print(f"Sweep: {len(our_test_decks)} OUR decks per opponent "
+              f"(default + {len(our_test_decks) - 1} from deck_elo)\n", flush=True)
 
     for label, opp_path in opponents:
         try:
@@ -531,7 +536,7 @@ def main():
 
         if do_sweep:
             # Run each test deck against this opponent
-            for card_ids, deck_id in test_decks:
+            for card_ids, deck_id in our_test_decks:
                 if deck_id is None and default_card_ids is not None:
                     deck_id = _find_or_create_deck(db, default_card_ids)
                 deck_label = f"{label} [deck:{deck_id}]"
