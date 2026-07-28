@@ -280,6 +280,14 @@ def main() -> None:
         print(f"[bc-train-mlx] resumed from {a.resume} (epoch {start_epoch}, "
               f"val_acc={best:.4f}, gstep={gstep})")
 
+    # ``--epochs`` is the number of epochs for THIS invocation. The checkpoint
+    # epoch is an absolute history counter used only to continue numbering.
+    run_epochs = int(a.epochs)
+    if run_epochs <= 0:
+        raise ValueError(f"epochs must be positive for this run, got {run_epochs}")
+    print(f"[bc-train-mlx] this run: {run_epochs} epoch(s) "
+          f"(global start={start_epoch + 1})", flush=True)
+
     # Optimizer
     optimizer = optim.Adam(learning_rate=a.lr)
 
@@ -364,8 +372,11 @@ def main() -> None:
     # --- slab boundaries and total optimizer steps (C.4) ---
     slab_bounds = [(s, min(s + a.slab_rows, v0)) for s in range(0, v0, a.slab_rows)]
     steps_per_epoch = max(1, sum((e0 - s0 + a.batch - 1) // a.batch for s0, e0 in slab_bounds))
-    total_opt_steps = a.epochs * max(1, steps_per_epoch // a.accum_steps)
+    total_opt_steps = run_epochs * max(1, steps_per_epoch // a.accum_steps)
     warmup_steps = min(a.warmup_steps, max(1, total_opt_steps // 5))
+    run_end_epoch = start_epoch + run_epochs
+    print(f"[bc-train-mlx] global epoch range: {start_epoch + 1}-{run_end_epoch} "
+          f"(local epochs={run_epochs})", flush=True)
 
     train_t0 = time.time()
 
@@ -496,7 +507,7 @@ def main() -> None:
     except ImportError:
         _rich_available = False
 
-    for ep in range(start_epoch, a.epochs):
+    for ep in range(start_epoch, run_end_epoch):
         ep_t0: float = time.time()
         ep_step: int = 0  # optimizer steps in this epoch
         ep_micro: int = 0  # microbatches processed in this epoch
@@ -515,7 +526,7 @@ def main() -> None:
         if _rich_available:
             _progress_bar = Progress(
                 SpinnerColumn(),
-                TextColumn("[bold blue]Epoch {task.fields[epoch]}/{task.fields[total_epochs]}"),
+                TextColumn("[bold blue]Epoch {task.fields[epoch]} (run {task.fields[local_epoch]}/{task.fields[total_epochs]})"),
                 BarColumn(),
                 TaskProgressColumn(),
                 TextColumn("Loss: {task.fields[loss]}"),
@@ -527,7 +538,8 @@ def main() -> None:
             _progress_task = _progress_bar.add_task(
                 "training",
                 epoch=ep + 1,
-                total_epochs=a.epochs,
+                local_epoch=ep - start_epoch + 1,
+                total_epochs=run_epochs,
                 total=total_opt_steps,
                 loss="--",
                 lr="--",
@@ -748,7 +760,7 @@ def main() -> None:
         ep_time: float = time.time() - ep_t0
         elapsed: float = time.time() - train_t0
         completed: int = ep - start_epoch + 1
-        remaining: int = a.epochs - ep - 1
+        remaining: int = run_end_epoch - ep - 1
         eta_s: float = (elapsed / max(completed, 1)) * remaining
         eta_m, eta_s = divmod(int(eta_s), 60)
         eta_str: str = f"{eta_m}m{eta_s:02d}s" if eta_m else f"{eta_s}s"
