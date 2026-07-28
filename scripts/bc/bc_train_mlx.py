@@ -10,6 +10,7 @@ Usage:
   uv run tcg-train data/bc_data/bc_2026_07_21 \
       --d-model 128 --static --split-heads --epochs 8 --batch 128
 """
+
 import argparse
 import os
 from pathlib import Path
@@ -38,8 +39,12 @@ def read_rows(arr: np.ndarray, start: int, stop: int) -> np.ndarray:
     if not isinstance(arr, np.memmap):
         return np.asarray(arr[start:stop])
     rowel = int(np.prod(arr.shape[1:], dtype=np.int64))
-    flat = np.fromfile(arr.filename, dtype=arr.dtype, count=(stop - start) * rowel,
-                       offset=arr.offset + start * rowel * arr.dtype.itemsize)
+    flat = np.fromfile(
+        arr.filename,
+        dtype=arr.dtype,
+        count=(stop - start) * rowel,
+        offset=arr.offset + start * rowel * arr.dtype.itemsize,
+    )
     return flat.reshape((stop - start,) + arr.shape[1:])
 
 
@@ -54,49 +59,97 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Config hierarchy: CLI args > --config file > configs/train_config.json > defaults",
     )
-    p.add_argument("data", nargs="?", default=None,
-                   help="Dataset directory (default: most recent in data_dir)")
+    p.add_argument(
+        "data",
+        nargs="?",
+        default=None,
+        help="Dataset directory (default: most recent in data_dir)",
+    )
     p.add_argument("--config", default=None, help="Path to JSON config file")
     # Architecture
     p.add_argument("--d-model", type=int, default=None)
     p.add_argument("--nhead", type=int, default=None)
     p.add_argument("--nlayers", type=int, default=None)
     p.add_argument("--ff", type=int, default=None, help="FFN width (default 4*d_model)")
-    p.add_argument("--static", type=_bool_arg, default=None, metavar="true|false",
-                   help="Static card features (default: config or true)")
-    p.add_argument("--split-heads", type=_bool_arg, default=None, metavar="true|false",
-                   help="Dedicated value/submit heads")
-    p.add_argument("--structured", type=_bool_arg, default=None, metavar="true|false",
-                   help="Verb-conditioned action head")
-    p.add_argument("--scratch-registers", type=int, default=None,
-                   help="Number of scratch/workspace tokens (default: config or 4)")
-    p.add_argument("--value-atoms", type=int, default=None,
-                   help="Categorical value head atom count")
-    p.add_argument("--value-vmax", type=float, default=None,
-                   help="Categorical value head max absolute value")
+    p.add_argument(
+        "--static",
+        type=_bool_arg,
+        default=None,
+        metavar="true|false",
+        help="Static card features (default: config or true)",
+    )
+    p.add_argument(
+        "--split-heads",
+        type=_bool_arg,
+        default=None,
+        metavar="true|false",
+        help="Dedicated value/submit heads",
+    )
+    p.add_argument(
+        "--structured",
+        type=_bool_arg,
+        default=None,
+        metavar="true|false",
+        help="Verb-conditioned action head",
+    )
+    p.add_argument(
+        "--scratch-registers",
+        type=int,
+        default=None,
+        help="Number of scratch/workspace tokens (default: config or 4)",
+    )
+    p.add_argument(
+        "--value-atoms",
+        type=int,
+        default=None,
+        help="Categorical value head atom count",
+    )
+    p.add_argument(
+        "--value-vmax",
+        type=float,
+        default=None,
+        help="Categorical value head max absolute value",
+    )
     # Training
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--batch", type=int, default=None)
-    p.add_argument("--accum-steps", type=int, default=None,
-                   help="Gradient accumulation microbatches")
+    p.add_argument(
+        "--accum-steps",
+        type=int,
+        default=None,
+        help="Gradient accumulation microbatches",
+    )
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--lr-schedule", choices=["cosine", "linear", "none"], default=None)
     p.add_argument("--warmup-steps", type=int, default=None)
     p.add_argument("--lr-min-ratio", type=float, default=None)
     p.add_argument("--max-grad-norm", type=float, default=None)
     p.add_argument("--seed", type=int, default=None)
-    p.add_argument("--tbptt-chunk", type=int, default=None,
-                   help="TBPTT chunk size (0=disabled)")
+    p.add_argument(
+        "--tbptt-chunk", type=int, default=None, help="TBPTT chunk size (0=disabled)"
+    )
     # Trainer options
-    p.add_argument("--compile", type=_bool_arg, default=None, metavar="true|false",
-                   help="mx.compile the loss function")
-    p.add_argument("--prefetch", type=_bool_arg, default=None, metavar="true|false",
-                   help="Prefetch next slab on CPU while GPU trains")
+    p.add_argument(
+        "--compile",
+        type=_bool_arg,
+        default=None,
+        metavar="true|false",
+        help="mx.compile the loss function",
+    )
+    p.add_argument(
+        "--prefetch",
+        type=_bool_arg,
+        default=None,
+        metavar="true|false",
+        help="Prefetch next slab on CPU while GPU trains",
+    )
     p.add_argument("--log-interval", type=int, default=None)
     # Data
     p.add_argument("--val-frac", type=float, default=None)
     p.add_argument("--slab-rows", type=int, default=None)
-    p.add_argument("--max-rows", type=int, default=None, help="Max training rows (0=all)")
+    p.add_argument(
+        "--max-rows", type=int, default=None, help="Max training rows (0=all)"
+    )
     p.add_argument("--zero-wouldko", action="store_true", default=None)
     p.add_argument("--dedup", action="store_true", default=None)
     # Output
@@ -107,16 +160,32 @@ def main() -> None:
     # Load config: CLI > config file > defaults
     # Every TrainConfig field is overridable from CLI
     _CLI_MAP = {
-        "d_model": "d_model", "nhead": "nhead", "nlayers": "nlayers",
-        "ff": "ff_dim", "static": "static", "split_heads": "split_heads",
-        "structured": "structured", "scratch_registers": "scratch_registers",
-        "value_atoms": "value_atoms", "value_vmax": "value_vmax",
-        "epochs": "epochs", "batch": "batch_size", "accum_steps": "accum_steps",
-        "lr": "lr", "lr_schedule": "lr_schedule", "warmup_steps": "warmup_steps",
-        "lr_min_ratio": "lr_min_ratio", "max_grad_norm": "max_grad_norm",
-        "seed": "seed", "tbptt_chunk": "tbptt_chunk",
-        "compile": "compile", "prefetch": "prefetch", "log_interval": "log_interval",
-        "val_frac": "val_frac", "slab_rows": "slab_rows", "max_rows": "max_rows",
+        "d_model": "d_model",
+        "nhead": "nhead",
+        "nlayers": "nlayers",
+        "ff": "ff_dim",
+        "static": "static",
+        "split_heads": "split_heads",
+        "structured": "structured",
+        "scratch_registers": "scratch_registers",
+        "value_atoms": "value_atoms",
+        "value_vmax": "value_vmax",
+        "epochs": "epochs",
+        "batch": "batch_size",
+        "accum_steps": "accum_steps",
+        "lr": "lr",
+        "lr_schedule": "lr_schedule",
+        "warmup_steps": "warmup_steps",
+        "lr_min_ratio": "lr_min_ratio",
+        "max_grad_norm": "max_grad_norm",
+        "seed": "seed",
+        "tbptt_chunk": "tbptt_chunk",
+        "compile": "compile",
+        "prefetch": "prefetch",
+        "log_interval": "log_interval",
+        "val_frac": "val_frac",
+        "slab_rows": "slab_rows",
+        "max_rows": "max_rows",
     }
     cli = {}
     for cli_attr, cfg_key in _CLI_MAP.items():
@@ -133,7 +202,11 @@ def main() -> None:
     a.static = a.static if a.static is not None else cfg.static
     a.split_heads = a.split_heads if a.split_heads is not None else cfg.split_heads
     a.structured = a.structured if a.structured is not None else cfg.structured
-    a.scratch_registers = a.scratch_registers if a.scratch_registers is not None else cfg.scratch_registers
+    a.scratch_registers = (
+        a.scratch_registers
+        if a.scratch_registers is not None
+        else cfg.scratch_registers
+    )
     a.value_atoms = a.value_atoms if a.value_atoms is not None else cfg.value_atoms
     a.value_vmax = a.value_vmax if a.value_vmax is not None else cfg.value_vmax
     a.epochs = a.epochs if a.epochs is not None else cfg.epochs
@@ -143,7 +216,9 @@ def main() -> None:
     a.lr_schedule = a.lr_schedule if a.lr_schedule is not None else cfg.lr_schedule
     a.warmup_steps = a.warmup_steps if a.warmup_steps is not None else cfg.warmup_steps
     a.lr_min_ratio = a.lr_min_ratio if a.lr_min_ratio is not None else cfg.lr_min_ratio
-    a.max_grad_norm = a.max_grad_norm if a.max_grad_norm is not None else cfg.max_grad_norm
+    a.max_grad_norm = (
+        a.max_grad_norm if a.max_grad_norm is not None else cfg.max_grad_norm
+    )
     a.seed = a.seed if a.seed is not None else cfg.seed
     a.tbptt_chunk = a.tbptt_chunk if a.tbptt_chunk is not None else cfg.tbptt_chunk
     a.compile = a.compile if a.compile is not None else cfg.compile
@@ -163,7 +238,13 @@ def main() -> None:
     # Auto-detect dataset: use most recent if not specified
     if a.data is None:
         data_dir = Path(cfg.data_dir)
-        datasets = sorted([d for d in data_dir.iterdir() if d.is_dir() and (d / "__labels__.npy").exists()])
+        datasets = sorted(
+            [
+                d
+                for d in data_dir.iterdir()
+                if d.is_dir() and (d / "__labels__.npy").exists()
+            ]
+        )
         if not datasets:
             print(f"[bc-train-mlx] ERROR: No datasets found in {data_dir}")
             return
@@ -173,8 +254,11 @@ def main() -> None:
     # --- data loading (igual ao PyTorch) ---
     mmapped = os.path.isdir(a.data)
     if mmapped:
-        d = {f[:-4]: np.load(os.path.join(a.data, f), mmap_mode="r")
-             for f in sorted(os.listdir(a.data)) if f.endswith(".npy")}
+        d = {
+            f[:-4]: np.load(os.path.join(a.data, f), mmap_mode="r")
+            for f in sorted(os.listdir(a.data))
+            if f.endswith(".npy")
+        }
     else:
         z = np.load(a.data)
         d = {k: z[k] for k in z.files}
@@ -183,10 +267,17 @@ def main() -> None:
     # Apply max_rows limit (for smoke testing)
     if a.max_rows and a.max_rows > 0:
         N = min(N, a.max_rows)
-        print(f"[bc-train-mlx] limited to {a.max_rows} rows (max_rows={a.max_rows})", flush=True)
+        print(
+            f"[bc-train-mlx] limited to {a.max_rows} rows (max_rows={a.max_rows})",
+            flush=True,
+        )
 
     labels = read_rows(d["__labels__"], 0, N)
-    keys = [k for k in d if k not in ("__labels__", "__is_attack__", "__group__", "episode_meta")]
+    keys = [
+        k
+        for k in d
+        if k not in ("__labels__", "__is_attack__", "__group__", "episode_meta")
+    ]
     obs_np = {k: d[k] for k in keys}
     group_np = d.get("__group__")
 
@@ -200,7 +291,11 @@ def main() -> None:
             _g = read_rows(group_np, _s, _e)
             labels[_s:_e] = _g[np.arange(_e - _s), labels[_s:_e]]
     y = labels.astype(np.int32)
-    is_attack = read_rows(d["__is_attack__"], 0, N).astype(bool) if "__is_attack__" in d else np.zeros(N, dtype=bool)
+    is_attack = (
+        read_rows(d["__is_attack__"], 0, N).astype(bool)
+        if "__is_attack__" in d
+        else np.zeros(N, dtype=bool)
+    )
 
     # D.4: Episode-level val split (snap to episode boundary if metadata available)
     nval = max(1, int(N * a.val_frac))
@@ -215,14 +310,23 @@ def main() -> None:
             if len(valid_boundaries) > 0:
                 v0 = int(valid_boundaries[-1])
                 nval = N - v0
-                print(f"[bc-train-mlx] D.4: episode-level split at row {v0} "
-                      f"({v0} train, {nval} val)", flush=True)
+                print(
+                    f"[bc-train-mlx] D.4: episode-level split at row {v0} "
+                    f"({v0} train, {nval} val)",
+                    flush=True,
+                )
             else:
-                print(f"[bc-train-mlx] D.4: no episode boundary before {N - nval}, "
-                      f"using tail split at {v0}", flush=True)
+                print(
+                    f"[bc-train-mlx] D.4: no episode boundary before {N - nval}, "
+                    f"using tail split at {v0}",
+                    flush=True,
+                )
         except Exception as e:
-            print(f"[bc-train-mlx] D.4: failed to load episode_meta ({e}), "
-                  f"using tail split at {v0}", flush=True)
+            print(
+                f"[bc-train-mlx] D.4: failed to load episode_meta ({e}), "
+                f"using tail split at {v0}",
+                flush=True,
+            )
     idx = np.arange(N)
     vi, ti = idx[v0:], idx[:v0]
 
@@ -238,12 +342,19 @@ def main() -> None:
     int_keys = set(enc.int_keys)
 
     # --- model (MLX!) ---
-    net_cfg = {"arch": "transformer2", "d_model": a.d_model,
-               "nhead": a.nhead, "nlayers": a.nlayers, "ff": a.ff,
-               "static": a.static, "structured": a.structured,
-               "split_heads": a.split_heads,
-               "scratch_registers": a.scratch_registers,
-               "value_atoms": a.value_atoms, "value_vmax": a.value_vmax}
+    net_cfg = {
+        "arch": "transformer2",
+        "d_model": a.d_model,
+        "nhead": a.nhead,
+        "nlayers": a.nlayers,
+        "ff": a.ff,
+        "static": a.static,
+        "structured": a.structured,
+        "split_heads": a.split_heads,
+        "scratch_registers": a.scratch_registers,
+        "value_atoms": a.value_atoms,
+        "value_vmax": a.value_vmax,
+    }
     model = build_token_net_mlx(ct, net_cfg)
 
     # Resume from checkpoint
@@ -252,6 +363,7 @@ def main() -> None:
     gstep = 0
     if a.resume:
         import pickle
+
         with open(a.resume, "rb") as f:
             state = pickle.load(f)
         model_params = state["model"]
@@ -270,30 +382,40 @@ def main() -> None:
                 if k in cur_cfg and cur_cfg[k] != v:
                     mismatches.append(f"{k}: saved={v} current={cur_cfg[k]}")
             if mismatches:
-                print(f"[bc-train-mlx] WARNING: arch_config mismatch: {', '.join(mismatches)}")
-                print(f"[bc-train-mlx] proceeding anyway — results may be invalid")
+                print(
+                    f"[bc-train-mlx] WARNING: arch_config mismatch: {', '.join(mismatches)}"
+                )
+                print("[bc-train-mlx] proceeding anyway — results may be invalid")
             else:
-                print(f"[bc-train-mlx] arch_config validated OK")
+                print("[bc-train-mlx] arch_config validated OK")
         else:
-            print(f"[bc-train-mlx] WARNING: no arch_config in checkpoint (old format) — "
-                  f"proceeding without validation")
-        print(f"[bc-train-mlx] resumed from {a.resume} (epoch {start_epoch}, "
-              f"val_acc={best:.4f}, gstep={gstep})")
+            print(
+                "[bc-train-mlx] WARNING: no arch_config in checkpoint (old format) — "
+                "proceeding without validation"
+            )
+        print(
+            f"[bc-train-mlx] resumed from {a.resume} (epoch {start_epoch}, "
+            f"val_acc={best:.4f}, gstep={gstep})"
+        )
 
     # ``--epochs`` is the number of epochs for THIS invocation. The checkpoint
     # epoch is an absolute history counter used only to continue numbering.
     run_epochs = int(a.epochs)
     if run_epochs <= 0:
         raise ValueError(f"epochs must be positive for this run, got {run_epochs}")
-    print(f"[bc-train-mlx] this run: {run_epochs} epoch(s) "
-          f"(global start={start_epoch + 1})", flush=True)
+    print(
+        f"[bc-train-mlx] this run: {run_epochs} epoch(s) "
+        f"(global start={start_epoch + 1})",
+        flush=True,
+    )
 
     # Optimizer
-    optimizer = optim.Adam(learning_rate=a.lr)
+    optimizer = optim.AdamW(learning_rate=a.lr)
 
     # Restore optimizer state if present in checkpoint (C.5)
     if a.resume:
         import pickle
+
         with open(a.resume, "rb") as f:
             state = pickle.load(f)
         saved_opt_state = state.get("optimizer")
@@ -305,27 +427,40 @@ def main() -> None:
                 print(f"[bc-train-mlx] WARNING: could not restore optimizer state: {e}")
 
     nparams = sum(p.size for _, p in nn.utils.tree_flatten(model.parameters()))
-    tag = (f"d{a.d_model}L{a.nlayers}h{a.nhead}"
-           f"{' +static' if a.static else ''}"
-           f"{' +split' if a.split_heads else ''}"
-           f"{' +struct' if a.structured else ''}"
-           f"{' +compile' if a.compile else ''}"
-           f"{' +prefetch' if a.prefetch else ''}"
-           f"{' +accum' if a.accum_steps > 1 else ''}")
-    print(f"[bc-train-mlx] {tag} params={nparams:,} N={N} train={len(ti)} val={len(vi)} "
-          f"batch={a.batch} accum_steps={a.accum_steps}", flush=True)
+    tag = (
+        f"d{a.d_model}L{a.nlayers}h{a.nhead}"
+        f"{' +static' if a.static else ''}"
+        f"{' +split' if a.split_heads else ''}"
+        f"{' +struct' if a.structured else ''}"
+        f"{' +compile' if a.compile else ''}"
+        f"{' +prefetch' if a.prefetch else ''}"
+        f"{' +accum' if a.accum_steps > 1 else ''}"
+    )
+    print(
+        f"[bc-train-mlx] {tag} params={nparams:,} N={N} train={len(ti)} val={len(vi)} "
+        f"batch={a.batch} accum_steps={a.accum_steps}",
+        flush=True,
+    )
 
     # --- batch generator (C.1: FP16-native numeric features) ---
     # Keys kept in float32 despite being numeric (needed for masking comparisons):
     _FP32_KEYS = frozenset({"action_mask"})
 
-    def batches(arrs: dict, grp: np.ndarray | None, base: int, order: np.ndarray, bs: int):
+    def batches(
+        arrs: dict, grp: np.ndarray | None, base: int, order: np.ndarray, bs: int
+    ):
         for i in range(0, len(order), bs):
-            b = order[i:i + bs]
-            ob = {k: mx.array(np.asarray(arrs[k][b]).astype(
-                    np.int32 if k in int_keys
-                    else (np.float32 if k in _FP32_KEYS else np.float16)))
-                  for k in keys}
+            b = order[i : i + bs]
+            ob = {
+                k: mx.array(
+                    np.asarray(arrs[k][b]).astype(
+                        np.int32
+                        if k in int_keys
+                        else (np.float32 if k in _FP32_KEYS else np.float16)
+                    )
+                )
+                for k in keys
+            }
             if a.dedup:
                 gb = mx.array(np.asarray(grp[b]), dtype=mx.int32)
                 canon = (gb == mx.arange(gb.shape[1])[None, :]).astype(mx.float32)
@@ -339,8 +474,9 @@ def main() -> None:
     # --- loss + grad function ---
     grad_fn = mx.value_and_grad(
         lambda model, ob, yb: nn.losses.cross_entropy(
-            model.logits_value(ob)[0], yb).mean(),  # logits only for loss
-        argnums=0
+            model.logits_value(ob)[0], yb
+        ).mean(),  # logits only for loss
+        argnums=0,
     )
 
     # F.3: TBPTT loss + grad function (accepts memory, returns memory_out)
@@ -358,6 +494,7 @@ def main() -> None:
 
     if a.compile:
         from functools import partial
+
         _state = [model.state, optimizer.state]
 
         @partial(mx.compile, inputs=_state, outputs=_state)
@@ -371,12 +508,17 @@ def main() -> None:
 
     # --- slab boundaries and total optimizer steps (C.4) ---
     slab_bounds = [(s, min(s + a.slab_rows, v0)) for s in range(0, v0, a.slab_rows)]
-    steps_per_epoch = max(1, sum((e0 - s0 + a.batch - 1) // a.batch for s0, e0 in slab_bounds))
+    steps_per_epoch = max(
+        1, sum((e0 - s0 + a.batch - 1) // a.batch for s0, e0 in slab_bounds)
+    )
     total_opt_steps = run_epochs * max(1, steps_per_epoch // a.accum_steps)
     warmup_steps = min(a.warmup_steps, max(1, total_opt_steps // 5))
     run_end_epoch = start_epoch + run_epochs
-    print(f"[bc-train-mlx] global epoch range: {start_epoch + 1}-{run_end_epoch} "
-          f"(local epochs={run_epochs})", flush=True)
+    print(
+        f"[bc-train-mlx] global epoch range: {start_epoch + 1}-{run_end_epoch} "
+        f"(local epochs={run_epochs})",
+        flush=True,
+    )
 
     train_t0 = time.time()
 
@@ -388,17 +530,16 @@ def main() -> None:
         flat = [g.reshape(-1) for _, g in nn.utils.tree_flatten(grads) if g is not None]
         if not flat:
             return grads
-        gn = mx.sqrt(sum(mx.sum(g ** 2) for g in flat))
+        gn = mx.sqrt(sum(mx.sum(g**2) for g in flat))
         scale = mx.where(gn > max_norm, max_norm / mx.maximum(gn, 1e-6), 1.0)
-        grads = nn.utils.tree_map(
-            lambda g: (g * scale) if g is not None else g, grads
-        )
+        grads = nn.utils.tree_map(lambda g: (g * scale) if g is not None else g, grads)
         mx.eval(grads)
         return grads
 
     # --- train step with gradient accumulation (C.2) ---
-    def train_step_accum(ob: dict, yb: mx.array, micro_step: int,
-                         accum_steps: int) -> float:
+    def train_step_accum(
+        ob: dict, yb: mx.array, micro_step: int, accum_steps: int
+    ) -> float:
         """Forward + backward for one microbatch. Returns loss (Python float)."""
         loss, grads = grad_fn(model, ob, yb)
         mx.eval(loss)
@@ -410,13 +551,21 @@ def main() -> None:
         nonlocal gstep
         gstep += 1
         # Normalize by total examples (FP32 reduction)
-        grads = nn.utils.tree_map(lambda g: (g / n_examples) if g is not None else g, grads)
+        grads = nn.utils.tree_map(
+            lambda g: (g / n_examples) if g is not None else g, grads
+        )
         # Clip (C.3: graph-safe, no float())
         grads = clip_grads(grads, a.max_grad_norm)
         # LR schedule on optimizer step (C.4)
         if a.lr_schedule != "none":
-            optimizer.learning_rate = lr_at(gstep, total_opt_steps, a.lr,
-                                            a.lr_schedule, warmup_steps, a.lr_min_ratio)
+            optimizer.learning_rate = lr_at(
+                gstep,
+                total_opt_steps,
+                a.lr,
+                a.lr_schedule,
+                warmup_steps,
+                a.lr_min_ratio,
+            )
         optimizer.update(model, grads)
         mx.eval(model.parameters())
         mx.eval(optimizer.state)
@@ -424,6 +573,7 @@ def main() -> None:
     # Compiled path (no clipping — clipping uses eager which has float() calls)
     if a.compile:
         from functools import partial
+
         _state = [model.state, optimizer.state]
 
         @partial(mx.compile, inputs=_state, outputs=_state)
@@ -440,7 +590,11 @@ def main() -> None:
         for slab_i, si in enumerate(slab_indices):
             s0, e0 = slab_bounds[si]
             sd = {k: read_rows(obs_np[k], s0, e0) for k in keys}
-            sg = read_rows(group_np, s0, e0) if (a.dedup and group_np is not None) else None
+            sg = (
+                read_rows(group_np, s0, e0)
+                if (a.dedup and group_np is not None)
+                else None
+            )
             perm = np.random.default_rng([a.seed, ep_seed, s0]).permutation(e0 - s0)
             yield slab_i, si, s0, e0, sd, sg, perm
 
@@ -460,7 +614,9 @@ def main() -> None:
         """
         meta_path = os.path.join(a.data, "episode_meta.npy")
         if not mmapped or not os.path.exists(meta_path):
-            print(f"[bc-train-mlx] F.3: no episode_meta.npy found, falling back to shuffled")
+            print(
+                f"[bc-train-mlx] F.3: no episode_meta.npy found, falling back to shuffled"
+            )
             return
 
         meta = np.load(meta_path)
@@ -469,6 +625,7 @@ def main() -> None:
 
         # Group row indices by (episode_id, side)
         from collections import defaultdict
+
         groups: dict[tuple, list[int]] = defaultdict(list)
         for i in range(v0):
             key = (int(ep_ids[i]), int(sides[i]))
@@ -482,11 +639,16 @@ def main() -> None:
             # Process this (episode, side) group in chunks
             # Yield (ob, yb, is_new_group) so trainer can reset memory at group boundary
             for ci in range(0, len(row_indices), chunk_size):
-                chunk_rows = row_indices[ci:ci + chunk_size]
+                chunk_rows = row_indices[ci : ci + chunk_size]
                 chunk_arr = np.array(chunk_rows, dtype=np.int64)
-                ob = {k: mx.array(np.asarray(obs_np[k][chunk_arr]).astype(
-                        np.int32 if k in int_keys else np.float16))
-                      for k in keys}
+                ob = {
+                    k: mx.array(
+                        np.asarray(obs_np[k][chunk_arr]).astype(
+                            np.int32 if k in int_keys else np.float16
+                        )
+                    )
+                    for k in keys
+                }
                 yb = mx.array(y[chunk_arr].astype(np.int32))
                 yield ob, yb, (ci == 0)  # is_new_group=True for first chunk in group
 
@@ -502,7 +664,15 @@ def main() -> None:
 
     # Rich progress bar
     try:
-        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+        from rich.progress import (
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            BarColumn,
+            TaskProgressColumn,
+            TimeRemainingColumn,
+        )
+
         _rich_available = True
     except ImportError:
         _rich_available = False
@@ -526,7 +696,9 @@ def main() -> None:
         if _rich_available:
             _progress_bar = Progress(
                 SpinnerColumn(),
-                TextColumn("[bold blue]Epoch {task.fields[epoch]} (run {task.fields[local_epoch]}/{task.fields[total_epochs]})"),
+                TextColumn(
+                    "[bold blue]Epoch {task.fields[epoch]} (run {task.fields[local_epoch]}/{task.fields[total_epochs]})"
+                ),
                 BarColumn(),
                 TaskProgressColumn(),
                 TextColumn("Loss: {task.fields[loss]}"),
@@ -551,11 +723,14 @@ def main() -> None:
         def _all_batches():
             """Yield (ob, yb) from all slabs in this epoch."""
             if mmapped:
-                perm_slabs = np.random.default_rng([a.seed, ep]).permutation(len(slab_bounds))
+                perm_slabs = np.random.default_rng([a.seed, ep]).permutation(
+                    len(slab_bounds)
+                )
                 if a.prefetch:
                     q: queue.Queue = queue.Queue(maxsize=1)
-                    t = threading.Thread(target=_prefetch_slabs,
-                                         args=(perm_slabs, ep, q), daemon=True)
+                    t = threading.Thread(
+                        target=_prefetch_slabs, args=(perm_slabs, ep, q), daemon=True
+                    )
                     t.start()
                     slab_iter = iter(lambda: q.get(), None)
                 else:
@@ -564,20 +739,30 @@ def main() -> None:
                     slab_t: float = time.time()
                     load_t = 0.0
                     if not a.prefetch:
-                        print(f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} "
-                              f"(rows {s0:,}-{e0:,}) loading...", end="", flush=True)
+                        print(
+                            f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} "
+                            f"(rows {s0:,}-{e0:,}) loading...",
+                            end="",
+                            flush=True,
+                        )
                         load_t = time.time() - slab_t
                         print(f" {load_t:.1f}s", flush=True)
                     else:
-                        print(f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} "
-                              f"(rows {s0:,}-{e0:,}) prefetched", flush=True)
+                        print(
+                            f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} "
+                            f"(rows {s0:,}-{e0:,}) prefetched",
+                            flush=True,
+                        )
                     for ob, yb in batches(sd, sg, s0, perm, a.batch):
                         yield ob, yb
                     del sd, sg
                     slab_loss = _running_loss / max(_running_n, 1)
-                    print(f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} done "
-                          f"train_loss={slab_loss:.4f} ({time.time() - ep_t0:.0f}s total, "
-                          f"{load_t:.1f}s load)", flush=True)
+                    print(
+                        f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} done "
+                        f"train_loss={slab_loss:.4f} ({time.time() - ep_t0:.0f}s total, "
+                        f"{load_t:.1f}s load)",
+                        flush=True,
+                    )
             else:
                 g = np.random.default_rng([a.seed, ep])
                 order = g.permutation(len(ti))
@@ -585,15 +770,18 @@ def main() -> None:
                     yield ob, yb
 
         # F.3: TBPTT training path (opt-in, when --tbptt-chunk > 0 and episode_meta exists)
-        _use_tbptt = (a.tbptt_chunk > 0 and mmapped
-                      and os.path.exists(os.path.join(a.data, "episode_meta.npy")))
+        _use_tbptt = (
+            a.tbptt_chunk > 0
+            and mmapped
+            and os.path.exists(os.path.join(a.data, "episode_meta.npy"))
+        )
 
         if _use_tbptt:
-            print(f"[bc-train-mlx] F.3: TBPTT enabled (chunk={a.tbptt_chunk})", flush=True)
+            print(
+                f"[bc-train-mlx] F.3: TBPTT enabled (chunk={a.tbptt_chunk})", flush=True
+            )
 
-        _batch_iter = (
-            _tbptt_batches(a.tbptt_chunk) if _use_tbptt else _all_batches()
-        )
+        _batch_iter = _tbptt_batches(a.tbptt_chunk) if _use_tbptt else _all_batches()
 
         for _batch_tuple in _batch_iter:
             if _use_tbptt:
@@ -607,14 +795,19 @@ def main() -> None:
 
             # Forward + backward this microbatch
             if a.compile and _compile_pending:
-                print("[bc-train-mlx]   compiling (first call, may take several minutes)...",
-                      end="", flush=True)
+                print(
+                    "[bc-train-mlx]   compiling (first call, may take several minutes)...",
+                    end="",
+                    flush=True,
+                )
                 _compile_t = time.time()
 
             if a.accum_steps > 1:
                 # F.3: TBPTT path uses memory-aware forward
                 if _use_tbptt:
-                    loss, grads, mem_out = tbptt_loss_and_grad(model, ob, yb, _tbptt_memory)
+                    loss, grads, mem_out = tbptt_loss_and_grad(
+                        model, ob, yb, _tbptt_memory
+                    )
                     mx.eval(loss)
                     loss_val = float(loss)
                     # Carry only the last row's memory (last timestep) to next chunk
@@ -623,15 +816,22 @@ def main() -> None:
                     if _micro_count > 0 and _micro_count % a.accum_steps == 0:
                         _tbptt_memory = mx.stop_gradient(_tbptt_memory)
                 else:
-                    loss_val, grads = train_step_accum(ob, yb, _micro_count, a.accum_steps)
+                    loss_val, grads = train_step_accum(
+                        ob, yb, _micro_count, a.accum_steps
+                    )
                 if _accum_grads is None:
                     _accum_grads = grads
                     _accum_examples = micro_n
                     _accum_loss_sum = loss_val * micro_n
                 else:
                     _accum_grads = nn.utils.tree_map(
-                        lambda a, b: (a + b) if (a is not None and b is not None) else (a if a is not None else b),
-                        _accum_grads, grads
+                        lambda a, b: (
+                            (a + b)
+                            if (a is not None and b is not None)
+                            else (a if a is not None else b)
+                        ),
+                        _accum_grads,
+                        grads,
                     )
                     _accum_examples += micro_n
                     _accum_loss_sum += loss_val * micro_n
@@ -649,7 +849,9 @@ def main() -> None:
             else:
                 # No accumulation: single microbatch = full step
                 if _use_tbptt:
-                    loss, grads, mem_out = tbptt_loss_and_grad(model, ob, yb, _tbptt_memory)
+                    loss, grads, mem_out = tbptt_loss_and_grad(
+                        model, ob, yb, _tbptt_memory
+                    )
                     mx.eval(loss)
                     loss_val = float(loss)
                     # Carry only the last row's memory (last timestep) to next chunk
@@ -672,30 +874,37 @@ def main() -> None:
             if _compile_pending:
                 print(f" done ({time.time() - _compile_t:.0f}s)", flush=True)
                 _compile_pending = False
+
+            avg = _running_loss / max(_running_n, 1)
+            elapsed_s = time.time() - ep_t0
+            steps_left = max(0, total_opt_steps - ep_step)
+            eta_step = (elapsed_s / max(ep_step, 1)) * steps_left
+            el_m, el_s = divmod(int(elapsed_s), 60)
+            el_h, el_m = divmod(el_m, 60)
+            el_str = f"{el_h}h{el_m:02d}m" if el_h else f"{el_m}m{el_s:02d}s"
+            eta_m_s, eta_s_s = divmod(int(eta_step), 60)
+            eta_h, eta_m_s = divmod(eta_m_s, 60)
+            eta_str_s = (
+                f"{eta_h}h{eta_m_s:02d}m" if eta_h else f"{eta_m_s}m{eta_s_s:02d}s"
+            )
+            # Rich progress bar update
+            if _progress_bar is not None:
+                _progress_bar.update(
+                    _progress_task,
+                    completed=ep_step,
+                    loss=f"{avg:.4f}",
+                    lr=f"{optimizer.learning_rate:.2e}",
+                    elapsed=el_str,
+                    eta=eta_str_s,
+                )
+
             if ep_step % a.log_interval == 0 and ep_step > 0:
-                avg = _running_loss / max(_running_n, 1)
-                elapsed_s = time.time() - ep_t0
-                steps_left = max(0, total_opt_steps - ep_step)
-                eta_step = (elapsed_s / max(ep_step, 1)) * steps_left
-                el_m, el_s = divmod(int(elapsed_s), 60)
-                el_h, el_m = divmod(el_m, 60)
-                el_str = f"{el_h}h{el_m:02d}m" if el_h else f"{el_m}m{el_s:02d}s"
-                eta_m_s, eta_s_s = divmod(int(eta_step), 60)
-                eta_h, eta_m_s = divmod(eta_m_s, 60)
-                eta_str_s = f"{eta_h}h{eta_m_s:02d}m" if eta_h else f"{eta_m_s}m{eta_s_s:02d}s"
-                print(f"[bc-train-mlx]   opt_step {ep_step}/{total_opt_steps} "
-                      f"micro={ep_micro} loss={avg:.4f} lr={optimizer.learning_rate:.2e} "
-                      f"elapsed={el_str} ETA={eta_str_s}", flush=True)
-                # Rich progress bar update
-                if _progress_bar is not None:
-                    _progress_bar.update(
-                        _progress_task,
-                        completed=ep_step,
-                        loss=f"{avg:.4f}",
-                        lr=f"{optimizer.learning_rate:.2e}",
-                        elapsed=el_str,
-                        eta=eta_str_s,
-                    )
+                print(
+                    f"[bc-train-mlx]   opt_step {ep_step}/{total_opt_steps} "
+                    f"micro={ep_micro} loss={avg:.4f} lr={optimizer.learning_rate:.2e} "
+                    f"elapsed={el_str} ETA={eta_str_s}",
+                    flush=True,
+                )
 
         # ---- validation ----
         model.eval()
@@ -713,9 +922,11 @@ def main() -> None:
             vloss += float(ce.mean()) * len(yb_np)
             tot += len(yb_np)
             top3 = np.argsort(-lg_np, axis=1)[:, :3]
-            correct = (np.argmax(lg_np, axis=1) == yb_np)
+            correct = np.argmax(lg_np, axis=1) == yb_np
             in_top3 = np.array([yb_np[i] in top3[i] for i in range(len(yb_np))])
-            preds.append(np.stack([correct.astype(float), in_top3.astype(float)], axis=1))
+            preds.append(
+                np.stack([correct.astype(float), in_top3.astype(float)], axis=1)
+            )
             am_all.append(np.argmax(lg_np, axis=1))
 
         pr = np.concatenate(preds)
@@ -743,18 +954,22 @@ def main() -> None:
         # Complete checkpoint: save model, optimizer, arch_config, scheduler, seed (C.5)
         if acc > best:
             import pickle
+
             with open(a.out, "wb") as f:
-                pickle.dump({
-                    "model": model.parameters(),
-                    "optimizer": optimizer.state,
-                    "arch_config": model.get_config(),
-                    "epoch": ep,
-                    "gstep": gstep,
-                    "val_acc": acc,
-                    "seed": a.seed,
-                    "dataset_path": a.data,
-                    "accum_steps": a.accum_steps,
-                }, f)
+                pickle.dump(
+                    {
+                        "model": model.parameters(),
+                        "optimizer": optimizer.state,
+                        "arch_config": model.get_config(),
+                        "epoch": ep,
+                        "gstep": gstep,
+                        "val_acc": acc,
+                        "seed": a.seed,
+                        "dataset_path": a.data,
+                        "accum_steps": a.accum_steps,
+                    },
+                    f,
+                )
         best = max(best, acc)
 
         ep_time: float = time.time() - ep_t0
@@ -764,9 +979,12 @@ def main() -> None:
         eta_s: float = (elapsed / max(completed, 1)) * remaining
         eta_m, eta_s = divmod(int(eta_s), 60)
         eta_str: str = f"{eta_m}m{eta_s:02d}s" if eta_m else f"{eta_s}s"
-        print(f"[bc-train-mlx] ep{ep} val_acc={acc:.4f} equiv={eq:.4f} top3={t3:.4f} "
-              f"atk={atk:.4f} ko={ko:.4f} loss={vloss / max(tot, 1):.4f} "
-              f"t={ep_time:.0f}s ETA={eta_str} gstep={gstep}", flush=True)
+        print(
+            f"[bc-train-mlx] ep{ep} val_acc={acc:.4f} equiv={eq:.4f} top3={t3:.4f} "
+            f"atk={atk:.4f} ko={ko:.4f} loss={vloss / max(tot, 1):.4f} "
+            f"t={ep_time:.0f}s ETA={eta_str} gstep={gstep}",
+            flush=True,
+        )
         # Stop Rich progress bar for this epoch
         if _progress_bar is not None:
             _progress_bar.stop()
@@ -776,7 +994,10 @@ def main() -> None:
         final_path = "model/bc_model/bc_best_mlx_final.pkl"
         shutil.copy2(a.out, final_path)
         print(f"[bc-train-mlx] best checkpoint copied to {final_path}", flush=True)
-    print(f"[bc-train-mlx] RESULT: best_val_acc={best:.4f} params={nparams:,} gstep={gstep}", flush=True)
+    print(
+        f"[bc-train-mlx] RESULT: best_val_acc={best:.4f} params={nparams:,} gstep={gstep}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
