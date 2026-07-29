@@ -56,7 +56,12 @@ def _get_api():
     return api
 
 
-def build_submission(out_path: str, checkpoint: str | None = None) -> bool:
+def build_submission(
+    out_path: str,
+    checkpoint: str | None = None,
+    *,
+    smoke: bool = False,
+) -> bool:
     """Build and validate the bundle via build_submission.py. True on success.
 
     That module owns packaging: PyTorch conversion, checkpoint paths, the
@@ -69,6 +74,8 @@ def build_submission(out_path: str, checkpoint: str | None = None) -> bool:
     sys.argv = ["build_submission.py", "-o", out_path]
     if checkpoint is not None:
         sys.argv.extend(["--checkpoint", checkpoint])
+    if smoke:
+        sys.argv.append("--smoke")
     try:
         build_main()
     except SystemExit as exc:
@@ -125,8 +132,11 @@ def main():
     )
     p.add_argument(
         "--out",
-        default=str(_ROOT / "submission.tar.gz"),
-        help="Output path for submission archive (default: submission.tar.gz)",
+        default=None,
+        help=(
+            "Output path. Defaults to submission.tar.gz, or the isolated "
+            "public_agents smoke path with --smoke."
+        ),
     )
     p.add_argument(
         "--checkpoint",
@@ -139,6 +149,14 @@ def main():
         help="Upload to Kaggle after building (default: build only)",
     )
     p.add_argument(
+        "--smoke",
+        action="store_true",
+        help=(
+            "Build only from model/checkpoint/smoke into the isolated local "
+            "public-agents smoke artifact"
+        ),
+    )
+    p.add_argument(
         "--yes", "-y",
         action="store_true",
         help="Skip the upload confirmation prompt (only with --upload)",
@@ -149,16 +167,31 @@ def main():
         help="Kaggle competition slug (default: pokemon-tcg-ai-battle)",
     )
     args = p.parse_args()
+    if args.smoke and args.upload:
+        p.error("--smoke is a local validation artifact and cannot be uploaded")
+    if args.out is None:
+        args.out = str(
+            _ROOT
+            / (
+                "public_agents/submissions/smoke/submission_smoke.tar.gz"
+                if args.smoke
+                else "submission.tar.gz"
+            )
+        )
 
     # 1. Build submission
     console.print("\n[bold cyan]Building submission...[/]")
-    if not build_submission(args.out, checkpoint=args.checkpoint):
+    if not build_submission(
+        args.out,
+        checkpoint=args.checkpoint,
+        smoke=args.smoke,
+    ):
         sys.exit(1)
 
     _describe_bundle(args.out)
 
     if not args.upload:
-        console.print(f"\n[green]Ready.[/] Upload with [bold]--upload[/], or manually at")
+        console.print("\n[green]Ready.[/] Upload with [bold]--upload[/], or manually at")
         console.print(f"  https://www.kaggle.com/competitions/{args.competition}/submissions")
         sys.exit(0)
 

@@ -18,9 +18,122 @@ from rl.encoder import effect_data
 from rl.encoder.card_features import CardTable
 from rl.encoder.encoding import MAX_OPTIONS, OPT_PICKED
 from rl.policy import TokenTransformer, build_token_net
+from rl.prospective_input_adapter import PROSPECTIVE_INPUT_ADAPTER_VERSION
+from rl.prospective_input_adapter import (
+    ACTION_ATTR_AGGREGATE_VERSION,
+    ACTION_SET_FEATURE_VERSION,
+    BRANCH_FEATURE_LAYOUT_VERSION,
+)
+from rl.prospective_planner_torch import (
+    ProspectivePlannerTorch,
+    convert_mlx_prospective_payload,
+    extract_mlx_prospective_payload,
+    load_prospective_torch_payload,
+    prospective_torch_checkpoint_payload,
+)
+from rl.prospective_schema import (
+    PROSPECTIVE_COORD_SCHEMA_VERSION,
+    PROSPECTIVE_PLANNER_VERSION,
+    ProspectivePlannerConfig,
+)
 from rl.token_schema import ARCH_VERSION, TOKEN_SCHEMA_VERSION
 
 TORCH_INFERENCE_FORMAT = "ptcg-torch-fp16-v1"
+
+
+def _disabled_prospective_config(*, provenance: str) -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "planner_version": PROSPECTIVE_PLANNER_VERSION,
+        "coord_schema_version": PROSPECTIVE_COORD_SCHEMA_VERSION,
+        "input_adapter_version": PROSPECTIVE_INPUT_ADAPTER_VERSION,
+        "action_attr_aggregate_version": ACTION_ATTR_AGGREGATE_VERSION,
+        "action_set_feature_version": ACTION_SET_FEATURE_VERSION,
+        "branch_feature_layout_version": BRANCH_FEATURE_LAYOUT_VERSION,
+        "config": None,
+        "runtime": None,
+        "trained_optimizer_steps": 0,
+        "provenance": provenance,
+    }
+
+
+def _normalize_prospective_inference_config(
+    value: Any,
+    *,
+    provenance: str,
+) -> dict[str, Any]:
+    if value is None:
+        return _disabled_prospective_config(provenance=provenance)
+    if not isinstance(value, dict):
+        raise ValueError("inference prospective_planner must be an object")
+    enabled = bool(value.get("enabled", False))
+    if not enabled:
+        return _disabled_prospective_config(
+            provenance=str(value.get("provenance", provenance))
+        )
+    if value.get("planner_version") != PROSPECTIVE_PLANNER_VERSION:
+        raise ValueError("inference prospective planner version is unsupported")
+    if value.get("coord_schema_version") != PROSPECTIVE_COORD_SCHEMA_VERSION:
+        raise ValueError("inference prospective coordinate schema is unsupported")
+    if value.get("input_adapter_version") != PROSPECTIVE_INPUT_ADAPTER_VERSION:
+        raise ValueError("inference prospective input adapter is unsupported")
+    if (
+        value.get("action_attr_aggregate_version")
+        != ACTION_ATTR_AGGREGATE_VERSION
+    ):
+        raise ValueError("inference action attribute aggregate is unsupported")
+    if (
+        value.get("action_set_feature_version")
+        != ACTION_SET_FEATURE_VERSION
+    ):
+        raise ValueError("inference action set feature is unsupported")
+    if (
+        int(value.get("branch_feature_layout_version", -1))
+        != BRANCH_FEATURE_LAYOUT_VERSION
+    ):
+        raise ValueError("inference branch feature layout is unsupported")
+    planner_config_raw = value.get("config")
+    if not isinstance(planner_config_raw, dict):
+        raise ValueError("enabled prospective planner has no config")
+    planner_config = ProspectivePlannerConfig(**planner_config_raw)
+    planner_config.validate()
+    runtime = value.get("runtime")
+    if not isinstance(runtime, dict):
+        raise ValueError("enabled prospective planner has no runtime config")
+    normalized_runtime = {
+        "trials": int(runtime.get("trials", 0)),
+        "horizon": int(runtime.get("horizon", 0)),
+        "max_branches": int(runtime.get("max_branches", 0)),
+        "gamma": float(runtime.get("gamma", -1.0)),
+        "seed": int(runtime.get("seed", 0)),
+    }
+    if (
+        normalized_runtime["trials"] <= 0
+        or normalized_runtime["horizon"] <= 0
+        or normalized_runtime["max_branches"] <= 0
+        or not 0.0 <= normalized_runtime["gamma"] <= 1.0
+    ):
+        raise ValueError("prospective runtime config has invalid bounds")
+    if normalized_runtime["max_branches"] > MAX_OPTIONS:
+        raise ValueError("prospective max_branches exceeds encoder capacity")
+    trained_optimizer_steps = int(value.get("trained_optimizer_steps", 0))
+    if trained_optimizer_steps <= 0:
+        raise ValueError(
+            "enabled prospective planner has no completed optimizer step"
+        )
+    return {
+        "enabled": True,
+        "planner_version": PROSPECTIVE_PLANNER_VERSION,
+        "coord_schema_version": PROSPECTIVE_COORD_SCHEMA_VERSION,
+        "input_adapter_version": PROSPECTIVE_INPUT_ADAPTER_VERSION,
+        "action_attr_aggregate_version": ACTION_ATTR_AGGREGATE_VERSION,
+        "action_set_feature_version": ACTION_SET_FEATURE_VERSION,
+        "branch_feature_layout_version": BRANCH_FEATURE_LAYOUT_VERSION,
+        "config": planner_config.to_dict(),
+        "runtime": normalized_runtime,
+        "trained_optimizer_steps": trained_optimizer_steps,
+        "provenance": str(value.get("provenance", provenance)),
+    }
 
 
 def _sha256_file(path: str | Path) -> str:
@@ -110,6 +223,9 @@ def checkpoint_inference_config(state: dict[str, Any]) -> dict[str, Any]:
             "bc_would_ko": False,
             "bc_wk_nvar": 10,
             "provenance": "legacy-checkpoint-default",
+            "prospective_planner": _disabled_prospective_config(
+                provenance="legacy-checkpoint-default"
+            ),
         }
     if not isinstance(cfg, dict):
         raise ValueError("checkpoint inference_config must be an object")
@@ -129,7 +245,80 @@ def checkpoint_inference_config(state: dict[str, Any]) -> dict[str, Any]:
         "bc_would_ko": bool(cfg["bc_would_ko"]),
         "bc_wk_nvar": int(cfg["bc_wk_nvar"]),
         "provenance": str(cfg.get("provenance", "trainer-checkpoint")),
+        "prospective_planner": _normalize_prospective_inference_config(
+            cfg.get("prospective_planner"),
+            provenance=(
+                "checkpoint-disabled"
+                if "prospective_planner" in cfg
+                else "legacy-checkpoint-default"
+            ),
+        ),
     }
+
+
+def _load_mlx_prospective_planner(
+    state: dict[str, Any],
+    inference_config: dict[str, Any],
+) -> tuple[ProspectivePlannerTorch | None, ProspectivePlannerConfig | None]:
+    payload = extract_mlx_prospective_payload(state)
+    enabled = bool(inference_config["prospective_planner"]["enabled"])
+    if payload is None:
+        if enabled:
+            raise ValueError(
+                "checkpoint enables prospective inference without planner state"
+            )
+        return None, None
+    model, config = convert_mlx_prospective_payload(payload)
+    if (
+        payload.get("input_adapter_version")
+        != PROSPECTIVE_INPUT_ADAPTER_VERSION
+    ):
+        raise ValueError("prospective planner input adapter is incompatible")
+    inference_planner = inference_config["prospective_planner"]
+    if enabled and inference_planner["config"] != config.to_dict():
+        raise ValueError(
+            "prospective planner model and inference config disagree"
+        )
+    if enabled:
+        trained_steps = int(payload.get("optimizer_steps", 0))
+        if trained_steps <= 0:
+            raise ValueError("enabled MLX prospective planner is untrained")
+        if trained_steps != int(inference_planner["trained_optimizer_steps"]):
+            raise ValueError(
+                "prospective optimizer step disagrees with inference config"
+            )
+    return model, config
+
+
+def _load_torch_prospective_planner(
+    payload: dict[str, Any],
+    inference_config: dict[str, Any],
+) -> tuple[ProspectivePlannerTorch | None, ProspectivePlannerConfig | None]:
+    planner_payload = payload.get("prospective_planner")
+    enabled = bool(inference_config["prospective_planner"]["enabled"])
+    if planner_payload is None:
+        if enabled:
+            raise ValueError(
+                "artifact enables prospective inference without planner state"
+            )
+        return None, None
+    if not isinstance(planner_payload, dict):
+        raise ValueError("artifact prospective_planner must be an object")
+    model, config = load_prospective_torch_payload(planner_payload)
+    inference_planner = inference_config["prospective_planner"]
+    if enabled and inference_planner["config"] != config.to_dict():
+        raise ValueError(
+            "prospective planner artifact and inference config disagree"
+        )
+    if enabled:
+        trained_steps = int(planner_payload.get("trained_optimizer_steps", 0))
+        if trained_steps <= 0:
+            raise ValueError("enabled Torch prospective planner is untrained")
+        if trained_steps != int(inference_planner["trained_optimizer_steps"]):
+            raise ValueError(
+                "artifact prospective optimizer step disagrees with config"
+            )
+    return model, config
 
 
 class TokenTransformerTorchInference(TokenTransformer):
@@ -348,11 +537,17 @@ def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.
     static_features, static_contract = _checkpoint_static_features(
         state, card_table
     )
+    inference_config = checkpoint_inference_config(state)
+    prospective_model, prospective_config = _load_mlx_prospective_planner(
+        state, inference_config
+    )
     metadata = {
         **arch_cfg,
-        "inference_config": checkpoint_inference_config(state),
+        "inference_config": inference_config,
         "training_config": dict(state.get("run_config", {})),
         "static_feature_contract": static_contract,
+        "prospective_planner_model": prospective_model,
+        "prospective_planner_config": prospective_config,
     }
     model = TokenTransformerTorchInference(
         card_table, arch_cfg, static_features
@@ -445,7 +640,12 @@ def save_torch_inference_checkpoint(
         "arch_config": {
             key: value
             for key, value in metadata.items()
-            if key not in ("inference_config", "training_config")
+            if key not in (
+                "inference_config",
+                "training_config",
+                "prospective_planner_model",
+                "prospective_planner_config",
+            )
         },
         "inference_config": metadata["inference_config"],
         "training_config": metadata["training_config"],
@@ -456,6 +656,18 @@ def save_torch_inference_checkpoint(
         ),
         "static_feature_contract": metadata["static_feature_contract"],
         "state_dict": state_dict,
+        "prospective_planner": (
+            prospective_torch_checkpoint_payload(
+                metadata["prospective_planner_model"],
+                trained_optimizer_steps=int(
+                    metadata["inference_config"]["prospective_planner"][
+                        "trained_optimizer_steps"
+                    ]
+                ),
+            )
+            if metadata["prospective_planner_model"] is not None
+            else None
+        ),
     }
     torch.save(payload, torch_path)
     return metadata
@@ -478,11 +690,17 @@ def load_torch_inference_checkpoint(
     static_features, static_contract = _checkpoint_static_features(
         payload, card_table
     )
+    inference_config = checkpoint_inference_config(payload)
+    prospective_model, prospective_config = _load_torch_prospective_planner(
+        payload, inference_config
+    )
     metadata = {
         **arch_cfg,
-        "inference_config": checkpoint_inference_config(payload),
+        "inference_config": inference_config,
         "training_config": dict(payload.get("training_config", {})),
         "static_feature_contract": static_contract,
+        "prospective_planner_model": prospective_model,
+        "prospective_planner_config": prospective_config,
     }
     state_dict = payload.get("state_dict")
     if not isinstance(state_dict, dict):

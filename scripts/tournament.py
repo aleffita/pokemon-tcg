@@ -20,6 +20,12 @@ from scripts._common import AGENT_DIR, load_agent, make_env
 
 PUBLIC_AGENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                  "public_agents")
+SMOKE_SUBMISSION = os.path.join(
+    PUBLIC_AGENTS_DIR,
+    "submissions",
+    "smoke",
+    "submission_smoke.tar.gz",
+)
 RESULTS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "model", "eval_results.txt")
 
@@ -222,7 +228,40 @@ def _identify_deck(db, card_ids):
     return deck_id
 
 
-def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json, our_deck_id=None, opp_deck_id=None):
+def _record_match_card_usage(db, match_id, side, action):
+    """Persist observed local-deck cards without violating catalog FKs."""
+
+    for card_id, quantity in Counter(action).items():
+        card_id = int(card_id)
+        db.conn.execute(
+            """
+            INSERT INTO cards (id, name, metadata_complete)
+            VALUES (?, ?, 0)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (card_id, f"Card {card_id}"),
+        )
+        db.conn.execute(
+            """
+            INSERT OR IGNORE INTO match_card_usage (
+                match_id, card_id, player_side, quantity
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (match_id, card_id, side, quantity),
+        )
+
+
+def save_match_replay(
+    db,
+    matchup_id,
+    game_index,
+    our_side,
+    result,
+    replay_json,
+    our_deck_id=None,
+    opp_deck_id=None,
+    our_agent_path="agent/main.py",
+):
     """Save full replay data from a completed game to SQLite.
 
     Args:
@@ -244,7 +283,7 @@ def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json,
         matchup_id=matchup_id,
         game_index=game_index,
         source='local',
-        our_agent='agent/main.py',
+        our_agent=our_agent_path,
         our_deck_id=our_deck_id,
         opp_agent='opponent',
         opp_deck_id=opp_deck_id,
@@ -265,10 +304,7 @@ def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json,
                 else:
                     action = getattr(player_data, 'action', [])
                 if len(action) == 60:
-                    for card_id, qty in Counter(action).items():
-                        db.conn.execute(
-                            "INSERT OR IGNORE INTO match_card_usage (match_id, card_id, player_side, quantity) VALUES (?, ?, ?, ?)",
-                            (match_id, int(card_id), side, qty))
+                    _record_match_card_usage(db, match_id, side, action)
             # Only need the first step with a deck action
             if any(
                 len(s[0].get('action', []) if isinstance(s[0], dict) else getattr(s[0], 'action', []) or []) == 60
@@ -288,11 +324,7 @@ def save_match_replay(db, matchup_id, game_index, our_side, result, replay_json,
                 else:
                     action = getattr(player_data, 'action', [])
                 if len(action) == 60:
-                    for card_id, qty in Counter(action).items():
-                        db.conn.execute(
-                            "INSERT OR IGNORE INTO match_card_usage (match_id, card_id, player_side, quantity) VALUES (?, ?, ?, ?)",
-                            (match_id, int(card_id), side, qty))
-                    from rl.results_db import ResultsDB
+                    _record_match_card_usage(db, match_id, side, action)
                     deck_ids[side] = _identify_deck(db, action)
             if deck_ids:
                 break
@@ -457,11 +489,24 @@ def main():
                    help="Disable deck sweep (only use default deck)")
     p.add_argument("--txt-backup", action="store_true", default=False,
                    help="Also append results to eval_results.txt (backup)")
+    p.add_argument(
+        "--smoke",
+        action="store_true",
+        help=(
+            "Use only public_agents/submissions/smoke/submission_smoke.tar.gz "
+            "as our agent and force a no-sweep run"
+        ),
+    )
     args = p.parse_args()
 
     # Our agent. Keep the module too: the deck sweep rewrites deck.csv between
     # runs, and the agent caches its deck at import.
-    our_path = os.path.join(AGENT_DIR, "main.py")
+    our_path = SMOKE_SUBMISSION if args.smoke else os.path.join(AGENT_DIR, "main.py")
+    if args.smoke and not os.path.isfile(our_path):
+        p.error(
+            "--smoke requires the isolated local artifact at "
+            f"{SMOKE_SUBMISSION}; build it with `uv run tcg-build --smoke`"
+        )
     our_agent, our_module = load_agent(our_path, return_module=True)
     env = make_env()
 
@@ -484,7 +529,11 @@ def main():
         label = os.path.basename(os.path.dirname(args.opponent)) if args.opponent.endswith("main.py") else os.path.basename(args.opponent)
         opponents.append((label, args.opponent))
     else:
-        opponents.extend(find_agents())
+        opponents.extend(
+            (label, path)
+            for label, path in find_agents()
+            if os.path.realpath(path) != os.path.realpath(our_path)
+        )
 
     # Prepare test decks for sweep
     from rl.results_db import ResultsDB
@@ -492,11 +541,21 @@ def main():
     # The sweep belongs exclusively to our agent. Opponent agents are resolved
     # once below and their own deck files/callables remain fixed for every
     # alternative deck we test against them.
-    our_test_decks = _get_test_decks(db)
-    default_card_ids = _read_deck_csv(os.path.join(AGENT_DIR, "deck.csv"))
+    if args.smoke:
+        default_card_ids = _read_deck_from_tar(our_path)
+        our_test_decks = (
+            [(default_card_ids, None)] if default_card_ids is not None else []
+        )
+    else:
+        our_test_decks = _get_test_decks(db)
+        default_card_ids = _read_deck_csv(os.path.join(AGENT_DIR, "deck.csv"))
 
     # Read original deck to restore after sweep
-    original_deck = open(os.path.join(AGENT_DIR, "deck.csv")).read() if os.path.exists(os.path.join(AGENT_DIR, "deck.csv")) else None
+    original_deck = (
+        open(os.path.join(AGENT_DIR, "deck.csv")).read()
+        if not args.smoke and os.path.exists(os.path.join(AGENT_DIR, "deck.csv"))
+        else None
+    )
 
     # Read opponent deck IDs (deck.csv from their agent dir, if available)
     opp_deck_ids = {}
@@ -522,7 +581,11 @@ def main():
     if args.note:
         print(f"Note: {args.note}", flush=True)
 
-    do_sweep = (not args.no_sweep) and len(our_test_decks) > 1
+    do_sweep = (
+        not args.smoke
+        and not args.no_sweep
+        and len(our_test_decks) > 1
+    )
     if do_sweep:
         print(f"Sweep: {len(our_test_decks)} OUR decks per opponent "
               f"(default + {len(our_test_decks) - 1} from deck_elo)\n", flush=True)
@@ -632,7 +695,6 @@ def main():
         for deck_id, ds in sorted(deck_stats.items(),
                                    key=lambda x: x[1]["w"] / max(x[1]["w"] + x[1]["l"], 1),
                                    reverse=True):
-            total_games = ds["w"] + ds["l"] + ds["d"]
             wr = ds["w"] / max(ds["w"] + ds["l"], 1) * 100
             print(f"  {deck_id:>6d} {ds['w']:>4d} {ds['l']:>4d} {ds['d']:>4d} "
                   f"{wr:>7.1f}% {ds['n_opponents']:>5d}")
@@ -681,6 +743,7 @@ def main():
                 replay_json=gr["replay_json"],
                 our_deck_id=deck_id,
                 opp_deck_id=opp_did,
+                our_agent_path=our_path,
             )
             n_matches_saved += 1
 

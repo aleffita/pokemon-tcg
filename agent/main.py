@@ -91,18 +91,28 @@ def _load_model():
             "bc_would_ko": False,
             "bc_wk_nvar": 10,
             "provenance": "no-checkpoint",
+            "prospective_planner": {
+                "enabled": False,
+                "config": None,
+                "runtime": None,
+                "trained_optimizer_steps": 0,
+                "provenance": "no-checkpoint",
+            },
         }
     net, metadata = load_inference_checkpoint(_MODEL_PATH, _CARD_TABLE)
     runtime_cfg = metadata["inference_config"]
+    prospective_cfg = runtime_cfg["prospective_planner"]
     print(f"[bc-agent] loaded PyTorch FP16 model {_MODEL_PATH} "
           f"(nlayers={metadata['nlayers']}, "
           f"scratch={metadata['scratch_registers']}, "
-          f"would_ko={runtime_cfg['bc_would_ko']})")
+          f"would_ko={runtime_cfg['bc_would_ko']}, "
+          f"prospective={prospective_cfg['enabled']})")
     return net, metadata, runtime_cfg
 
 
 _LOADED_MODEL, _MODEL_METADATA, _RUNTIME_DATA = _load_model()
 _RUNTIME_CFG = SimpleNamespace(**_RUNTIME_DATA)
+_PROSPECTIVE_MODEL = _MODEL_METADATA.get("prospective_planner_model")
 
 # ---- deck ----
 def load_deck(path: str = _DECK_PATH) -> list[int]:
@@ -135,6 +145,7 @@ def _get_tracker(side: int):
             "deck": None,
             "memory": None,  # F.1: persistent scratch register state
             "would_ko_rng": None,
+            "decision_index": 0,
             "stale": True,   # needs a reset before its first decision
         }
     st = _TRACKERS[side]
@@ -144,6 +155,7 @@ def _get_tracker(side: int):
         st["deck"] = list(DECK)
         st["memory"] = None  # F.1: clean memory at match start
         st["would_ko_rng"] = random.Random(int(_RUNTIME_CFG.seed) + int(side))
+        st["decision_index"] = 0
         st["stale"] = False
     return st
 
@@ -322,6 +334,77 @@ def choose(select: dict[str, Any], current: dict | None, logs: list | None = Non
 
     # F.1: Pass memory and store memory_out
     memory_in = st["memory"]
+    match_time = int(st["decision_index"])
+    st["decision_index"] = match_time + 1
+
+    # A trained, checkpoint-enabled prospective planner may select one complete
+    # legal action (including multi-select combinations). Search failure is a
+    # local fallback condition: the existing Transformer/TBPTT path below is
+    # unchanged. The trunk advances exactly once when the planner succeeds.
+    prospective_cfg = _RUNTIME_DATA["prospective_planner"]
+    if prospective_cfg["enabled"] and _PROSPECTIVE_MODEL is not None:
+        try:
+            from rl.prospective_runtime import (
+                ProspectiveRuntimeConfig,
+                build_runtime_prospective_tree,
+                rerank_with_prospective_planner,
+            )
+            from rl.prospective_schema import ProspectivePlannerConfig
+
+            encoded_context = encode_step(set())
+            context_observation = _build_tensors(encoded_context, int_keys)
+            with torch.inference_mode():
+                cls_out, _, pooled, _, planner_memory_out = (
+                    _LOADED_MODEL._encode(
+                        context_observation,
+                        memory_in=memory_in,
+                    )
+                )
+                trunk_context = torch.cat(
+                    (
+                        cls_out[:, None, :],
+                        pooled[:, None, :],
+                        planner_memory_out,
+                    ),
+                    dim=1,
+                )[0].detach().cpu().numpy()
+            tree = build_runtime_prospective_tree(
+                obs_for_encode,
+                list(deck),
+                _ENCODER,
+                trunk_context,
+                planner_config=ProspectivePlannerConfig(
+                    **prospective_cfg["config"]
+                ),
+                runtime_config=ProspectiveRuntimeConfig.from_dict(
+                    prospective_cfg["runtime"]
+                ),
+                match_time=match_time,
+            )
+            reranked = (
+                rerank_with_prospective_planner(_PROSPECTIVE_MODEL, tree)
+                if tree is not None
+                else None
+            )
+            if reranked is not None:
+                results = list(reranked.action)
+                if not (
+                    min_count <= len(results) <= max_count
+                    and len(set(results)) == len(results)
+                    and all(0 <= index < n for index in results)
+                ):
+                    raise ValueError("prospective planner returned an illegal action")
+                # The exact memory produced while constructing the trained
+                # [CLS, pooled, scratch] planner context is committed once.
+                st["memory"] = planner_memory_out
+                ability.record(select, results)
+                return results
+        except Exception:
+            # Planner search is strictly additive. Any unavailable engine
+            # state, rejected determinization, or malformed result retains the
+            # checkpoint-compatible Transformer behavior.
+            pass
+
     try:
         results, memory_out = _autoregressive_select(
             _LOADED_MODEL, encode_step, int_keys, options, min_count, max_count,

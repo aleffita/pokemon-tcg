@@ -1158,22 +1158,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/3e/c7/cb62301b01dbccd66b256cab0c98fc29e7533dd76aa599fe44c1bb1f4168/mlx-0.32.0-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:72c605368d145c756877057d7e3c54f169c9899fe1f83232bfb3a6342561e234", size = 562792, upload-time = "2026-07-07T17:55:35.24Z" },
     { url = "https://files.pythonhosted.org/packages/1a/b1/c2eba5bb18c94a9fe1b5d6599f18ba2ef5de2d8b42439716d9241ab196c4/mlx-0.32.0-cp311-cp311-macosx_15_0_arm64.whl", hash = "sha256:0a0e38a409b9cae29647ec9e75ce9747b224ce7e5d91adbfad7eac37b6118ffd", size = 562792, upload-time = "2026-07-07T17:55:36.876Z" },
     { url = "https://files.pythonhosted.org/packages/1f/43/5b481bfb8f1234153fd8fef9dcacfe34860b0934eb507c0eb811ba599afe/mlx-0.32.0-cp311-cp311-macosx_26_0_arm64.whl", hash = "sha256:2a180cd39ac68b397b85cc4658d0b8e0ab58166c2549fc9ab2ca5f99d15ef0c3", size = 562776, upload-time = "2026-07-07T17:55:38.314Z" },
-    { url = "https://files.pythonhosted.org/packages/17/9d/6b424d7a457baf5da788d881f9c3e908e44473e89544acee77962868d8f6/mlx-0.32.0-cp311-cp311-manylinux_2_35_aarch64.whl", hash = "sha256:4c8925d9d22d57b26885cb0858d2d4463d7526b17363c166820db5ea949731ad", size = 647901, upload-time = "2026-07-07T17:55:39.774Z" },
-    { url = "https://files.pythonhosted.org/packages/10/0e/6e264023c3432b83b32fbf9f2a1365f8f0a9c5e67ed1684330ecbd5faf63/mlx-0.32.0-cp311-cp311-manylinux_2_35_x86_64.whl", hash = "sha256:5d5041205173e44f176d00b8119e7db7802c298a0f845486f0281c45122646ed", size = 682331, upload-time = "2026-07-07T17:55:41.101Z" },
-]
-
-[package.optional-dependencies]
-cpu = [
-    { name = "mlx-cpu", marker = "sys_platform == 'linux'" },
-]
-
-[[package]]
-name = "mlx-cpu"
-version = "0.32.0"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/f7/5d9b53ad219d2ed31f66a103eba097e07a77bb5b0b0ea4dbfb12a8bfd224/mlx_cpu-0.32.0-py3-none-manylinux_2_35_aarch64.whl", hash = "sha256:b23f19d34073445b32a724358ba21bfb114a84021c9507be700479a191a9ae08", size = 8792264, upload-time = "2026-07-07T17:55:12.942Z" },
-    { url = "https://files.pythonhosted.org/packages/0a/02/16c07a41e382312d6b86f1df5ee2975246b94f88a289c0468a9d9a5cd368/mlx_cpu-0.32.0-py3-none-manylinux_2_35_x86_64.whl", hash = "sha256:d5052fa8e1cbc135cc4b6fc09745f9a57a2cbd1b4def17449e965ef263239d75", size = 10370672, upload-time = "2026-07-07T17:55:15.263Z" },
 ]
 
 [[package]]
@@ -2269,8 +2253,7 @@ source = { editable = "." }
 dependencies = [
     { name = "kaggle" },
     { name = "kaggle-environments" },
-    { name = "mlx", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "mlx", extra = ["cpu"], marker = "sys_platform == 'linux'" },
+    { name = "mlx", marker = "sys_platform == 'darwin'" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pymupdf" },
@@ -2285,7 +2268,6 @@ requires-dist = [
     { name = "kaggle", specifier = ">=2.2.4" },
     { name = "kaggle-environments", specifier = ">=1.32.0" },
     { name = "mlx", marker = "sys_platform == 'darwin'", specifier = ">=0.32.0" },
-    { name = "mlx", extras = ["cpu"], marker = "sys_platform == 'linux'", specifier = ">=0.32.0" },
     { name = "numpy", specifier = ">=2.4" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "pymupdf", specifier = ">=1.28.0" },

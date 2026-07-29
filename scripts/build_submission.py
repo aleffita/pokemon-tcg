@@ -23,12 +23,26 @@ import os
 import shutil
 import sys
 import tarfile
-import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AGENT_DIR = os.path.join(ROOT, "agent")
 RL_DIR = os.path.join(ROOT, "rl")
+SUBMISSION_WORK_DIR = os.path.join(ROOT, "model", "submission_work")
 REQUIRED = ["main.py", "deck.csv"]
+SMOKE_CHECKPOINT_DIR = os.path.join(ROOT, "model", "checkpoint", "smoke")
+SMOKE_TORCH_CHECKPOINT = os.path.join(
+    ROOT, "model", "bc_model", "smoke", "bc_smoke_torch_fp16.pt"
+)
+MAIN_TORCH_CHECKPOINT = os.path.join(
+    ROOT, "model", "bc_model", "bc_best_torch_fp16.pt"
+)
+SMOKE_SUBMISSION = os.path.join(
+    ROOT,
+    "public_agents",
+    "submissions",
+    "smoke",
+    "submission_smoke.tar.gz",
+)
 
 # Checkpoint source paths are build-time conventions only. Runtime settings are
 # embedded in the selected checkpoint, never read from train_config.json.
@@ -41,6 +55,49 @@ SOURCE_CHECKPOINT_CANDIDATES = [
 TORCH_CHECKPOINT_ARC = os.path.join(
     "model", "bc_model", "bc_best_torch_fp16.pt"
 ).replace(os.sep, "/")
+
+
+def _is_within(path: str, directory: str) -> bool:
+    return os.path.commonpath(
+        (os.path.realpath(path), os.path.realpath(directory))
+    ) == os.path.realpath(directory)
+
+
+def _resolve_smoke_checkpoint(explicit: str | None) -> str:
+    """Resolve one non-epoch smoke checkpoint without touching main models."""
+
+    if explicit is not None:
+        checkpoint = os.path.abspath(explicit)
+        if not _is_within(checkpoint, SMOKE_CHECKPOINT_DIR):
+            raise SystemExit(
+                "ERROR: --smoke checkpoint must be inside "
+                f"{SMOKE_CHECKPOINT_DIR}: {checkpoint}"
+            )
+        if not os.path.isfile(checkpoint):
+            raise SystemExit(
+                f"ERROR: explicit smoke checkpoint does not exist: {checkpoint}"
+            )
+        return checkpoint
+
+    if not os.path.isdir(SMOKE_CHECKPOINT_DIR):
+        raise SystemExit(
+            f"ERROR: smoke checkpoint directory does not exist: "
+            f"{SMOKE_CHECKPOINT_DIR}"
+        )
+    candidates = [
+        os.path.join(SMOKE_CHECKPOINT_DIR, name)
+        for name in sorted(os.listdir(SMOKE_CHECKPOINT_DIR))
+        if name.endswith(".pkl")
+        and "_epoch_" not in name
+        and not name.endswith("_latest.pkl")
+    ]
+    if len(candidates) != 1:
+        detail = "\n  ".join(candidates) if candidates else "(none)"
+        raise SystemExit(
+            "ERROR: --smoke requires exactly one canonical non-epoch MLX "
+            f"checkpoint in {SMOKE_CHECKPOINT_DIR}; found:\n  {detail}"
+        )
+    return candidates[0]
 
 
 def _collect_files(base_dir: str, prefix: str) -> list[tuple[str, str]]:
@@ -58,9 +115,26 @@ def _collect_files(base_dir: str, prefix: str) -> list[tuple[str, str]]:
     return files
 
 
+def _fresh_project_work_dir(name: str) -> str:
+    """Create one clean, repository-local build directory."""
+
+    path = os.path.join(SUBMISSION_WORK_DIR, name)
+    shutil.rmtree(path, ignore_errors=True)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("-o", "--out", default=os.path.join(ROOT, "submission.tar.gz"))
+    p.add_argument("-o", "--out", default=None)
+    p.add_argument(
+        "--smoke",
+        action="store_true",
+        help=(
+            "Use only model/checkpoint/smoke and default to the isolated "
+            "public_agents/submissions/smoke/submission_smoke.tar.gz"
+        ),
+    )
     p.add_argument(
         "--checkpoint",
         default=None,
@@ -71,6 +145,11 @@ def main() -> None:
     )
     p.add_argument("--no-validate", action="store_true", help="Skip agent validation")
     args = p.parse_args()
+    args.out = args.out or (
+        SMOKE_SUBMISSION
+        if args.smoke
+        else os.path.join(ROOT, "submission.tar.gz")
+    )
 
     files = []
 
@@ -83,14 +162,19 @@ def main() -> None:
         for full, arc in _collect_files(RL_DIR, "rl"):
             # Training remains MLX, but the submitted inference runtime is
             # PyTorch-only and must not import or ship the MLX policy.
-            if arc != "rl/policy_mlx.py":
+            if arc not in (
+                "rl/policy_mlx.py",
+                "rl/prospective_planner_mlx.py",
+            ):
                 files.append((full, arc))
     else:
         print("WARNING: rl/ not found — submission may fail on Kaggle")
 
     # 3. Resolve the MLX trainer checkpoint that will be converted below.
     source_checkpoint = None
-    if args.checkpoint:
+    if args.smoke:
+        source_checkpoint = _resolve_smoke_checkpoint(args.checkpoint)
+    elif args.checkpoint:
         source_checkpoint = os.path.abspath(args.checkpoint)
         if not os.path.isfile(source_checkpoint):
             raise SystemExit(
@@ -135,29 +219,36 @@ def main() -> None:
     else:
         print("WARNING: EN_Card_Data.csv not found — agent will fail at runtime")
 
-    # 5. Convert to the portable FP16 PyTorch artifact, then build the tarball
-    # while the temporary converted file is alive.
-    staging = tempfile.mkdtemp(prefix="ptcg_torch_fp16_")
+    # 5. Convert into the canonical project model directory, then package that
+    # exact artifact. The smoke and full paths mirror the real submission flow.
+    from rl.encoder.card_features import get_card_table
+    from rl.policy_infer_torch import save_torch_inference_checkpoint
+
+    converted = (
+        SMOKE_TORCH_CHECKPOINT if args.smoke else MAIN_TORCH_CHECKPOINT
+    )
+    os.makedirs(os.path.dirname(converted), exist_ok=True)
+    building = converted + ".building"
     try:
-        from rl.encoder.card_features import get_card_table
-        from rl.policy_infer_torch import save_torch_inference_checkpoint
-
-        converted = os.path.join(staging, "bc_best_torch_fp16.pt")
         cfg = save_torch_inference_checkpoint(
-            source_checkpoint, converted, get_card_table()
+            source_checkpoint, building, get_card_table()
         )
-        files.append((converted, TORCH_CHECKPOINT_ARC))
-        print(
-            f"Checkpoint: {os.path.relpath(source_checkpoint, ROOT)} -> "
-            f"{TORCH_CHECKPOINT_ARC} (FP16, nlayers={cfg['nlayers']}, "
-            f"scratch={cfg['scratch_registers']})"
-        )
-
-        with tarfile.open(args.out, "w:gz") as tar:
-            for full, arc in sorted(files, key=lambda x: x[1]):
-                tar.add(full, arcname=arc)
+        os.replace(building, converted)
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        if os.path.exists(building):
+            os.unlink(building)
+    files.append((converted, TORCH_CHECKPOINT_ARC))
+    print(
+        f"Checkpoint: {os.path.relpath(source_checkpoint, ROOT)} -> "
+        f"{TORCH_CHECKPOINT_ARC} (FP16, nlayers={cfg['nlayers']}, "
+        f"scratch={cfg['scratch_registers']})"
+    )
+
+    output_parent = os.path.dirname(os.path.abspath(args.out))
+    os.makedirs(output_parent, exist_ok=True)
+    with tarfile.open(args.out, "w:gz") as tar:
+        for full, arc in sorted(files, key=lambda x: x[1]):
+            tar.add(full, arcname=arc)
 
     size_mb = os.path.getsize(args.out) / (1024 * 1024)
     print(f"Wrote {args.out} ({size_mb:.1f} MB)")
@@ -185,9 +276,17 @@ def _validate_archive(tar_path: str) -> None:
     import traceback
 
     print("\nValidating archive...")
-    staging = tempfile.mkdtemp(prefix="ptcg_validate_")
+    archive_label = os.path.basename(tar_path).removesuffix(".tar.gz")
+    staging = _fresh_project_work_dir(f"validate_{archive_label}")
     try:
         with tarfile.open(tar_path, "r:gz") as tar:
+            archive_names = tar.getnames()
+            wheels = [name for name in archive_names if name.endswith(".whl")]
+            if wheels:
+                raise SystemExit(
+                    "  ERROR: PyTorch-only archive unexpectedly contains "
+                    f"vendored wheels: {wheels}"
+                )
             tar.extractall(staging)
 
         # Structural checks: paths the agent resolves at import time.
@@ -198,6 +297,10 @@ def _validate_archive(tar_path: str) -> None:
             "rl/encoder/encoding.py",
             "rl/policy.py",
             "rl/policy_infer_torch.py",
+            "rl/prospective_input_adapter.py",
+            "rl/prospective_planner_torch.py",
+            "rl/prospective_runtime.py",
+            "rl/prospective_schema.py",
             TORCH_CHECKPOINT_ARC,
         ]
         for rel in expected:
@@ -205,6 +308,7 @@ def _validate_archive(tar_path: str) -> None:
                 raise SystemExit(f"  ERROR: archive is missing {rel}")
         forbidden = (
             "rl/policy_mlx.py",
+            "rl/prospective_planner_mlx.py",
             "configs/train_config.json",
             "configs/train_config.schema.json",
             "_vendor",
@@ -214,7 +318,7 @@ def _validate_archive(tar_path: str) -> None:
                 raise SystemExit(f"  ERROR: PyTorch-only archive unexpectedly contains {rel}")
         print(f"  OK: {len(expected)} required paths present")
         print(f"  OK: checkpoint at {TORCH_CHECKPOINT_ARC}")
-        print("  OK: no MLX policy or vendored MLX runtime")
+        print("  OK: no MLX policy, MLX wheels, or vendored runtime")
 
         # Behavioural check: import and play one decision from the extracted copy.
         old_cwd = os.getcwd()
