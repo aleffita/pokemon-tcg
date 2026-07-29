@@ -32,6 +32,7 @@ dependencies = [
 tcg-train       = "scripts.bc.bc_train_mlx:main"
 tcg-build-bc    = "scripts.bc.build_bc_from_zips:main"
 tcg-build-daily = "scripts.bc.build_bc_dataset:main"
+tcg-build-prospective = "scripts.bc.build_prospective_groups:main"
 tcg-evaluate    = "scripts.evaluate:main"
 tcg-tournament  = "scripts.tournament:main"
 # Build the submission bundle; add --upload to send it to Kaggle.
