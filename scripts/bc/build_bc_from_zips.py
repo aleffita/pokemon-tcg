@@ -30,6 +30,14 @@ import zipfile
 from multiprocessing import Pool
 
 import numpy as np
+from rich.progress import (
+    BarColumn,
+    Progress,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 # import the FIXED rows_from_episode + shared encoder from the sibling module.
 # build_bc_dataset reads sys.argv AT IMPORT (MAX_EPS=int(sys.argv[3])), so hide our zip args
@@ -284,30 +292,37 @@ def _merge_shards(shard_dir, out_path, n_shards):
 
     os.makedirs(out_path, exist_ok=True)
 
-    for ki, k in enumerate(keys):
-        sample = np.load(os.path.join(first_nonempty, f"{k}.npy"))
-        shape = (total,) + sample.shape[1:]
-        dt = sample.dtype
-        del sample
+    with Progress(
+        TextColumn("[bold cyan]BC merge"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TextColumn("{task.completed:.0f}/{task.total:.0f} arrays"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        merge_task = progress.add_task("merge", total=len(keys))
+        for k in keys:
+            sample = np.load(os.path.join(first_nonempty, f"{k}.npy"))
+            shape = (total,) + sample.shape[1:]
+            dt = sample.dtype
+            del sample
 
-        out_mm = np.lib.format.open_memmap(
-            os.path.join(out_path, f"{k}.npy"),
-            mode="w+", dtype=dt, shape=shape,
-        )
-        offset = 0
-        for i in range(n_shards):
-            chunk_path = os.path.join(_shard_path(shard_dir, i), f"{k}.npy")
-            if not os.path.exists(chunk_path):
-                continue
-            chunk = np.load(chunk_path)
-            out_mm[offset:offset + len(chunk)] = chunk
-            offset += len(chunk)
-            del chunk
-        out_mm.flush()
-        del out_mm
-
-        if (ki + 1) % 10 == 0:
-            print(f"[bc-zips]   merged {ki + 1}/{len(keys)} keys ...", flush=True)
+            out_mm = np.lib.format.open_memmap(
+                os.path.join(out_path, f"{k}.npy"),
+                mode="w+", dtype=dt, shape=shape,
+            )
+            offset = 0
+            for i in range(n_shards):
+                chunk_path = os.path.join(_shard_path(shard_dir, i), f"{k}.npy")
+                if not os.path.exists(chunk_path):
+                    continue
+                chunk = np.load(chunk_path)
+                out_mm[offset:offset + len(chunk)] = chunk
+                offset += len(chunk)
+                del chunk
+            out_mm.flush()
+            del out_mm
+            progress.advance(merge_task)
 
     # D.3: merge episode metadata (structured dtype, direct concat — no memmap needed)
     meta_parts = []
@@ -725,6 +740,129 @@ def _ensure_prospective_sidecar(
     }
 
 
+def _base_stage_path(out):
+    if str(out).endswith(".npz"):
+        return Path(f"{out}.base-stage.json")
+    return Path(out) / ".dataset_base_stage.json"
+
+
+def _load_base_stage(path, *, build_contract, out):
+    if not path.is_file():
+        return None
+    with path.open(encoding="utf-8") as stream:
+        stage = json.load(stream)
+    if stage.get("stage") != "base_ready":
+        raise RuntimeError(f"invalid base-stage checkpoint: {path}")
+    if stage.get("build_fingerprint") != build_contract["build_fingerprint"]:
+        raise RuntimeError(
+            "base-stage checkpoint belongs to a different config/source contract"
+        )
+    rows = int(stage.get("output", {}).get("rows", -1))
+    if rows <= 0:
+        raise RuntimeError("base-stage checkpoint has no materialized rows")
+    if str(out).endswith(".npz"):
+        if not Path(out).is_file():
+            raise RuntimeError("base-stage checkpoint exists but its NPZ is missing")
+    else:
+        for name in ("__labels__.npy", "episode_meta.npy", "opt_attr.npy"):
+            array_path = Path(out) / name
+            if not array_path.is_file():
+                raise RuntimeError(
+                    f"base-stage checkpoint exists but {array_path} is missing"
+                )
+            array = np.load(array_path, mmap_mode="r", allow_pickle=False)
+            if len(array) != rows:
+                raise RuntimeError(
+                    f"base-stage row count disagrees with {array_path}"
+                )
+            del array
+    return stage
+
+
+def _would_ko_contract(cfg, aggregate_stats, would_ko_status):
+    return {
+        "enabled": bool(cfg.bc_would_ko),
+        "status": would_ko_status,
+        "n_var": int(cfg.bc_wk_nvar),
+        "heuristic_version": WOULD_KO_HEURISTIC_VERSION,
+        "counters": aggregate_stats,
+        "zero_semantics": (
+            "computed=true and zero_result=true means a valid zero; "
+            "computed=false with failed_trials>0 means computation failure"
+        ),
+    }
+
+
+def _finish_dataset(
+    *,
+    out,
+    cfg,
+    config_source,
+    zip_paths,
+    sources,
+    build_contract,
+    rows,
+    shard_count,
+    aggregate_stats,
+    would_ko_status,
+    base_stage_path,
+):
+    prospective_contract = _ensure_prospective_sidecar(
+        out,
+        cfg=cfg,
+        config_source=config_source,
+        zip_paths=zip_paths,
+        sources=sources,
+        bc_dataset_contract=build_contract,
+    )
+    if prospective_contract["enabled"]:
+        print(
+            "[bc-zips] prospective sidecar "
+            f"{prospective_contract['status']}: "
+            f"{out}/{prospective_contract['sidecar_name']} "
+            f"nodes={prospective_contract['node_rows']} "
+            f"branches={prospective_contract['branch_rows']} "
+            f"fingerprint={prospective_contract['fingerprint'][:12]}",
+            flush=True,
+        )
+
+    completed_manifest = {
+        **build_contract,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "output": {
+            "path": str(out),
+            "rows": int(rows),
+            "shards": int(shard_count),
+            "dtype_policy": "builder_native_arrays",
+        },
+        "would_ko": _would_ko_contract(
+            cfg, aggregate_stats, would_ko_status
+        ),
+        "prospective": prospective_contract,
+        "self_identity": {
+            "aliases": sorted(B.SELF_ALIASES),
+            "storage": "episode_meta.npy:is_self",
+        },
+        "hidden_replay_data": {
+            "deck_storage": (
+                "episode_meta.npy:player_deck_hash,opponent_deck_hash"
+            ),
+            "used_by_would_ko": False,
+            "reason": (
+                "live inference cannot observe the opponent's submitted deck"
+            ),
+        },
+    }
+    manifest_path = (
+        os.path.join(out, "dataset_manifest.json")
+        if not str(out).endswith(".npz")
+        else f"{out}.manifest.json"
+    )
+    _write_json(manifest_path, completed_manifest)
+    base_stage_path.unlink(missing_ok=True)
+    print("[bc-zips] dataset and prospective sidecar DONE.", flush=True)
+
+
 # ---------------------------------------------------------------------------
 #  MAIN
 # ---------------------------------------------------------------------------
@@ -802,6 +940,36 @@ def main():
         source_manifest,
         dedup_manifest,
     )
+    base_stage_path = _base_stage_path(OUT)
+    base_stage = _load_base_stage(
+        base_stage_path,
+        build_contract=build_contract,
+        out=OUT,
+    )
+    if base_stage is not None:
+        shutil.rmtree(shard_dir, ignore_errors=True)
+        rows = int(base_stage["output"]["rows"])
+        shard_count = int(base_stage["output"]["shards"])
+        would_ko = base_stage["would_ko"]
+        print(
+            "[bc-zips] RESUME: validated base dataset checkpoint "
+            f"({rows} rows); base shards already reclaimed",
+            flush=True,
+        )
+        _finish_dataset(
+            out=OUT,
+            cfg=cfg,
+            config_source=config_source,
+            zip_paths=ZIPS,
+            sources=source_manifest,
+            build_contract=build_contract,
+            rows=rows,
+            shard_count=shard_count,
+            aggregate_stats=would_ko["counters"],
+            would_ko_status=would_ko["status"],
+            base_stage_path=base_stage_path,
+        )
+        return
     _prepare_resume_manifest(shard_dir, build_contract)
 
     # ---- RESUME: count already-completed shards ----
@@ -948,70 +1116,44 @@ def main():
         )
         print(f"[bc-zips] wrote {OUT}: {n} rows (.npz self-check skipped)", flush=True)
 
-    prospective_contract = _ensure_prospective_sidecar(
-        OUT,
-        cfg=cfg,
-        config_source=config_source,
-        zip_paths=ZIPS,
-        sources=source_manifest,
-        bc_dataset_contract=build_contract,
-    )
-    if prospective_contract["enabled"]:
-        print(
-            "[bc-zips] prospective sidecar "
-            f"{prospective_contract['status']}: "
-            f"{OUT}/{prospective_contract['sidecar_name']} "
-            f"nodes={prospective_contract['node_rows']} "
-            f"branches={prospective_contract['branch_rows']} "
-            f"fingerprint={prospective_contract['fingerprint'][:12]}",
-            flush=True,
-        )
-
-    completed_manifest = {
+    base_stage = {
         **build_contract,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "stage": "base_ready",
+        "checkpointed_at": datetime.now(timezone.utc).isoformat(),
         "output": {
             "path": str(OUT),
             "rows": int(n),
             "shards": int(n_shards),
             "dtype_policy": "builder_native_arrays",
         },
-        "would_ko": {
-            "enabled": bool(cfg.bc_would_ko),
-            "status": would_ko_status,
-            "n_var": int(cfg.bc_wk_nvar),
-            "heuristic_version": WOULD_KO_HEURISTIC_VERSION,
-            "counters": aggregate_stats,
-            "zero_semantics": (
-                "computed=true and zero_result=true means a valid zero; "
-                "computed=false with failed_trials>0 means computation failure"
-            ),
-        },
-        "prospective": prospective_contract,
-        "self_identity": {
-            "aliases": sorted(B.SELF_ALIASES),
-            "storage": "episode_meta.npy:is_self",
-        },
-        "hidden_replay_data": {
-            "deck_storage": (
-                "episode_meta.npy:player_deck_hash,opponent_deck_hash"
-            ),
-            "used_by_would_ko": False,
-            "reason": (
-                "live inference cannot observe the opponent's submitted deck"
-            ),
-        },
+        "would_ko": _would_ko_contract(
+            cfg, aggregate_stats, would_ko_status
+        ),
     }
-    manifest_path = (
-        os.path.join(OUT, "dataset_manifest.json")
-        if not OUT.endswith(".npz")
-        else f"{OUT}.manifest.json"
-    )
-    _write_json(manifest_path, completed_manifest)
+    _write_json(base_stage_path, base_stage)
 
-    # ---- cleanup shard temp directory ----
+    # The materialized base arrays and their atomic checkpoint are sufficient
+    # for prospective construction and resume. Reclaim the duplicate BC shards
+    # before the long prospective phase begins.
     shutil.rmtree(shard_dir, ignore_errors=True)
-    print("[bc-zips] shards cleaned up. DONE.", flush=True)
+    print(
+        "[bc-zips] base dataset checkpointed; base shards reclaimed before "
+        "prospective build",
+        flush=True,
+    )
+    _finish_dataset(
+        out=OUT,
+        cfg=cfg,
+        config_source=config_source,
+        zip_paths=ZIPS,
+        sources=source_manifest,
+        build_contract=build_contract,
+        rows=n,
+        shard_count=n_shards,
+        aggregate_stats=aggregate_stats,
+        would_ko_status=would_ko_status,
+        base_stage_path=base_stage_path,
+    )
 
 
 if __name__ == "__main__":

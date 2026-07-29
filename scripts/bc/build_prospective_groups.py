@@ -31,6 +31,14 @@ from typing import Any, Iterator
 import zipfile
 
 import numpy as np
+from rich.progress import (
+    BarColumn,
+    Progress,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import MAX_OPTIONS, TokenEncoder
@@ -1273,6 +1281,14 @@ def build(
     candidate_roots = 0
     skipped_unmaterialized_roots = 0
     skipped_unmaterialized_sides: set[tuple[str, int]] = set()
+    resumed_tree_groups = sum(
+        int(
+            json.loads((shard / ".done").read_text(encoding="utf-8"))[
+                "group_rows"
+            ]
+        )
+        for shard in shards
+    )
 
     def flush_pending() -> None:
         nonlocal pending, next_shard
@@ -1282,13 +1298,48 @@ def build(
         next_shard += 1
         pending = []
 
-    for member_index, (source_path, member) in enumerate(episode_refs):
+    build_episode_refs = (
+        episode_refs
+        if not max_groups
+        else episode_refs[:min(len(episode_refs), max_groups)]
+    )
+    progress = Progress(
+        TextColumn("[bold cyan]Prospective rollouts"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TextColumn("{task.completed:.0f}/{task.total:.0f} episodes"),
+        TextColumn("groups={task.fields[groups]}"),
+        TextColumn("shards={task.fields[shards]}"),
+        TextColumn("resumed={task.fields[resumed]}"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    )
+    progress_task = progress.add_task(
+        "prospective",
+        total=len(build_episode_refs),
+        groups="0",
+        shards=f"{len(shards):,}",
+        resumed=f"{resumed_tree_groups:,}",
+    )
+
+    def tracked_episode_refs():
+        progress.start()
+        try:
+            for item in build_episode_refs:
+                yield item
+                progress.advance(progress_task)
+        finally:
+            progress.stop()
+
+    for member_index, (source_path, member) in enumerate(
+        tracked_episode_refs()
+    ):
         episode_group_quota: int | None = None
         if max_groups:
-            base_quota, extra = divmod(max_groups, max(len(episode_refs), 1))
+            base_quota, extra = divmod(
+                max_groups, max(len(build_episode_refs), 1)
+            )
             episode_group_quota = base_quota + int(member_index < extra)
-            if episode_group_quota == 0:
-                continue
         with zipfile.ZipFile(source_path) as archive:
             episode = json.loads(archive.read(member))
         episode_id = Path(member).stem
@@ -1498,12 +1549,22 @@ def build(
                 })
                 if len(pending) >= flush_groups:
                     flush_pending()
+                    progress.update(
+                        progress_task,
+                        groups=f"{groups_emitted:,}",
+                        shards=f"{next_shard:,}",
+                    )
             episode_groups += 1
             if (
                 episode_group_quota is not None
                 and episode_groups >= episode_group_quota
             ):
                 break
+        progress.update(
+            progress_task,
+            groups=f"{groups_emitted:,}",
+            shards=f"{next_shard:,}",
+        )
     flush_pending()
     if next_completed is not None:
         raise RuntimeError(
