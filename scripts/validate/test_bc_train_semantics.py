@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import tempfile
+import os
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 
 import mlx.core as mx
@@ -22,7 +21,10 @@ from scripts.bc.bc_train_mlx import (
     _to_fp32_grads,
     _use_muon_parameter,
 )
-from scripts.validate.make_synthetic_data import make_dataset
+
+REAL_SMOKE_DATASET = (
+    "data/bc_data/bc_smoke_2026_07_28"
+)
 
 
 def _optimizer_config() -> SimpleNamespace:
@@ -247,16 +249,24 @@ class BCTrainingSemanticTests(unittest.TestCase):
         )
 
     def test_real_policy_forward_is_fp16_with_sixteen_registers(self):
-        with tempfile.TemporaryDirectory(prefix="ptcg_mlx_fp16_") as out:
-            make_dataset(1, out, seed=11)
-            arrays = {
-                path.stem: np.load(path)
-                for path in Path(out).glob("*.npy")
-                if not path.name.startswith("__")
-            }
-        arrays["effect_mask"] = np.zeros((1, 2), dtype=np.float16)
-        arrays["action_mask"][:] = 0
-        arrays["action_mask"][0, [0, 150, 192]] = 1
+        if not os.path.isfile(
+            os.path.join(REAL_SMOKE_DATASET, "__labels__.npy")
+        ):
+            raise FileNotFoundError(
+                "build the real smoke corpus with configs/smoke.json first"
+            )
+        arrays = {
+            name[:-4]: np.asarray(
+                np.load(
+                    os.path.join(REAL_SMOKE_DATASET, name),
+                    mmap_mode="r",
+                )[0:1]
+            ).copy()
+            for name in os.listdir(REAL_SMOKE_DATASET)
+            if name.endswith(".npy")
+            and not name.startswith("__")
+            and name != "episode_meta.npy"
+        }
 
         card_table = get_card_table()
         int_keys = set(TokenEncoder(card_table).int_keys)
@@ -287,7 +297,9 @@ class BCTrainingSemanticTests(unittest.TestCase):
         self.assertEqual(memory.dtype, mx.float16)
         self.assertEqual(memory.shape, (1, 16, 128))
         self.assertTrue(np.isfinite(np.asarray(logits)).all())
-        self.assertTrue(np.isfinite(np.asarray(logits)[0, 150]))
+        legal = np.flatnonzero(arrays["action_mask"][0] > 0.5)
+        self.assertGreater(len(legal), 0)
+        self.assertTrue(np.isfinite(np.asarray(logits)[0, legal]).all())
 
 
 if __name__ == "__main__":
