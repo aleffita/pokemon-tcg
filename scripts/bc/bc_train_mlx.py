@@ -17,6 +17,7 @@ import json
 import os
 import queue
 import shutil
+import tempfile
 import threading
 import time
 from collections import defaultdict
@@ -42,6 +43,33 @@ from rl.encoder.enc_constants import OPT_WK
 from rl.encoder.encoding import TokenEncoder
 from rl.lr_schedule import lr_at
 from rl.policy_mlx import build_token_net_mlx
+from rl.prospective_input_adapter import (
+    ACTION_ATTR_AGGREGATE_VERSION,
+    ACTION_SET_FEATURE_VERSION,
+    BRANCH_FEATURE_LAYOUT_VERSION,
+    PROSPECTIVE_INPUT_ADAPTER_VERSION,
+    ProspectivePlannerNumpyBatch,
+    RealProspectivePlannerIndex,
+    load_real_prospective_planner_index,
+    materialize_real_prospective_planner_batch,
+)
+from rl.prospective_planner_mlx import (
+    ProspectivePlannerMLX,
+    group_relative_objective,
+    prospective_mlx_checkpoint_payload,
+)
+from rl.prospective_schema import (
+    BRANCH_POLICY_SCORE,
+    EXPECTED_PRIZES,
+    KO_LOGIT,
+    N_PROSPECTIVE_AXES,
+    SCALAR_RETURN,
+    SCALAR_VALUE,
+    TERMINAL_LOGIT,
+    UNCERTAINTY,
+    ProspectivePlannerConfig,
+    build_tree_attention_mask,
+)
 from rl.train_config import load_config
 
 WK_LO, WK_HI = OPT_WK, OPT_WK + 3
@@ -169,6 +197,92 @@ def _build_optimizer(cfg) -> optim.MultiOptimizer:
         weight_decay=cfg.adamw_weight_decay,
     )
     return PathSafeMultiOptimizer([muon, adamw], filters=[_use_muon_parameter])
+
+
+_PROSPECTIVE_ADAMW_PREFIXES = (
+    "policy_head.",
+    "return_head.",
+    "value_head.",
+    "ko_head.",
+    "prize_head.",
+    "terminal_head.",
+    "uncertainty_head.",
+)
+
+
+def _use_prospective_muon_parameter(path: str, parameter: mx.array) -> bool:
+    """Route only prospective hidden matrices to Muon."""
+
+    if parameter.ndim != 2 or not path.endswith(".weight"):
+        return False
+    return not path.startswith(_PROSPECTIVE_ADAMW_PREFIXES)
+
+
+def _prospective_planner_config(cfg) -> ProspectivePlannerConfig:
+    """Resolve the cross-backend prospective architecture from TrainConfig."""
+
+    config = ProspectivePlannerConfig(
+        d_model=int(cfg.d_model),
+        nhead=int(cfg.prospective_nhead),
+        nlayers=int(cfg.prospective_nlayers),
+        ff_dim=int(cfg.prospective_ff_dim),
+        rope_base=float(cfg.prospective_rope_base),
+        uncertainty_floor=float(cfg.prospective_uncertainty_floor),
+    )
+    config.validate()
+    return config
+
+
+def _prospective_optimizer_contract(cfg) -> dict:
+    """Serializable identity for the planner's independent optimizer."""
+
+    return {
+        "name": str(cfg.optimizer),
+        "learning_rate": float(cfg.prospective_lr),
+        "muon_momentum": float(cfg.muon_momentum),
+        "muon_weight_decay": float(cfg.muon_weight_decay),
+        "adamw_betas": [float(value) for value in cfg.adamw_betas],
+        "adamw_eps": float(cfg.adamw_eps),
+        "adamw_weight_decay": float(cfg.adamw_weight_decay),
+        "state_dtype": "float32",
+        "parameter_dtype": "float16",
+        "routing_version": 1,
+        "scope": "prospective_planner",
+    }
+
+
+def _build_prospective_optimizer(cfg) -> optim.MultiOptimizer:
+    """Build a planner-local Muon/AdamW optimizer."""
+
+    if cfg.optimizer != "muon_adamw":
+        raise ValueError(f"unsupported optimizer contract: {cfg.optimizer!r}")
+    muon = FP32StateMuon(
+        learning_rate=cfg.prospective_lr,
+        momentum=cfg.muon_momentum,
+        weight_decay=cfg.muon_weight_decay,
+    )
+    adamw = FP32StateAdamW(
+        learning_rate=cfg.prospective_lr,
+        betas=[float(value) for value in cfg.adamw_betas],
+        eps=cfg.adamw_eps,
+        weight_decay=cfg.adamw_weight_decay,
+    )
+    return PathSafeMultiOptimizer(
+        [muon, adamw], filters=[_use_prospective_muon_parameter]
+    )
+
+
+def _prospective_scheduler_contract(
+    cfg, total_steps: int, warmup_steps: int
+) -> dict:
+    return {
+        "schedule": str(cfg.lr_schedule),
+        "base_lr": float(cfg.prospective_lr),
+        "warmup_steps": int(warmup_steps),
+        "min_ratio": float(cfg.lr_min_ratio),
+        "total_steps": int(total_steps),
+        "scope": "prospective_planner",
+    }
 
 
 def _cross_entropy_sum(logits: mx.array, labels: mx.array) -> mx.array:
@@ -506,6 +620,488 @@ def read_rows(arr: np.ndarray, start: int, stop: int) -> np.ndarray:
         offset=arr.offset + start * rowel * arr.dtype.itemsize,
     )
     return flat.reshape((stop - start,) + arr.shape[1:])
+
+
+def _prospective_target_arrays(
+    nodes: np.ndarray,
+    node_index: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Gather targets separately from the causal prospective input adapter."""
+
+    shape = node_index.shape
+    targets = {
+        "scalar_return": np.zeros(shape, dtype=np.float32),
+        "terminal": np.zeros(shape, dtype=np.float32),
+        "ko": np.zeros(shape, dtype=np.float32),
+        "prizes": np.zeros(shape, dtype=np.float32),
+        "behavior_logprob": np.zeros(shape, dtype=np.float32),
+        "has_behavior_logprob": np.zeros(shape, dtype=np.bool_),
+        "reference_logprob": np.zeros(shape, dtype=np.float32),
+        "has_reference_logprob": np.zeros(shape, dtype=np.bool_),
+    }
+    occupied = node_index >= 0
+    source = nodes[node_index[occupied]]
+    targets["scalar_return"][occupied] = source["scalar_return"]
+    targets["terminal"][occupied] = source["terminal"].astype(np.float32)
+    targets["ko"][occupied] = (source["ko_signal"] > 0).astype(np.float32)
+    targets["prizes"][occupied] = source["prizes_taken"].astype(np.float32)
+    targets["behavior_logprob"][occupied] = source["behavior_logprob"]
+    targets["has_behavior_logprob"][occupied] = source[
+        "has_behavior_logprob"
+    ]
+    targets["reference_logprob"][occupied] = source["reference_logprob"]
+    targets["has_reference_logprob"][occupied] = source[
+        "has_reference_logprob"
+    ]
+    return targets
+
+
+def _prospective_training_group_indices(
+    group_target_rows: np.ndarray,
+    *,
+    train_stop: int,
+) -> np.ndarray:
+    """Return only sidecar groups whose target belongs to the BC train split."""
+
+    target_rows = np.asarray(group_target_rows)
+    if target_rows.ndim != 1 or target_rows.dtype.kind not in "iu":
+        raise ValueError("prospective group_target_rows must be integer [G]")
+    if train_stop <= 0:
+        raise ValueError("invalid prospective train split boundary")
+    if np.any(target_rows < 0):
+        raise ValueError("prospective groups contain unresolved target rows")
+    selected = np.flatnonzero(target_rows < train_stop).astype(np.int64)
+    if len(selected) == 0:
+        raise ValueError(
+            "prospective sidecar has no groups inside the BC train split"
+        )
+    return selected
+
+
+def _prospective_training_has_node_flag(
+    index: RealProspectivePlannerIndex,
+    group_indices: np.ndarray,
+    field: str,
+) -> bool:
+    """Scan one boolean node field through memmap group slices without padding."""
+
+    if index.nodes.dtype.names is None or field not in index.nodes.dtype.names:
+        raise ValueError(f"prospective nodes lack required flag {field!r}")
+    for group_index in np.asarray(group_indices, dtype=np.int64):
+        start = int(index.node_starts[group_index])
+        stop = start + int(index.node_counts[group_index])
+        nodes = index.nodes[start:stop]
+        if np.any(nodes[field] & nodes["valid"]):
+            return True
+    return False
+
+
+def _prospective_physical_group_batches(
+    group_indices: np.ndarray,
+    batch_size: int,
+):
+    """Yield bounded sidecar group slices without materializing the corpus."""
+
+    selected = np.asarray(group_indices)
+    if selected.ndim != 1 or selected.dtype.kind not in "iu":
+        raise ValueError("prospective group indices must be integer [G]")
+    if batch_size <= 0:
+        raise ValueError("prospective physical batch size must be positive")
+    for start in range(0, len(selected), batch_size):
+        stop = min(start + batch_size, len(selected))
+        yield start, stop, selected[start:stop]
+
+
+def _reconstruct_prospective_trunk_context(
+    model: nn.Module,
+    observation_arrays: dict[str, np.ndarray],
+    integer_keys: set[str],
+    episode_meta: np.ndarray,
+    group_target_keys,
+    *,
+    row_limit: int,
+    work_plan=None,
+    context_destination: np.ndarray | None = None,
+    on_decision_complete=None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Rebuild detached causal trunk context for every real rollout tree.
+
+    Each ``(episode, side)`` lane is replayed in decision order. All expanded
+    rows of one multi-select decision receive exactly the same memory input,
+    and only the final subrow commits memory once for the next decision.
+    """
+
+    context_plan = work_plan
+    if context_plan is None:
+        context_plan, _ = _prospective_context_work_plan(
+            episode_meta,
+            group_target_keys,
+            row_limit=row_limit,
+        )
+    context_shape = (
+        len(group_target_keys),
+        2 + int(model.scratch_tokens),
+        int(model.d),
+    )
+    if context_destination is None:
+        contexts = np.empty(context_shape, dtype=np.float16)
+    else:
+        if (
+            context_destination.shape != context_shape
+            or context_destination.dtype != np.float16
+        ):
+            raise ValueError(
+                "prospective context destination must be FP16 with shape "
+                f"{context_shape}"
+            )
+        contexts = context_destination
+    resolved = np.zeros(len(group_target_keys), dtype=np.bool_)
+
+    completed_decisions = 0
+    for _, decisions, target_groups in context_plan:
+        memory: mx.array | None = None
+        for step, decision_rows in decisions:
+            observation = {
+                key: mx.array(
+                    np.asarray(array[decision_rows]).astype(
+                        np.int32 if key in integer_keys else np.float16
+                    )
+                )
+                for key, array in observation_arrays.items()
+            }
+            memory_in = (
+                model.learned_init.reshape(1, model.scratch_tokens, model.d)
+                if memory is None
+                else memory
+            )
+            repeated_memory = mx.broadcast_to(
+                memory_in,
+                (len(decision_rows), model.scratch_tokens, model.d),
+            )
+            cls_out, _, pooled, _, memory_out = model._encode(
+                observation, memory_in=repeated_memory
+            )
+            if step in target_groups:
+                # The first subrow is the pre-action view (picked is empty).
+                # Later expanded rows contain behavior-action subselections and
+                # must not leak that label into the planner's current context.
+                target_context = mx.concatenate(
+                    (
+                        cls_out[:1, None, :],
+                        pooled[:1, None, :],
+                        memory_out[:1],
+                    ),
+                    axis=1,
+                )
+                target_context = mx.stop_gradient(
+                    target_context.astype(mx.float16)
+                )
+                mx.eval(target_context)
+                target_array = np.asarray(target_context[0])
+                for batch_index in target_groups[step]:
+                    contexts[batch_index] = target_array
+                    resolved[batch_index] = True
+
+            # All subrows saw identical memory_in. Commit the final subrow
+            # exactly once to advance the lane to the next engine decision.
+            memory = mx.stop_gradient(memory_out[-1:])
+            mx.eval(memory)
+            completed_decisions += 1
+            if on_decision_complete is not None:
+                on_decision_complete(completed_decisions)
+
+    if not np.all(resolved):
+        raise ValueError("prospective context plan did not resolve every group")
+    return contexts
+
+
+def _prospective_batch_geometry(
+    planner_batch: ProspectivePlannerNumpyBatch,
+    *,
+    context_length: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Expand one physical sidecar batch to the learned trunk context width."""
+
+    if context_length <= 0:
+        raise ValueError("prospective context_length must be positive")
+    context_coordinates = np.zeros(
+        (
+            len(planner_batch.group_keys),
+            context_length,
+            N_PROSPECTIVE_AXES,
+        ),
+        dtype=np.int32,
+    )
+    context_coordinates[..., 0] = planner_batch.coordinates[:, :1, 0]
+    coordinates = np.concatenate(
+        (context_coordinates, planner_batch.coordinates[:, 1:, :]), axis=1
+    )
+    attention_mask = build_tree_attention_mask(
+        planner_batch.parent_index,
+        planner_batch.branch_valid,
+        context_length=context_length,
+    )
+    return coordinates, attention_mask
+
+
+def _prospective_context_work_plan(
+    episode_meta: np.ndarray,
+    group_target_keys,
+    *,
+    row_limit: int,
+) -> tuple[
+    list[
+        tuple[
+            tuple[str, int],
+            list[tuple[int, np.ndarray]],
+            dict[int, list[int]],
+        ]
+    ],
+    int,
+]:
+    """Plan one linear causal replay per ``(episode, side)`` lane."""
+
+    if row_limit <= 0 or row_limit > len(episode_meta):
+        raise ValueError("invalid prospective causal reconstruction row limit")
+    targets_by_lane: dict[tuple[str, int], dict[int, list[int]]] = {}
+    for batch_index, raw_target in enumerate(group_target_keys):
+        target = (
+            str(raw_target[0]),
+            int(raw_target[1]),
+            int(raw_target[2]),
+        )
+        targets_by_lane.setdefault(target[:2], {}).setdefault(
+            target[2], []
+        ).append(batch_index)
+
+    lane_rows: dict[tuple[str, int], list[int]] = {
+        lane_key: [] for lane_key in targets_by_lane
+    }
+    for row_index in range(row_limit):
+        metadata_row = episode_meta[row_index]
+        lane_key = (
+            str(metadata_row["episode_id"]),
+            int(metadata_row["side"]),
+        )
+        if lane_key in lane_rows:
+            lane_rows[lane_key].append(row_index)
+
+    plan = []
+    total_decisions = 0
+    for lane_key, target_groups in targets_by_lane.items():
+        rows = lane_rows[lane_key]
+        if len(rows) == 0:
+            raise ValueError(
+                f"prospective sidecar lane is absent from dataset: {lane_key}"
+            )
+        decisions: list[tuple[int, np.ndarray]] = []
+        current_step: int | None = None
+        current_rows: list[int] = []
+        seen_steps: set[int] = set()
+        for row in rows:
+            step = int(episode_meta["step_id"][row])
+            if current_step is None or step == current_step:
+                current_step = step
+                current_rows.append(int(row))
+                continue
+            if step in seen_steps:
+                raise ValueError(
+                    "prospective reconstruction found non-contiguous "
+                    "multi-select rows"
+                )
+            seen_steps.add(int(current_step))
+            decisions.append(
+                (int(current_step), np.asarray(current_rows, dtype=np.int64))
+            )
+            current_step = step
+            current_rows = [int(row)]
+        if current_rows and current_step is not None:
+            decisions.append(
+                (int(current_step), np.asarray(current_rows, dtype=np.int64))
+            )
+
+        target_positions = {
+            step: position
+            for position, (step, _) in enumerate(decisions)
+            if step in target_groups
+        }
+        missing_steps = set(target_groups) - set(target_positions)
+        if missing_steps:
+            raise ValueError(
+                "prospective target decisions are absent from dataset lane "
+                f"{lane_key}: {sorted(missing_steps)}"
+            )
+        stop = max(target_positions.values()) + 1
+        lane_work = decisions[:stop]
+        total_decisions += len(lane_work)
+        plan.append((lane_key, lane_work, target_groups))
+    return plan, total_decisions
+
+
+def _prospective_sibling_policy_terms(
+    scores: mx.array,
+    returns: mx.array,
+    parent_index: mx.array,
+    valid: mx.array,
+    *,
+    eps: float = 1e-6,
+) -> tuple[mx.array, mx.array, mx.array]:
+    """Build log-probabilities/advantages only within real sibling sets."""
+
+    if (
+        scores.shape != returns.shape
+        or scores.shape != parent_index.shape
+        or scores.shape != valid.shape
+        or scores.ndim != 2
+    ):
+        raise ValueError("prospective sibling tensors must share [B,T] shape")
+    valid_bool = valid.astype(mx.bool_)
+    sibling_mask = (
+        parent_index[:, :, None] == parent_index[:, None, :]
+    ) & valid_bool[:, :, None] & valid_bool[:, None, :]
+    sibling_count = mx.sum(sibling_mask.astype(mx.int32), axis=2)
+    policy_valid = valid_bool & (sibling_count >= 2)
+
+    scores_fp32 = scores.astype(mx.float32)
+    sibling_scores = mx.where(
+        sibling_mask,
+        scores_fp32[:, None, :],
+        mx.array(-1e30, dtype=mx.float32),
+    )
+    current_logprobs = scores_fp32 - mx.logsumexp(
+        sibling_scores, axis=2
+    )
+
+    returns_fp32 = returns.astype(mx.float32)
+    weights = sibling_mask.astype(mx.float32)
+    counts = mx.maximum(
+        mx.sum(weights, axis=2), mx.array(1.0, dtype=mx.float32)
+    )
+    means = mx.sum(
+        weights * returns_fp32[:, None, :], axis=2
+    ) / counts
+    centered = returns_fp32 - means
+    variances = mx.sum(
+        weights * (returns_fp32[:, None, :] - means[:, :, None]) ** 2,
+        axis=2,
+    ) / counts
+    advantages = centered / mx.sqrt(variances + eps)
+    advantages = mx.where(
+        policy_valid, advantages, mx.zeros_like(advantages)
+    )
+    return (
+        current_logprobs.astype(mx.float32),
+        mx.stop_gradient(advantages.astype(mx.float32)),
+        policy_valid,
+    )
+
+
+def _prospective_loss(
+    planner: ProspectivePlannerMLX,
+    context: mx.array,
+    branch_tokens: mx.array,
+    coordinates: mx.array,
+    attention_mask: mx.array,
+    branch_valid: mx.array,
+    parent_index: mx.array,
+    targets: dict[str, mx.array],
+    cfg,
+    *,
+    use_behavior_logprobs: bool,
+    use_reference_logprobs: bool,
+) -> mx.array:
+    """FP32 multi-head prospective objective over real rollout nodes."""
+
+    outputs = planner(
+        context,
+        branch_tokens,
+        coordinates,
+        attention_mask,
+        branch_valid,
+    )
+    valid = branch_valid.astype(mx.bool_)
+    valid_fp32 = valid.astype(mx.float32)
+    valid_count = mx.maximum(
+        mx.sum(valid_fp32), mx.array(1.0, dtype=mx.float32)
+    )
+
+    def mean_valid(value: mx.array) -> mx.array:
+        return mx.sum(value.astype(mx.float32) * valid_fp32) / valid_count
+
+    current_logprobs, advantages, policy_valid = (
+        _prospective_sibling_policy_terms(
+            outputs[BRANCH_POLICY_SCORE],
+            targets["scalar_return"],
+            parent_index,
+            valid,
+        )
+    )
+    policy = group_relative_objective(
+        current_logprobs.reshape(-1),
+        advantages.reshape(-1),
+        valid_mask=policy_valid.reshape(-1),
+        behavior_logprobs=(
+            targets["behavior_logprob"].reshape(-1)
+            if use_behavior_logprobs
+            else None
+        ),
+        has_behavior_logprob=(
+            targets["has_behavior_logprob"].reshape(-1)
+            if use_behavior_logprobs
+            else None
+        ),
+        reference_logprobs=(
+            targets["reference_logprob"].reshape(-1)
+            if use_reference_logprobs
+            else None
+        ),
+        has_reference_logprob=(
+            targets["has_reference_logprob"].reshape(-1)
+            if use_reference_logprobs
+            else None
+        ),
+        clip_ratio=float(cfg.prospective_clip_ratio),
+        kl_coefficient=float(cfg.prospective_kl_coefficient),
+    )
+
+    target_return = targets["scalar_return"].astype(mx.float32)
+    return_error = outputs[SCALAR_RETURN].astype(mx.float32) - target_return
+    value_error = outputs[SCALAR_VALUE].astype(mx.float32) - target_return
+    return_loss = mean_valid(return_error * return_error)
+    value_loss = mean_valid(value_error * value_error)
+
+    def binary_loss(logit_key: str, target_key: str) -> mx.array:
+        logits = outputs[logit_key].astype(mx.float32)
+        target = targets[target_key].astype(mx.float32)
+        per_item = mx.logaddexp(
+            mx.array(0.0, dtype=mx.float32), logits
+        ) - target * logits
+        return mean_valid(per_item)
+
+    ko_loss = binary_loss(KO_LOGIT, "ko")
+    terminal_loss = binary_loss(TERMINAL_LOGIT, "terminal")
+    prize_error = (
+        outputs[EXPECTED_PRIZES].astype(mx.float32)
+        - targets["prizes"].astype(mx.float32)
+    )
+    prize_loss = mean_valid(prize_error * prize_error)
+    scale = mx.maximum(
+        outputs[UNCERTAINTY].astype(mx.float32),
+        mx.array(float(cfg.prospective_uncertainty_floor), dtype=mx.float32),
+    )
+    uncertainty_loss = mean_valid(
+        0.5 * (return_error / scale) ** 2 + mx.log(scale)
+    )
+
+    return (
+        float(cfg.prospective_policy_weight) * policy.loss
+        + float(cfg.prospective_return_weight) * return_loss
+        + float(cfg.prospective_value_weight) * value_loss
+        + float(cfg.prospective_ko_weight) * ko_loss
+        + float(cfg.prospective_prize_weight) * prize_loss
+        + float(cfg.prospective_terminal_weight) * terminal_loss
+        + float(cfg.prospective_uncertainty_weight) * uncertainty_loss
+    ).astype(mx.float32)
 
 
 def _bool_arg(s: str) -> bool:
@@ -951,6 +1547,85 @@ def main() -> None:
     enc = TokenEncoder(ct)
     int_keys = set(enc.int_keys)
 
+    prospective_index: RealProspectivePlannerIndex | None = None
+    prospective_group_indices: np.ndarray | None = None
+    prospective_manifest: dict = {}
+    prospective_runtime: dict = {}
+    if cfg.prospective_enabled:
+        if not mmapped:
+            raise ValueError(
+                "prospective_enabled=true requires a directory-backed real dataset"
+            )
+        if episode_meta_all is None:
+            raise ValueError(
+                "prospective_enabled=true requires episode_meta.npy"
+            )
+        if int(cfg.prospective_batch_size) <= 0:
+            raise ValueError("prospective_batch_size must be positive")
+        sidecar_dir = Path(a.data) / str(cfg.prospective_sidecar_name)
+        manifest_file = sidecar_dir / "prospective_manifest.json"
+        nodes_file = sidecar_dir / "prospective_nodes.npy"
+        if not manifest_file.is_file() or not nodes_file.is_file():
+            raise FileNotFoundError(
+                "prospective_enabled=true requires a real sidecar at "
+                f"{sidecar_dir}"
+            )
+        with manifest_file.open(encoding="utf-8") as handle:
+            prospective_manifest = json.load(handle)
+        if not isinstance(prospective_manifest, dict):
+            raise ValueError("prospective manifest must contain an object")
+        fingerprint = str(prospective_manifest.get("fingerprint", ""))
+        if len(fingerprint) != 64:
+            raise ValueError("prospective manifest has no valid fingerprint")
+        if (
+            prospective_manifest.get("semantics", {}).get(
+                "synthetic_fill_allowed"
+            )
+            is not False
+        ):
+            raise ValueError("prospective sidecar must forbid synthetic fill")
+        prospective_runtime = prospective_manifest.get("config", {})
+        if not isinstance(prospective_runtime, dict):
+            raise ValueError("prospective manifest config must be an object")
+        expected_runtime = {
+            "max_groups": int(cfg.prospective_max_groups),
+            "max_branches": int(cfg.prospective_max_branches),
+            "trials": int(cfg.prospective_trials),
+            "horizon": int(cfg.prospective_horizon),
+            "gamma": float(cfg.prospective_gamma),
+        }
+        for key, expected in expected_runtime.items():
+            actual = prospective_runtime.get(key)
+            if isinstance(expected, float):
+                matches = actual is not None and np.isclose(
+                    float(actual), expected
+                )
+            else:
+                matches = actual is not None and int(actual) == expected
+            if not matches:
+                raise ValueError(
+                    "training config and prospective sidecar disagree on "
+                    f"{key}: config={expected!r}, sidecar={actual!r}"
+                )
+        prospective_index = load_real_prospective_planner_index(
+            a.data,
+            sidecar_name=str(cfg.prospective_sidecar_name),
+        )
+        all_prospective_groups = len(prospective_index)
+        prospective_group_indices = _prospective_training_group_indices(
+            prospective_index.group_target_rows,
+            train_stop=v0,
+        )
+        print(
+            "[bc-train-mlx] prospective sidecar verified: "
+            f"train_groups={len(prospective_group_indices):,}/"
+            f"{all_prospective_groups:,}, "
+            f"nodes={len(prospective_index.nodes):,}, "
+            "storage=compact-memmap; "
+            f"fingerprint={fingerprint[:12]}...",
+            flush=True,
+        )
+
     # --- model (MLX!) ---
     net_cfg = {
         "arch": "transformer2",
@@ -1251,6 +1926,247 @@ def main() -> None:
                 f"saved={saved_scheduler_contract!r}, "
                 f"current={scheduler_contract!r}"
             )
+
+    prospective_planner: ProspectivePlannerMLX | None = None
+    prospective_optimizer: optim.MultiOptimizer | None = None
+    prospective_optimizer_contract: dict | None = None
+    prospective_optimizer_steps = 0
+    prospective_optimizer_phase_step = 0
+    prospective_scheduler_phase_step = 0
+    prospective_scheduler_total_steps = 0
+    prospective_scheduler_contract: dict | None = None
+    prospective_steps_per_epoch = 0
+    prospective_warmup_steps = 0
+    if cfg.prospective_enabled:
+        if (
+            prospective_index is None
+            or prospective_group_indices is None
+        ):
+            raise AssertionError("prospective data was not initialized")
+        planner_config = _prospective_planner_config(cfg)
+        prospective_planner = ProspectivePlannerMLX(planner_config)
+        saved_planner = state.get("prospective_planner") if a.resume else None
+        if saved_planner is not None:
+            if not isinstance(saved_planner, dict):
+                raise ValueError("checkpoint prospective_planner must be an object")
+            if saved_planner.get("config") != planner_config.to_dict():
+                raise ValueError(
+                    "prospective planner config differs from checkpoint"
+                )
+            if (
+                saved_planner.get("input_adapter_version")
+                != PROSPECTIVE_INPUT_ADAPTER_VERSION
+            ):
+                raise ValueError(
+                    "prospective input adapter differs from checkpoint"
+                )
+            if (
+                saved_planner.get("action_attr_aggregate_version")
+                != ACTION_ATTR_AGGREGATE_VERSION
+                or saved_planner.get("action_set_feature_version")
+                != ACTION_SET_FEATURE_VERSION
+                or saved_planner.get("branch_feature_layout_version")
+                != BRANCH_FEATURE_LAYOUT_VERSION
+            ):
+                raise ValueError(
+                    "prospective branch action aggregate/layout differs "
+                    "from checkpoint"
+                )
+            saved_model = saved_planner.get("model")
+            if not isinstance(saved_model, dict):
+                raise ValueError("checkpoint prospective planner has no model")
+            prospective_planner.update(saved_model)
+            prospective_optimizer_steps = int(
+                saved_planner.get("optimizer_steps", 0)
+            )
+            print(
+                "[bc-train-mlx] prospective planner weights resumed "
+                f"(trained optimizer steps={prospective_optimizer_steps:,})",
+                flush=True,
+            )
+        elif a.resume:
+            print(
+                "[bc-train-mlx] legacy checkpoint has no prospective planner; "
+                "planner starts disabled/untrained until its first optimizer step",
+                flush=True,
+            )
+        prospective_planner.set_dtype(mx.float16)
+        mx.eval(prospective_planner.parameters())
+        prospective_parameter_dtypes = {
+            str(parameter.dtype)
+            for _, parameter in nn.utils.tree_flatten(
+                prospective_planner.parameters()
+            )
+        }
+        if prospective_parameter_dtypes != {"mlx.core.float16"}:
+            raise RuntimeError(
+                "prospective planner parameters are not strictly FP16: "
+                f"{prospective_parameter_dtypes}"
+            )
+
+        prospective_optimizer = _build_prospective_optimizer(cfg)
+        prospective_optimizer_contract = _prospective_optimizer_contract(cfg)
+        if a.resume and a.optimizer_state == "resume":
+            if saved_planner is None:
+                raise ValueError(
+                    "cannot resume prospective optimizer from a legacy checkpoint"
+                )
+            if (
+                saved_planner.get("optimizer_contract")
+                != prospective_optimizer_contract
+            ):
+                raise ValueError(
+                    "cannot resume prospective optimizer with a different contract"
+                )
+            saved_prospective_optimizer = saved_planner.get("optimizer")
+            if saved_prospective_optimizer is None:
+                raise ValueError(
+                    "checkpoint has no prospective optimizer state to resume"
+                )
+            prospective_optimizer.state = saved_prospective_optimizer
+            prospective_optimizer_phase_step = int(
+                saved_planner.get("optimizer_phase_step", 0)
+            )
+        else:
+            prospective_optimizer.init(
+                prospective_planner.trainable_parameters()
+            )
+        prospective_optimizer.learning_rate = cfg.prospective_lr
+        mx.eval(prospective_optimizer.state)
+        _validate_optimizer_state_dtypes(prospective_optimizer.state)
+
+        prospective_steps_per_epoch = _ceil_div(
+            len(prospective_group_indices),
+            int(cfg.prospective_batch_size),
+        )
+        prospective_run_steps = run_epochs * prospective_steps_per_epoch
+        if a.resume and a.scheduler_state == "resume":
+            if saved_planner is None:
+                raise ValueError(
+                    "cannot resume prospective scheduler from a legacy checkpoint"
+                )
+            prospective_scheduler_phase_step = int(
+                saved_planner.get("scheduler_phase_step", 0)
+            )
+            prospective_scheduler_total_steps = int(
+                saved_planner.get("scheduler_total_steps", 0)
+            )
+            if prospective_scheduler_total_steps <= 0:
+                raise ValueError(
+                    "checkpoint has no prospective scheduler horizon"
+                )
+            if (
+                int(cfg.prospective_scheduler_total_steps) > 0
+                and int(cfg.prospective_scheduler_total_steps)
+                != prospective_scheduler_total_steps
+            ):
+                raise ValueError(
+                    "prospective scheduler_total_steps cannot change on resume"
+                )
+        else:
+            prospective_scheduler_total_steps = (
+                int(cfg.prospective_scheduler_total_steps)
+                if int(cfg.prospective_scheduler_total_steps) > 0
+                else prospective_run_steps
+            )
+        if (
+            a.resume
+            and a.scheduler_state == "resume"
+            and prospective_scheduler_phase_step + prospective_run_steps
+            > prospective_scheduler_total_steps
+        ):
+            raise ValueError(
+                "resumed prospective scheduler has insufficient remaining steps"
+            )
+        prospective_warmup_steps = min(
+            int(cfg.warmup_steps),
+            max(1, prospective_scheduler_total_steps // 5),
+        )
+        prospective_scheduler_contract = _prospective_scheduler_contract(
+            cfg,
+            prospective_scheduler_total_steps,
+            prospective_warmup_steps,
+        )
+        if (
+            a.resume
+            and a.scheduler_state == "resume"
+            and saved_planner.get("scheduler_contract")
+            != prospective_scheduler_contract
+        ):
+            raise ValueError(
+                "cannot resume prospective scheduler with a different contract"
+            )
+        print(
+            "[bc-train-mlx] prospective phase plan: "
+            f"groups/epoch={len(prospective_group_indices):,}, "
+            f"optimizer_steps/epoch={prospective_steps_per_epoch:,}, "
+            f"scheduler={prospective_scheduler_phase_step:,}/"
+            f"{prospective_scheduler_total_steps:,}",
+            flush=True,
+        )
+
+    prospective_use_behavior_logprobs = False
+    prospective_use_reference_logprobs = False
+    prospective_grad_fn = None
+    if prospective_planner is not None:
+        if (
+            prospective_index is None
+            or prospective_group_indices is None
+        ):
+            raise AssertionError("prospective data was not initialized")
+        prospective_use_behavior_logprobs = (
+            _prospective_training_has_node_flag(
+                prospective_index,
+                prospective_group_indices,
+                "has_behavior_logprob",
+            )
+        )
+        prospective_use_reference_logprobs = (
+            _prospective_training_has_node_flag(
+                prospective_index,
+                prospective_group_indices,
+                "has_reference_logprob",
+            )
+        )
+
+        def _prospective_loss_fn(
+            planner,
+            context,
+            branch_tokens,
+            coordinates,
+            attention_mask,
+            branch_valid,
+            parent_index,
+            targets,
+        ):
+            return _prospective_loss(
+                planner,
+                context,
+                branch_tokens,
+                coordinates,
+                attention_mask,
+                branch_valid,
+                parent_index,
+                targets,
+                cfg,
+                use_behavior_logprobs=prospective_use_behavior_logprobs,
+                use_reference_logprobs=prospective_use_reference_logprobs,
+            )
+
+        prospective_grad_fn = mx.value_and_grad(
+            _prospective_loss_fn, argnums=0
+        )
+        prospective_method = (
+            "grpo_strict"
+            if prospective_use_behavior_logprobs
+            else "group_relative_ranking_distillation"
+        )
+        print(
+            "[bc-train-mlx] prospective objective: "
+            f"{prospective_method}; reference_kl="
+            f"{prospective_use_reference_logprobs}",
+            flush=True,
+        )
     run_end_epoch = start_epoch + run_epochs
     print(
         f"[bc-train-mlx] global epoch range: {start_epoch + 1}-{run_end_epoch} "
@@ -1280,7 +2196,63 @@ def main() -> None:
                 "sha256": _sha256_bytes(static_array.tobytes(order="C")),
                 "card_csv_sha256": _sha256_file(ct.csv_path),
             }
-        return {
+        planner_checkpoint = None
+        planner_inference = {
+            "enabled": False,
+            "trained_optimizer_steps": 0,
+        }
+        if prospective_planner is not None:
+            if (
+                prospective_optimizer is None
+                or prospective_optimizer_contract is None
+                or prospective_scheduler_contract is None
+            ):
+                raise AssertionError("prospective training state is incomplete")
+            planner_checkpoint = {
+                **prospective_mlx_checkpoint_payload(prospective_planner),
+                "action_attr_aggregate_version": (
+                    ACTION_ATTR_AGGREGATE_VERSION
+                ),
+                "action_set_feature_version": ACTION_SET_FEATURE_VERSION,
+                "branch_feature_layout_version": (
+                    BRANCH_FEATURE_LAYOUT_VERSION
+                ),
+                "optimizer": prospective_optimizer.state,
+                "optimizer_contract": prospective_optimizer_contract,
+                "optimizer_steps": prospective_optimizer_steps,
+                "optimizer_phase_step": prospective_optimizer_phase_step,
+                "scheduler_phase_step": prospective_scheduler_phase_step,
+                "scheduler_total_steps": prospective_scheduler_total_steps,
+                "scheduler_contract": prospective_scheduler_contract,
+                "sidecar_manifest": prospective_manifest,
+                "sidecar_fingerprint": prospective_manifest.get("fingerprint"),
+            }
+            planner_trained = prospective_optimizer_steps > 0
+            planner_inference = {
+                "enabled": planner_trained,
+                "trained_optimizer_steps": prospective_optimizer_steps,
+                "planner_version": planner_checkpoint["planner_version"],
+                "coord_schema_version": planner_checkpoint[
+                    "coord_schema_version"
+                ],
+                "input_adapter_version": PROSPECTIVE_INPUT_ADAPTER_VERSION,
+                "action_attr_aggregate_version": (
+                    ACTION_ATTR_AGGREGATE_VERSION
+                ),
+                "action_set_feature_version": ACTION_SET_FEATURE_VERSION,
+                "branch_feature_layout_version": (
+                    BRANCH_FEATURE_LAYOUT_VERSION
+                ),
+                "config": planner_checkpoint["config"],
+                "runtime": {
+                    "trials": int(cfg.prospective_trials),
+                    "horizon": int(cfg.prospective_horizon),
+                    "max_branches": int(cfg.prospective_max_branches),
+                    "gamma": float(cfg.prospective_gamma),
+                    "seed": int(a.seed),
+                },
+            }
+        payload = {
             "model": model.parameters(),
             "optimizer": optimizer.state,
             "optimizer_contract": optimizer_contract,
@@ -1303,6 +2275,7 @@ def main() -> None:
                 "bc_would_ko": effective_would_ko,
                 "bc_wk_nvar": int(dataset_would_ko_nvar),
                 "provenance": inference_provenance,
+                "prospective_planner": planner_inference,
             },
             "dataset_manifest": dataset_manifest,
             "dataset_build_fingerprint": dataset_manifest.get(
@@ -1323,12 +2296,23 @@ def main() -> None:
             "scheduler_contract": scheduler_contract,
             "scheduler_state": a.scheduler_state,
         }
+        if planner_checkpoint is not None:
+            payload["prospective_planner"] = planner_checkpoint
+        return payload
 
     def _save_checkpoint(path: str, epoch: int, val_acc: float) -> None:
         import pickle
 
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        mx.eval(model.parameters(), optimizer.state)
+        if prospective_planner is not None and prospective_optimizer is not None:
+            mx.eval(
+                model.parameters(),
+                optimizer.state,
+                prospective_planner.parameters(),
+                prospective_optimizer.state,
+            )
+        else:
+            mx.eval(model.parameters(), optimizer.state)
         tmp_path = f"{path}.tmp"
         with open(tmp_path, "wb") as f:
             pickle.dump(_checkpoint_payload(epoch, val_acc), f)
@@ -1399,6 +2383,31 @@ def main() -> None:
         optimizer.update(model, grads)
         mx.eval(model.parameters())
         mx.eval(optimizer.state)
+
+    def prospective_optimizer_step(grads) -> None:
+        """Update only the detached lateral planner and its private state."""
+
+        nonlocal prospective_optimizer_steps
+        nonlocal prospective_optimizer_phase_step
+        nonlocal prospective_scheduler_phase_step
+        if prospective_planner is None or prospective_optimizer is None:
+            raise AssertionError("prospective optimizer is not initialized")
+        prospective_optimizer_steps += 1
+        prospective_optimizer_phase_step += 1
+        prospective_scheduler_phase_step += 1
+        grads = _to_fp32_grads(grads)
+        grads = clip_grads(grads, a.max_grad_norm)
+        if cfg.lr_schedule != "none":
+            prospective_optimizer.learning_rate = lr_at(
+                prospective_scheduler_phase_step,
+                prospective_scheduler_total_steps,
+                cfg.prospective_lr,
+                cfg.lr_schedule,
+                prospective_warmup_steps,
+                cfg.lr_min_ratio,
+            )
+        prospective_optimizer.update(prospective_planner, grads)
+        mx.eval(prospective_planner.parameters(), prospective_optimizer.state)
 
     # Compile stable shuffled-batch forward/backward; clipping stays outside.
     if compile_active:
@@ -1954,6 +2963,187 @@ def main() -> None:
             yv_group = gv_np[np.arange(len(vi)), y[vi]]
             eq = float((gv_np[np.arange(len(vi)), am_cat] == yv_group).mean())
 
+        prospective_epoch_loss = None
+        if prospective_planner is not None:
+            if (
+                prospective_index is None
+                or prospective_group_indices is None
+                or prospective_optimizer is None
+                or prospective_grad_fn is None
+            ):
+                raise AssertionError("prospective phase is incompletely initialized")
+            group_total = len(prospective_group_indices)
+            group_target_keys = tuple(
+                prospective_index.group_target_keys[int(group_index)]
+                for group_index in prospective_group_indices
+            )
+            prospective_context_plan, prospective_context_work = (
+                _prospective_context_work_plan(
+                    episode_meta_all,
+                    group_target_keys,
+                    row_limit=v0,
+                )
+            )
+            _progress_bar.reset(
+                _progress_task,
+                total=prospective_context_work,
+                completed=0,
+                epoch=ep + 1,
+                local_epoch=local_epoch,
+                total_epochs=run_epochs,
+                phase="prospective-context",
+                unit=f"context 0/{prospective_context_work:,}",
+                opt="--",
+                loss="--",
+                lr="--",
+            )
+
+            def _context_progress(completed_decisions: int) -> None:
+                _progress_bar.update(
+                    _progress_task,
+                    completed=completed_decisions,
+                    unit=(
+                        f"context {completed_decisions:,}/"
+                        f"{prospective_context_work:,}"
+                    ),
+                )
+
+            context_shape = (
+                group_total,
+                2 + int(model.scratch_tokens),
+                int(model.d),
+            )
+            cache_parent = Path(a.out).parent
+            cache_parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(
+                dir=cache_parent,
+                prefix=".prospective-context-",
+            ) as cache_dir:
+                context_cache_path = Path(cache_dir) / "epoch_context.fp16"
+                trunk_context = np.memmap(
+                    context_cache_path,
+                    mode="w+",
+                    dtype=np.float16,
+                    shape=context_shape,
+                )
+                _reconstruct_prospective_trunk_context(
+                    model,
+                    obs_np,
+                    int_keys,
+                    episode_meta_all,
+                    group_target_keys,
+                    row_limit=v0,
+                    work_plan=prospective_context_plan,
+                    context_destination=trunk_context,
+                    on_decision_complete=_context_progress,
+                )
+                trunk_context.flush()
+                _progress_bar.reset(
+                    _progress_task,
+                    total=prospective_steps_per_epoch,
+                    completed=0,
+                    epoch=ep + 1,
+                    local_epoch=local_epoch,
+                    total_epochs=run_epochs,
+                    phase="prospective-train",
+                    unit=f"batch 0/{prospective_steps_per_epoch:,}",
+                    opt=f"0/{prospective_steps_per_epoch:,}",
+                    loss="--",
+                    lr=f"{float(prospective_optimizer.learning_rate):.2e}",
+                )
+                prospective_planner.train()
+                phase_step = 0
+                processed_groups = 0
+                loss_sum = 0.0
+                for (
+                    group_start,
+                    group_stop,
+                    physical_group_indices,
+                ) in _prospective_physical_group_batches(
+                    prospective_group_indices,
+                    int(cfg.prospective_batch_size),
+                ):
+                    prospective_batch = (
+                        materialize_real_prospective_planner_batch(
+                            prospective_index,
+                            physical_group_indices,
+                            config=_prospective_planner_config(cfg),
+                        )
+                    )
+                    if not np.all(
+                        prospective_batch.branch_valid.any(axis=1)
+                    ):
+                        raise ValueError(
+                            "every prospective group must contain at least "
+                            "one valid branch"
+                        )
+                    planner_targets_np = _prospective_target_arrays(
+                        prospective_index.nodes,
+                        prospective_batch.node_index,
+                    )
+                    planner_targets = {
+                        key: mx.array(value)
+                        for key, value in planner_targets_np.items()
+                    }
+                    prospective_coordinates, prospective_attention_mask = (
+                        _prospective_batch_geometry(
+                            prospective_batch,
+                            context_length=context_shape[1],
+                        )
+                    )
+                    loss, grads = prospective_grad_fn(
+                        prospective_planner,
+                        mx.array(
+                            trunk_context[group_start:group_stop]
+                        ),
+                        mx.array(prospective_batch.branch_tokens),
+                        mx.array(prospective_coordinates),
+                        mx.array(prospective_attention_mask),
+                        mx.array(prospective_batch.branch_valid),
+                        mx.array(prospective_batch.parent_index),
+                        planner_targets,
+                    )
+                    grads = _to_fp32_grads(grads)
+                    mx.eval(loss, grads)
+                    loss_value = float(loss)
+                    if not np.isfinite(loss_value):
+                        _progress_bar.stop()
+                        raise FloatingPointError(
+                            "non-finite prospective loss at "
+                            f"epoch={ep + 1}, step={phase_step + 1}"
+                        )
+                    prospective_optimizer_step(grads)
+                    phase_step += 1
+                    processed_groups = group_stop
+                    loss_sum += loss_value * (group_stop - group_start)
+                    prospective_epoch_loss = loss_sum / processed_groups
+                    _progress_bar.update(
+                        _progress_task,
+                        completed=phase_step,
+                        unit=(
+                            f"batch {phase_step:,}/"
+                            f"{prospective_steps_per_epoch:,} "
+                            f"(groups {processed_groups:,}/{group_total:,})"
+                        ),
+                        opt=(
+                            f"{phase_step:,}/"
+                            f"{prospective_steps_per_epoch:,}"
+                        ),
+                        loss=f"{prospective_epoch_loss:.4f}",
+                        lr=(
+                            f"{float(prospective_optimizer.learning_rate):.2e}"
+                        ),
+                    )
+                if phase_step != prospective_steps_per_epoch:
+                    _progress_bar.stop()
+                    raise RuntimeError(
+                        "prospective optimizer-step plan mismatch: "
+                        f"expected={prospective_steps_per_epoch}, "
+                        f"actual={phase_step}"
+                    )
+                del trunk_context
+            prospective_planner.eval()
+
         _progress_bar.reset(
             _progress_task,
             total=1,
@@ -1963,8 +3153,16 @@ def main() -> None:
             total_epochs=run_epochs,
             phase="checkpoint",
             unit="saving",
-            opt=f"{ep_step:,}/{optimizer_steps_per_epoch:,}",
-            loss=f"{_running_loss / max(_running_n, 1):.4f}",
+            opt=(
+                f"{ep_step:,}/{optimizer_steps_per_epoch:,}"
+                if prospective_epoch_loss is None
+                else f"bc {ep_step:,}; prospective {prospective_steps_per_epoch:,}"
+            ),
+            loss=(
+                f"{_running_loss / max(_running_n, 1):.4f}"
+                if prospective_epoch_loss is None
+                else f"p={prospective_epoch_loss:.4f}"
+            ),
             lr=f"{float(optimizer.learning_rate):.2e}",
         )
         # Complete checkpoint: save model, optimizer, arch_config, scheduler, seed (C.5)
