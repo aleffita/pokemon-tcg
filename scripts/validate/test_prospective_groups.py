@@ -176,7 +176,13 @@ def validate(sidecar: Path, replay_zip: Path, config_path: Path) -> None:
     assert manifest["rope_nd_axis_order"] == [
         "match_time", "rollout_depth", "branch_action", "entity_zone_relation"
     ]
-    assert manifest["config"]["workers"] == 1
+    execution = manifest.get("execution")
+    if execution is None:
+        assert manifest["config"]["workers"] == 1
+    else:
+        assert "workers" not in manifest["config"]
+        assert execution["workers"] == int(config["prospective_workers"])
+        assert execution["start_method"] == "spawn"
     assert int(config["max_episodes"]) == 2
     assert int(config["bc_workers"]) == 1
     assert manifest["source"]["sha256"] == _sha256(replay_zip)

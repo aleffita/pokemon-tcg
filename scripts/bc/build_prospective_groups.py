@@ -21,6 +21,7 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import multiprocessing as mp
 import os
 from pathlib import Path
 import random
@@ -200,6 +201,30 @@ class RealDecision:
     opponent_name: str
     outcome: int
     is_self: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class ProspectiveTreeTask:
+    """One deterministic (real decision, determinization trial) worker unit."""
+
+    decision: RealDecision
+    group: dict[str, Any]
+    actions: tuple[tuple[int, ...], ...]
+    trial_index: int
+    trial_seed: int
+    root_opt_attr: np.ndarray
+    horizon: int
+    gamma: float
+
+
+_WORKER_ENCODER: TokenEncoder | None = None
+
+
+def _init_prospective_worker() -> None:
+    """Initialize process-local encoder and native search-agent state."""
+
+    global _WORKER_ENCODER
+    _WORKER_ENCODER = TokenEncoder(get_card_table())
 
 
 def _player_names(episode: dict[str, Any]) -> tuple[str, str]:
@@ -726,6 +751,165 @@ def _rollout_branch(
     return nodes
 
 
+def _materialize_tree(
+    task: ProspectiveTreeTask,
+    encoder: TokenEncoder,
+) -> dict[str, Any]:
+    """Run one tree and compact it before crossing a process boundary."""
+
+    decision = task.decision
+    actions = task.actions
+    trial_index = task.trial_index
+    trial_seed = task.trial_seed
+    root_opt_attr = task.root_opt_attr
+    group_id = int(task.group["group_id"])
+    tree_audit = {
+        "determination_failures": 0,
+        "synthetic_fill_rejections": 0,
+        "search_failures": 0,
+    }
+    determination_audit: dict[str, int] = {}
+    records: list[dict[str, Any]] = []
+    mode = "failed"
+    candidate_count = 0
+    try:
+        determination = _determinize(
+            decision.observation,
+            list(decision.own_deck),
+            random.Random(trial_seed),
+            encoder,
+            audit=determination_audit,
+        )
+    except Exception as exc:
+        tree_audit["determination_failures"] += 1
+        for order, action in enumerate(actions):
+            records.append(_failed_node(
+                decision,
+                str(group_id),
+                _stable_hex(group_id, trial_index, order, 1),
+                encoder,
+                trial_index=trial_index,
+                trial_seed=trial_seed,
+                root_branch_order=order,
+                action=action,
+                observation=decision.observation,
+                failure_stage="determinize",
+                failure_type=type(exc).__name__,
+                determination_mode=mode,
+                determination_candidates=0,
+                opt_attr_override=root_opt_attr,
+            ))
+    else:
+        if (
+            int(determination_audit.get("opponent_synthetic_cards", 0))
+            or int(determination_audit.get("self_synthetic_cards", 0))
+        ):
+            mode = "rejected"
+            tree_audit["synthetic_fill_rejections"] += 1
+            for order, action in enumerate(actions):
+                records.append(_failed_node(
+                    decision,
+                    str(group_id),
+                    _stable_hex(group_id, trial_index, order, 1),
+                    encoder,
+                    trial_index=trial_index,
+                    trial_seed=trial_seed,
+                    root_branch_order=order,
+                    action=action,
+                    observation=decision.observation,
+                    failure_stage="determinize",
+                    failure_type="SyntheticFillRejected",
+                    determination_mode=mode,
+                    determination_candidates=0,
+                    opt_attr_override=root_opt_attr,
+                ))
+        else:
+            mode, candidate_count = _determination_mode(determination_audit)
+            from cg import api
+
+            try:
+                root_state = api.search_begin(
+                    api.to_observation_class(decision.observation),
+                    **determination,
+                    manual_coin=True,
+                )
+            except Exception as exc:
+                tree_audit["search_failures"] += 1
+                for order, action in enumerate(actions):
+                    records.append(_failed_node(
+                        decision,
+                        str(group_id),
+                        _stable_hex(group_id, trial_index, order, 1),
+                        encoder,
+                        trial_index=trial_index,
+                        trial_seed=trial_seed,
+                        root_branch_order=order,
+                        action=action,
+                        observation=decision.observation,
+                        failure_stage="search_begin",
+                        failure_type=type(exc).__name__,
+                        determination_mode=mode,
+                        determination_candidates=candidate_count,
+                        opt_attr_override=root_opt_attr,
+                    ))
+            else:
+                try:
+                    for order, action in enumerate(actions):
+                        branch_records = _rollout_branch(
+                            decision,
+                            str(group_id),
+                            action,
+                            order,
+                            encoder,
+                            trial_index=trial_index,
+                            trial_seed=trial_seed,
+                            root_state=root_state,
+                            determination_mode=mode,
+                            determination_candidates=candidate_count,
+                            root_opt_attr=root_opt_attr,
+                            horizon=task.horizon,
+                            gamma=task.gamma,
+                        )
+                        tree_audit["search_failures"] += sum(
+                            not record["valid"] for record in branch_records
+                        )
+                        records.extend(branch_records)
+                finally:
+                    try:
+                        api.search_release(root_state.searchId)
+                    except Exception:
+                        tree_audit["search_failures"] += 1
+                    try:
+                        api.search_end()
+                    except Exception:
+                        tree_audit["search_failures"] += 1
+
+    compact_nodes, compact_actions = _compact_tree(records)
+    group = dict(task.group)
+    group["determination_mode"] = DETERMINATION_MODE_CODES[mode]
+    group["determination_candidates"] = candidate_count
+    return {
+        "group": group,
+        "nodes": compact_nodes,
+        "actions": compact_actions,
+        "audit": tree_audit,
+    }
+
+
+def _materialize_episode(
+    tasks: list[ProspectiveTreeTask],
+) -> list[dict[str, Any]]:
+    """Process one episode sequentially inside one isolated native engine."""
+
+    encoder = _WORKER_ENCODER
+    if encoder is None:
+        _init_prospective_worker()
+        encoder = _WORKER_ENCODER
+    if encoder is None:
+        raise RuntimeError("prospective worker encoder was not initialized")
+    return [_materialize_tree(task, encoder) for task in tasks]
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source_file:
@@ -912,7 +1096,13 @@ def _write_shard(
         "search_failures": 0,
     }
     for index, tree in enumerate(trees):
-        compact_nodes, compact_actions = _compact_tree(tree["records"])
+        if "nodes" in tree and "actions" in tree:
+            compact_nodes = np.asarray(tree["nodes"], dtype=NODE_DTYPE).copy()
+            compact_actions = np.asarray(
+                tree["actions"], dtype=ACTION_DTYPE
+            )
+        else:
+            compact_nodes, compact_actions = _compact_tree(tree["records"])
         if len(compact_nodes):
             compact_nodes["action_offset"] += action_cursor
         node_chunks.append(compact_nodes)
@@ -1159,17 +1349,20 @@ def build(
     trials: int,
     horizon: int,
     gamma: float,
-    flush_groups: int = 32,
+    workers: int | None = None,
+    flush_groups: int = 256,
     bc_dataset_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cfg = load_config(config_path=str(config_path))
+    workers = int(cfg.prospective_workers if workers is None else workers)
     if (
         trials <= 0 or horizon <= 0 or max_branches < 2
-        or max_groups < 0 or flush_groups <= 0
+        or max_groups < 0 or workers <= 0 or flush_groups <= 0
     ):
         raise ValueError(
-            "trials/horizon/flush_groups must be positive, max_branches >= 2, "
-            "and max_groups >= 0 (0 means all branchable decisions)"
+            "trials/horizon/workers/flush_groups must be positive, "
+            "max_branches >= 2, and max_groups >= 0 "
+            "(0 means all branchable decisions)"
         )
     if not 0.0 <= gamma <= 1.0:
         raise ValueError("gamma must be in [0, 1]")
@@ -1183,7 +1376,6 @@ def build(
     work_dir = out_dir.with_name(f"{out_dir.name}.work")
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    encoder = TokenEncoder(get_card_table())
     aliases = frozenset(cfg.bc_self_aliases)
     root_opt_attr = _load_materialized_root_opt_attr(
         out_dir.parent,
@@ -1242,17 +1434,24 @@ def build(
             "trials": trials,
             "horizon": horizon,
             "gamma": gamma,
-            "workers": 1,
             "self_aliases": sorted(aliases),
         },
     }
     identity_path = work_dir / "build_contract.json"
     if identity_path.is_file():
         previous = json.loads(identity_path.read_text(encoding="utf-8"))
+        # v2 initially persisted the serial worker count as though it changed
+        # rollout semantics. It does not: ordered process results are byte-for-
+        # byte compatible with the existing deterministic shard prefix.
+        (previous.get("config") or {}).pop("workers", None)
         if previous != build_identity:
             raise RuntimeError(
                 f"prospective resume contract changed; preserve or remove {work_dir}"
             )
+        identity_path.write_text(
+            json.dumps(build_identity, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     else:
         identity_path.write_text(
             json.dumps(build_identity, indent=2, sort_keys=True) + "\n",
@@ -1304,6 +1503,7 @@ def build(
         BarColumn(),
         TaskProgressColumn(),
         TextColumn("{task.completed:.0f}/{task.total:.0f} episodes"),
+        TextColumn("workers={task.fields[workers]}"),
         TextColumn("groups={task.fields[groups]}"),
         TextColumn("shards={task.fields[shards]}"),
         TextColumn("resumed={task.fields[resumed]}"),
@@ -1313,248 +1513,191 @@ def build(
     progress_task = progress.add_task(
         "prospective",
         total=len(build_episode_refs),
+        workers=str(workers),
         groups="0",
         shards=f"{len(shards):,}",
         resumed=f"{resumed_tree_groups:,}",
     )
 
-    def tracked_episode_refs():
-        progress.start()
-        try:
-            for item in build_episode_refs:
-                yield item
-                progress.advance(progress_task)
-        finally:
-            progress.stop()
+    def accept_trees(trees: list[dict[str, Any]]) -> None:
+        nonlocal pending
+        for tree in trees:
+            pending.append(tree)
+            if len(pending) >= flush_groups:
+                flush_pending()
 
-    for member_index, (source_path, member) in enumerate(
-        tracked_episode_refs()
-    ):
-        episode_group_quota: int | None = None
-        if max_groups:
-            base_quota, extra = divmod(
-                max_groups, max(len(build_episode_refs), 1)
-            )
-            episode_group_quota = base_quota + int(member_index < extra)
-        with zipfile.ZipFile(source_path) as archive:
-            episode = json.loads(archive.read(member))
-        episode_id = Path(member).stem
-        selected_episode_ids.append(episode_id)
-        episode_groups = 0
-        for decision in _iter_real_decisions(
-            episode,
-            episode_id,
-            both_sides=bool(cfg.bc_both_sides),
-            self_aliases=aliases,
-        ):
-            candidate_roots += 1
-            decision_key = (decision.episode_id, decision.side, decision.step_id)
-            target_row = root_opt_attr.first_row.get(decision_key)
-            if target_row is None:
-                # The BC encoder deliberately truncates a side after a tracker,
-                # legality, or encoding failure. Replay iteration can still see
-                # later decisions, but they cannot be prospective roots because
-                # no real BC input row exists to join as their training target.
-                # Never synthesize that row and never abort unrelated episodes.
-                skipped_unmaterialized_roots += 1
-                skipped_unmaterialized_sides.add(
-                    (decision.episode_id, decision.side)
-                )
-                continue
-            target_meta = root_opt_attr.metadata[target_row]
-            target_key = (
-                str(target_meta["episode_id"]),
-                int(target_meta["side"]),
-                int(target_meta["step_id"]),
-            )
-            if target_key != decision_key:
-                raise RuntimeError(
-                    f"prospective target_row mismatch: {decision_key} != {target_key}"
-                )
-            materialized_root_opt_attr = root_opt_attr.get(decision_key)
-            select = decision.observation.get("select") or {}
-            actions = _legal_actions(select, max_branches)
-            if len(actions) < 2:
-                continue
-            side_key = (decision.episode_id, decision.side)
-            if side_key not in episode_side_index:
-                episode_key = id_registry.get("episode", decision.episode_id)
-                episode_side_index[side_key] = len(episode_side_rows)
-                episode_side_rows.append((
-                    decision.episode_id,
-                    episode_key,
-                    decision.side,
-                    decision.player_name,
-                    decision.opponent_name,
-                    decision.is_self,
-                    decision.outcome,
-                ))
-            side_row = episode_side_index[side_key]
-            episode_key = int(episode_side_rows[side_row][1])
-            group_id = id_registry.get(
-                "group",
-                SCHEMA_VERSION,
-                decision.episode_id,
-                decision.side,
-                decision.step_id,
-            )
-            groups_emitted += 1
-            for trial_index in range(trials):
-                determination_id = id_registry.get(
-                    "determination", group_id, trial_index
-                )
-                group_key = (group_id, trial_index)
-                if next_completed is not None:
-                    if group_key != next_completed:
-                        raise RuntimeError(
-                            "completed prospective shards are not a deterministic "
-                            f"prefix: expected {group_key}, found {next_completed}"
-                        )
-                    next_completed = next(completed_iter, None)
-                    continue
-                trial_seed = _stable_seed(cfg.seed, group_id, trial_index)
-                tree_audit = {
-                    "determination_failures": 0,
-                    "synthetic_fill_rejections": 0,
-                    "search_failures": 0,
-                }
-                determination_audit: dict[str, int] = {}
-                records: list[dict[str, Any]] = []
-                mode = "failed"
-                candidate_count = 0
-                try:
-                    determination = _determinize(
-                        decision.observation,
-                        list(decision.own_deck),
-                        random.Random(trial_seed),
-                        encoder,
-                        audit=determination_audit,
-                    )
-                except Exception as exc:
-                    tree_audit["determination_failures"] += 1
-                    for order, action in enumerate(actions):
-                        records.append(_failed_node(
-                            decision, str(group_id),
-                            _stable_hex(group_id, trial_index, order, 1), encoder,
-                            trial_index=trial_index, trial_seed=trial_seed,
-                            root_branch_order=order, action=action,
-                            observation=decision.observation,
-                            failure_stage="determinize",
-                            failure_type=type(exc).__name__,
-                            determination_mode=mode,
-                            determination_candidates=0,
-                            opt_attr_override=materialized_root_opt_attr,
-                        ))
-                else:
-                    if (
-                        int(determination_audit.get("opponent_synthetic_cards", 0))
-                        or int(determination_audit.get("self_synthetic_cards", 0))
-                    ):
-                        mode = "rejected"
-                        tree_audit["synthetic_fill_rejections"] += 1
-                        for order, action in enumerate(actions):
-                            records.append(_failed_node(
-                                decision, str(group_id),
-                                _stable_hex(group_id, trial_index, order, 1), encoder,
-                                trial_index=trial_index, trial_seed=trial_seed,
-                                root_branch_order=order, action=action,
-                                observation=decision.observation,
-                                failure_stage="determinize",
-                                failure_type="SyntheticFillRejected",
-                                determination_mode=mode,
-                                determination_candidates=0,
-                                opt_attr_override=materialized_root_opt_attr,
-                            ))
-                    else:
-                        mode, candidate_count = _determination_mode(determination_audit)
-                        from cg import api
-                        try:
-                            root_state = api.search_begin(
-                                api.to_observation_class(decision.observation),
-                                **determination,
-                                manual_coin=True,
-                            )
-                        except Exception as exc:
-                            tree_audit["search_failures"] += 1
-                            for order, action in enumerate(actions):
-                                records.append(_failed_node(
-                                    decision, str(group_id),
-                                    _stable_hex(group_id, trial_index, order, 1),
-                                    encoder,
-                                    trial_index=trial_index,
-                                    trial_seed=trial_seed,
-                                    root_branch_order=order,
-                                    action=action,
-                                    observation=decision.observation,
-                                    failure_stage="search_begin",
-                                    failure_type=type(exc).__name__,
-                                    determination_mode=mode,
-                                    determination_candidates=candidate_count,
-                                    opt_attr_override=materialized_root_opt_attr,
-                                ))
-                        else:
-                            try:
-                                for order, action in enumerate(actions):
-                                    branch_records = _rollout_branch(
-                                        decision, str(group_id), action, order, encoder,
-                                        trial_index=trial_index,
-                                        trial_seed=trial_seed,
-                                        root_state=root_state,
-                                        determination_mode=mode,
-                                        determination_candidates=candidate_count,
-                                        root_opt_attr=materialized_root_opt_attr,
-                                        horizon=horizon,
-                                        gamma=gamma,
-                                    )
-                                    tree_audit["search_failures"] += sum(
-                                        not record["valid"]
-                                        for record in branch_records
-                                    )
-                                    records.extend(branch_records)
-                            finally:
-                                try:
-                                    api.search_release(root_state.searchId)
-                                except Exception:
-                                    tree_audit["search_failures"] += 1
-                                try:
-                                    api.search_end()
-                                except Exception:
-                                    tree_audit["search_failures"] += 1
-                pending.append({
-                    "group": {
-                        "episode_side_index": side_row,
-                        "episode_key": episode_key,
-                        "side": decision.side,
-                        "step_id": decision.step_id,
-                        "group_id": group_id,
-                        "trial_index": trial_index,
-                        "trial_seed": trial_seed,
-                        "determination_id": determination_id,
-                        "target_row": target_row,
-                        "determination_mode": DETERMINATION_MODE_CODES[mode],
-                        "determination_candidates": candidate_count,
-                    },
-                    "records": records,
-                    "audit": tree_audit,
-                })
-                if len(pending) >= flush_groups:
-                    flush_pending()
-                    progress.update(
-                        progress_task,
-                        groups=f"{groups_emitted:,}",
-                        shards=f"{next_shard:,}",
-                    )
-            episode_groups += 1
-            if (
-                episode_group_quota is not None
-                and episode_groups >= episode_group_quota
-            ):
-                break
+    # Results are consumed in submission order. Workers may finish out of
+    # order, but shard/group order remains exactly the serial source order.
+    inflight: list[Any | None] = []
+    max_inflight = workers * 2
+
+    def consume_oldest() -> None:
+        result = inflight.pop(0)
+        if result is not None:
+            accept_trees(result.get())
+        progress.advance(progress_task)
         progress.update(
             progress_task,
             groups=f"{groups_emitted:,}",
             shards=f"{next_shard:,}",
         )
+
+    context = mp.get_context("spawn")
+    progress.start()
+    pool = context.Pool(
+        processes=workers,
+        initializer=_init_prospective_worker,
+    )
+    try:
+        for member_index, (source_path, member) in enumerate(build_episode_refs):
+            episode_group_quota: int | None = None
+            if max_groups:
+                base_quota, extra = divmod(
+                    max_groups, max(len(build_episode_refs), 1)
+                )
+                episode_group_quota = base_quota + int(member_index < extra)
+            with zipfile.ZipFile(source_path) as archive:
+                episode = json.loads(archive.read(member))
+            episode_id = Path(member).stem
+            selected_episode_ids.append(episode_id)
+            episode_groups = 0
+            episode_tasks: list[ProspectiveTreeTask] = []
+            for decision in _iter_real_decisions(
+                episode,
+                episode_id,
+                both_sides=bool(cfg.bc_both_sides),
+                self_aliases=aliases,
+            ):
+                candidate_roots += 1
+                decision_key = (
+                    decision.episode_id,
+                    decision.side,
+                    decision.step_id,
+                )
+                target_row = root_opt_attr.first_row.get(decision_key)
+                if target_row is None:
+                    # The BC encoder deliberately truncates a side after a
+                    # tracker, legality, or encoding failure. Never synthesize
+                    # a prospective root without its real materialized BC row.
+                    skipped_unmaterialized_roots += 1
+                    skipped_unmaterialized_sides.add(
+                        (decision.episode_id, decision.side)
+                    )
+                    continue
+                target_meta = root_opt_attr.metadata[target_row]
+                target_key = (
+                    str(target_meta["episode_id"]),
+                    int(target_meta["side"]),
+                    int(target_meta["step_id"]),
+                )
+                if target_key != decision_key:
+                    raise RuntimeError(
+                        "prospective target_row mismatch: "
+                        f"{decision_key} != {target_key}"
+                    )
+                actions = tuple(
+                    _legal_actions(
+                        decision.observation.get("select") or {},
+                        max_branches,
+                    )
+                )
+                if len(actions) < 2:
+                    continue
+                side_key = (decision.episode_id, decision.side)
+                if side_key not in episode_side_index:
+                    episode_key = id_registry.get(
+                        "episode", decision.episode_id
+                    )
+                    episode_side_index[side_key] = len(episode_side_rows)
+                    episode_side_rows.append((
+                        decision.episode_id,
+                        episode_key,
+                        decision.side,
+                        decision.player_name,
+                        decision.opponent_name,
+                        decision.is_self,
+                        decision.outcome,
+                    ))
+                side_row = episode_side_index[side_key]
+                episode_key = int(episode_side_rows[side_row][1])
+                group_id = id_registry.get(
+                    "group",
+                    SCHEMA_VERSION,
+                    decision.episode_id,
+                    decision.side,
+                    decision.step_id,
+                )
+                groups_emitted += 1
+                # Copy only one compact root feature row into the episode job;
+                # workers never duplicate the full 813k-row BC index/memmap.
+                materialized_root_opt_attr = np.asarray(
+                    root_opt_attr.get(decision_key),
+                    dtype=np.float32,
+                ).copy()
+                for trial_index in range(trials):
+                    determination_id = id_registry.get(
+                        "determination", group_id, trial_index
+                    )
+                    group_key = (group_id, trial_index)
+                    if next_completed is not None:
+                        if group_key != next_completed:
+                            raise RuntimeError(
+                                "completed prospective shards are not a "
+                                "deterministic prefix: "
+                                f"expected {group_key}, found {next_completed}"
+                            )
+                        next_completed = next(completed_iter, None)
+                        continue
+                    trial_seed = _stable_seed(
+                        cfg.seed, group_id, trial_index
+                    )
+                    episode_tasks.append(ProspectiveTreeTask(
+                        decision=decision,
+                        group={
+                            "episode_side_index": side_row,
+                            "episode_key": episode_key,
+                            "side": decision.side,
+                            "step_id": decision.step_id,
+                            "group_id": group_id,
+                            "trial_index": trial_index,
+                            "trial_seed": trial_seed,
+                            "determination_id": determination_id,
+                            "target_row": target_row,
+                            "determination_mode": 0,
+                            "determination_candidates": 0,
+                        },
+                        actions=actions,
+                        trial_index=trial_index,
+                        trial_seed=trial_seed,
+                        root_opt_attr=materialized_root_opt_attr,
+                        horizon=horizon,
+                        gamma=gamma,
+                    ))
+                episode_groups += 1
+                if (
+                    episode_group_quota is not None
+                    and episode_groups >= episode_group_quota
+                ):
+                    break
+
+            inflight.append(
+                pool.apply_async(_materialize_episode, (episode_tasks,))
+                if episode_tasks
+                else None
+            )
+            if len(inflight) >= max_inflight:
+                consume_oldest()
+
+        while inflight:
+            consume_oldest()
+        pool.close()
+        pool.join()
+    except BaseException:
+        pool.terminate()
+        pool.join()
+        raise
+    finally:
+        progress.stop()
     flush_pending()
     if next_completed is not None:
         raise RuntimeError(
@@ -1657,7 +1800,6 @@ def build(
             "trials": trials,
             "horizon": horizon,
             "gamma": gamma,
-            "workers": 1,
             "self_aliases": sorted(aliases),
         },
         "semantics": {
@@ -1768,6 +1910,12 @@ def build(
             contract, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
         contract["fingerprint"] = hashlib.sha256(fingerprint_source).hexdigest()
+        # Execution parallelism is intentionally outside the semantic
+        # fingerprint: ordered results make it an operational detail only.
+        contract["execution"] = {
+            "workers": workers,
+            "start_method": "spawn",
+        }
         (staging / "prospective_manifest.json").write_text(
             json.dumps(contract, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -1801,9 +1949,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--horizon", type=int, default=4)
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "Independent rollout processes "
+            "(default: prospective_workers from config)"
+        ),
+    )
+    parser.add_argument(
         "--flush-groups",
         type=int,
-        default=32,
+        default=256,
         help="Persist this many (decision, trial) trees per resumable shard",
     )
     return parser.parse_args()
@@ -1827,6 +1984,7 @@ def main() -> None:
         trials=int(args.trials),
         horizon=int(args.horizon),
         gamma=float(args.gamma),
+        workers=args.workers,
         flush_groups=int(args.flush_groups),
     )
     print(

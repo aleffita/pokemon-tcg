@@ -57,6 +57,7 @@
   "prospective_trials": 1,
   "prospective_horizon": 2,
   "prospective_gamma": 1.0,
+  "prospective_workers": 2,
   "prospective_batch_size": 128,
   "prospective_nhead": 4,
   "prospective_nlayers": 2,

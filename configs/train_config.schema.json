@@ -303,6 +303,12 @@
       "maximum": 1.0,
       "description": "Discount used by the sidecar to compute scalar_return."
     },
+    "prospective_workers": {
+      "type": "integer",
+      "default": 6,
+      "minimum": 1,
+      "description": "Independent CPU processes used to materialize prospective rollout groups. This changes throughput only, never rollout ordering or semantics."
+    },
     "prospective_batch_size": {
       "type": "integer",
       "default": 128,

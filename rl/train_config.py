@@ -125,6 +125,7 @@ class TrainConfig:
     prospective_trials: int = 1
     prospective_horizon: int = 2
     prospective_gamma: float = 1.0
+    prospective_workers: int = 6
 
     # Prospective planner architecture/training. d_model is shared with the
     # trunk so detached causal context can be passed without another bridge.

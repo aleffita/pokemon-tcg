@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 
@@ -62,10 +63,22 @@ def main() -> None:
     assert WORK.is_dir()
     assert len(list(WORK.glob("shard_*/.done"))) == 2
 
+    # The first full v2 builder persisted workers=1 inside the semantic resume
+    # contract. Parallel builders must accept and canonicalize that exact
+    # legacy shape without discarding completed shards.
+    identity_path = WORK / "build_contract.json"
+    legacy_identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    legacy_identity["config"]["workers"] = 1
+    identity_path.write_text(
+        json.dumps(legacy_identity, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
     manifest = _build()
     assert SIDECAR.is_dir()
     assert not WORK.exists()
     assert manifest["audit"]["shards_emitted"] == 2
+    assert manifest["execution"]["workers"] == 2
     index = load_real_prospective_planner_index(
         DATASET,
         sidecar_name=SIDECAR_NAME,

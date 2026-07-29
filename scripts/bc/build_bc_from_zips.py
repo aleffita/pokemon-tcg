@@ -595,10 +595,13 @@ def _validate_existing_prospective(
         "trials": int(cfg.prospective_trials),
         "horizon": int(cfg.prospective_horizon),
         "gamma": float(cfg.prospective_gamma),
-        "workers": 1,
         "self_aliases": sorted(cfg.bc_self_aliases),
     }
-    if manifest.get("config") != expected_config:
+    manifest_config = dict(manifest.get("config") or {})
+    # Legacy prospective sidecars recorded the serial worker count as config.
+    # Parallelism never changes ordered rollout semantics.
+    manifest_config.pop("workers", None)
+    if manifest_config != expected_config:
         raise RuntimeError(
             "existing prospective sidecar has a different config contract; "
             "refusing unsafe resume"
@@ -709,6 +712,7 @@ def _ensure_prospective_sidecar(
             trials=int(cfg.prospective_trials),
             horizon=int(cfg.prospective_horizon),
             gamma=float(cfg.prospective_gamma),
+            workers=int(cfg.prospective_workers),
             bc_dataset_contract=bc_dataset_contract,
         )
         status = "built"
