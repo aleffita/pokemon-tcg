@@ -568,7 +568,6 @@ def _rollout_branch(
     created_search_ids: list[int] = []
     try:
         for depth in range(1, horizon + 1):
-            select = current_observation.get("select") or {}
             branch_id = _stable_hex(group_id, trial_index, root_branch_order, depth)
             try:
                 next_state = api.search_step(state.searchId, list(action))
@@ -665,7 +664,6 @@ def _branch_summaries(
         decision = decisions_by_group[group_id]
         records = grouped.get((group_id, order), [])
         valid = [record for record in records if record["valid"]]
-        select = decision.observation.get("select") or {}
         src_pos, tgt_pos, verb, relation_id, relation_json = _entity_relation(
             decision.observation, action, encoder, decision.own_deck
         )
