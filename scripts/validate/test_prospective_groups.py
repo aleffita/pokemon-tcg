@@ -153,8 +153,12 @@ def validate(sidecar: Path, replay_zip: Path, config_path: Path) -> None:
     assert manifest["source"]["sha256"] == _sha256(replay_zip)
     assert manifest["semantics"]["hidden_opponent_deck_used"] is False
     assert manifest["semantics"]["synthetic_fill_allowed"] is False
+    assert "never synthesized" in manifest["semantics"]["unmaterialized_root"]
     assert manifest["audit"]["synthetic_fill_rejections"] == 0
     assert manifest["audit"]["episodes_read"] == 2
+    assert manifest["audit"]["candidate_roots"] >= manifest["audit"]["groups_emitted"]
+    assert manifest["audit"]["skipped_unmaterialized_roots"] >= 0
+    assert manifest["audit"]["sides_with_unmaterialized_roots"] >= 0
     assert manifest["storage"]["version"] == "compact-sharded-v1"
     assert manifest["outputs"]["node_itemsize"] == NODE_DTYPE.itemsize < 512
     assert manifest["outputs"]["branch_itemsize"] == BRANCH_DTYPE.itemsize < 512

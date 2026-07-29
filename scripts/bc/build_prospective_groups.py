@@ -1270,6 +1270,9 @@ def build(
     episode_side_rows: list[tuple[Any, ...]] = []
     episode_side_index: dict[tuple[str, int], int] = {}
     groups_emitted = 0
+    candidate_roots = 0
+    skipped_unmaterialized_roots = 0
+    skipped_unmaterialized_sides: set[tuple[str, int]] = set()
 
     def flush_pending() -> None:
         nonlocal pending, next_shard
@@ -1297,13 +1300,20 @@ def build(
             both_sides=bool(cfg.bc_both_sides),
             self_aliases=aliases,
         ):
+            candidate_roots += 1
             decision_key = (decision.episode_id, decision.side, decision.step_id)
-            try:
-                target_row = root_opt_attr.row_for(decision_key)
-            except KeyError as error:
-                raise RuntimeError(
-                    f"prospective root has no materialized BC row: {decision_key}"
-                ) from error
+            target_row = root_opt_attr.first_row.get(decision_key)
+            if target_row is None:
+                # The BC encoder deliberately truncates a side after a tracker,
+                # legality, or encoding failure. Replay iteration can still see
+                # later decisions, but they cannot be prospective roots because
+                # no real BC input row exists to join as their training target.
+                # Never synthesize that row and never abort unrelated episodes.
+                skipped_unmaterialized_roots += 1
+                skipped_unmaterialized_sides.add(
+                    (decision.episode_id, decision.side)
+                )
+                continue
             target_meta = root_opt_attr.metadata[target_row]
             target_key = (
                 str(target_meta["episode_id"]),
@@ -1520,9 +1530,12 @@ def build(
                         raise RuntimeError(f"{name}.{field} contains NaN or infinity")
         audit_counts = {
             "episodes_read": len(selected_episode_ids),
+            "candidate_roots": candidate_roots,
             "groups_emitted": groups_emitted,
             "tree_groups_emitted": len(groups),
             "shards_emitted": len(shards),
+            "skipped_unmaterialized_roots": skipped_unmaterialized_roots,
+            "sides_with_unmaterialized_roots": len(skipped_unmaterialized_sides),
             "determination_failures": 0,
             "synthetic_fill_rejections": 0,
             "search_failures": 0,
@@ -1616,6 +1629,10 @@ def build(
             "scalar_return": "backward discounted sum of scalar_reward",
             "ko_signal": "prizes taken after the action; engine-derived proxy",
             "missing_logprob": "has_*_logprob=false and value=0; NaN forbidden",
+            "unmaterialized_root": (
+                "skip the replay decision and record it in audit; a prospective "
+                "root must join an existing real BC row and is never synthesized"
+            ),
         },
         "rope_nd_axes": [
             {
