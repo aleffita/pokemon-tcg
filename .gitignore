@@ -24,6 +24,7 @@ engine/
 
 # === RL ===
 data/
+model/results.db
 scripts/deck_builder/card_images
 # Deck builder backup
 agent/deck.csv.bak
