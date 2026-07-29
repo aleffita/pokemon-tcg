@@ -11,7 +11,7 @@ Example smoke build:
   uv run tcg-build-prospective \
     --config configs/smoke.json \
     --zip data/bc_replay_zip/2026-07-28.zip \
-    --out /tmp/ptcg-prospective-smoke \
+    --out data/bc_data/bc_smoke_2026_07_28/prospective_v1 \
     --max-groups 4 --trials 1 --horizon 2 --max-branches 4
 """
 
@@ -714,8 +714,16 @@ def _branch_summaries(
     return summaries
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source_file:
+        while chunk := source_file.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def build(
-    zip_path: Path,
+    zip_path: Path | list[Path] | tuple[Path, ...],
     out_dir: Path,
     *,
     config_path: Path,
@@ -727,8 +735,11 @@ def build(
     gamma: float,
 ) -> dict[str, Any]:
     cfg = load_config(config_path=str(config_path))
-    if trials <= 0 or horizon <= 0 or max_branches < 2 or max_groups <= 0:
-        raise ValueError("trials/horizon/max_groups must be positive and max_branches >= 2")
+    if trials <= 0 or horizon <= 0 or max_branches < 2 or max_groups < 0:
+        raise ValueError(
+            "trials/horizon must be positive, max_branches >= 2, and "
+            "max_groups >= 0 (0 means all branchable decisions)"
+        )
     if not 0.0 <= gamma <= 1.0:
         raise ValueError("gamma must be in [0, 1]")
 
@@ -746,161 +757,200 @@ def build(
     }
     selected_episode_ids: list[str] = []
 
-    with zipfile.ZipFile(zip_path) as archive:
-        members = [name for name in archive.namelist() if name.endswith(".json")]
-        members = members[:max_episodes] if max_episodes else members
-        for member_index, member in enumerate(members):
-            base_quota, extra = divmod(max_groups, max(len(members), 1))
+    zip_paths = (
+        (zip_path,)
+        if isinstance(zip_path, Path)
+        else tuple(Path(path) for path in zip_path)
+    )
+    if not zip_paths:
+        raise ValueError("at least one real replay ZIP is required")
+    episode_refs: list[tuple[Path, str]] = []
+    seen_episodes: dict[str, tuple[int, int]] = {}
+    source_archives: list[dict[str, Any]] = []
+    for source_path in zip_paths:
+        json_members = 0
+        with zipfile.ZipFile(source_path) as archive:
+            for info in archive.infolist():
+                if not info.filename.endswith(".json"):
+                    continue
+                json_members += 1
+                episode_id = Path(info.filename).stem
+                identity = (int(info.CRC), int(info.file_size))
+                previous = seen_episodes.get(episode_id)
+                if previous is None:
+                    seen_episodes[episode_id] = identity
+                    episode_refs.append((source_path, info.filename))
+                elif previous != identity:
+                    raise ValueError(
+                        "episode id collision with different replay content: "
+                        f"{episode_id}"
+                    )
+        source_archives.append({
+            "path": str(source_path),
+            "sha256": _sha256(source_path),
+            "json_members": json_members,
+        })
+    episode_refs = (
+        episode_refs[:max_episodes] if max_episodes else episode_refs
+    )
+    for member_index, (source_path, member) in enumerate(episode_refs):
+        episode_group_quota: int | None = None
+        if max_groups:
+            base_quota, extra = divmod(max_groups, max(len(episode_refs), 1))
             episode_group_quota = base_quota + int(member_index < extra)
             if episode_group_quota == 0:
                 continue
+        with zipfile.ZipFile(source_path) as archive:
             episode = json.loads(archive.read(member))
-            episode_id = Path(member).stem
-            selected_episode_ids.append(episode_id)
-            audit_counts["episodes_read"] += 1
-            episode_groups = 0
-            for decision in _iter_real_decisions(
-                episode,
-                episode_id,
-                both_sides=bool(cfg.bc_both_sides),
-                self_aliases=aliases,
-            ):
-                select = decision.observation.get("select") or {}
-                actions = _legal_actions(select, max_branches)
-                if decision.behavior_action not in actions:
-                    if len(actions) < max_branches:
-                        actions.append(decision.behavior_action)
-                    elif actions:
-                        actions[-1] = decision.behavior_action
-                actions = sorted(set(actions))
-                if len(actions) < 2:
-                    continue
-                group_id = _stable_hex(
-                    SCHEMA_VERSION,
-                    decision.episode_id,
-                    decision.side,
-                    decision.step_id,
-                )
-                decisions_by_group[group_id] = decision
-                for order, action in enumerate(actions):
-                    root_actions[(group_id, order)] = action
+        episode_id = Path(member).stem
+        selected_episode_ids.append(episode_id)
+        audit_counts["episodes_read"] += 1
+        episode_groups = 0
+        for decision in _iter_real_decisions(
+            episode,
+            episode_id,
+            both_sides=bool(cfg.bc_both_sides),
+            self_aliases=aliases,
+        ):
+            select = decision.observation.get("select") or {}
+            actions = _legal_actions(select, max_branches)
+            if decision.behavior_action not in actions:
+                if len(actions) < max_branches:
+                    actions.append(decision.behavior_action)
+                elif actions:
+                    actions[-1] = decision.behavior_action
+            actions = sorted(set(actions))
+            if len(actions) < 2:
+                continue
+            group_id = _stable_hex(
+                SCHEMA_VERSION,
+                decision.episode_id,
+                decision.side,
+                decision.step_id,
+            )
+            decisions_by_group[group_id] = decision
+            for order, action in enumerate(actions):
+                root_actions[(group_id, order)] = action
 
-                for trial_index in range(trials):
-                    trial_seed = _stable_seed(
-                        cfg.seed, group_id, trial_index
+            for trial_index in range(trials):
+                trial_seed = _stable_seed(
+                    cfg.seed, group_id, trial_index
+                )
+                determination_audit: dict[str, int] = {}
+                try:
+                    determination = _determinize(
+                        decision.observation,
+                        list(decision.own_deck),
+                        random.Random(trial_seed),
+                        encoder,
+                        audit=determination_audit,
                     )
-                    determination_audit: dict[str, int] = {}
-                    try:
-                        determination = _determinize(
-                            decision.observation,
-                            list(decision.own_deck),
-                            random.Random(trial_seed),
+                except Exception as exc:
+                    audit_counts["determination_failures"] += 1
+                    for order, action in enumerate(actions):
+                        node_records.append(_failed_node(
+                            decision,
+                            group_id,
+                            _stable_hex(group_id, trial_index, order, 1),
                             encoder,
-                            audit=determination_audit,
-                        )
-                    except Exception as exc:
-                        audit_counts["determination_failures"] += 1
-                        for order, action in enumerate(actions):
-                            node_records.append(_failed_node(
-                                decision,
-                                group_id,
-                                _stable_hex(group_id, trial_index, order, 1),
-                                encoder,
-                                trial_index=trial_index,
-                                trial_seed=trial_seed,
-                                root_branch_order=order,
-                                action=action,
-                                observation=decision.observation,
-                                failure_stage="determinize",
-                                failure_type=type(exc).__name__,
-                                determination_mode="failed",
-                                determination_candidates=0,
-                            ))
-                        continue
-                    if (
-                        int(determination_audit.get("opponent_synthetic_cards", 0))
-                        or int(determination_audit.get("self_synthetic_cards", 0))
-                    ):
-                        audit_counts["synthetic_fill_rejections"] += 1
-                        for order, action in enumerate(actions):
-                            node_records.append(_failed_node(
-                                decision,
-                                group_id,
-                                _stable_hex(group_id, trial_index, order, 1),
-                                encoder,
-                                trial_index=trial_index,
-                                trial_seed=trial_seed,
-                                root_branch_order=order,
-                                action=action,
-                                observation=decision.observation,
-                                failure_stage="determinize",
-                                failure_type="SyntheticFillRejected",
-                                determination_mode="rejected",
-                                determination_candidates=0,
-                            ))
-                        continue
-                    mode, candidate_count = _determination_mode(
-                        determination_audit
+                            trial_index=trial_index,
+                            trial_seed=trial_seed,
+                            root_branch_order=order,
+                            action=action,
+                            observation=decision.observation,
+                            failure_stage="determinize",
+                            failure_type=type(exc).__name__,
+                            determination_mode="failed",
+                            determination_candidates=0,
+                        ))
+                    continue
+                if (
+                    int(determination_audit.get("opponent_synthetic_cards", 0))
+                    or int(determination_audit.get("self_synthetic_cards", 0))
+                ):
+                    audit_counts["synthetic_fill_rejections"] += 1
+                    for order, action in enumerate(actions):
+                        node_records.append(_failed_node(
+                            decision,
+                            group_id,
+                            _stable_hex(group_id, trial_index, order, 1),
+                            encoder,
+                            trial_index=trial_index,
+                            trial_seed=trial_seed,
+                            root_branch_order=order,
+                            action=action,
+                            observation=decision.observation,
+                            failure_stage="determinize",
+                            failure_type="SyntheticFillRejected",
+                            determination_mode="rejected",
+                            determination_candidates=0,
+                        ))
+                    continue
+                mode, candidate_count = _determination_mode(
+                    determination_audit
+                )
+                from cg import api
+                try:
+                    root_state = api.search_begin(
+                        api.to_observation_class(decision.observation),
+                        **determination,
+                        manual_coin=True,
                     )
-                    from cg import api
-                    try:
-                        root_state = api.search_begin(
-                            api.to_observation_class(decision.observation),
-                            **determination,
-                            manual_coin=True,
+                except Exception as exc:
+                    audit_counts["search_failures"] += 1
+                    for order, action in enumerate(actions):
+                        node_records.append(_failed_node(
+                            decision,
+                            group_id,
+                            _stable_hex(group_id, trial_index, order, 1),
+                            encoder,
+                            trial_index=trial_index,
+                            trial_seed=trial_seed,
+                            root_branch_order=order,
+                            action=action,
+                            observation=decision.observation,
+                            failure_stage="search_begin",
+                            failure_type=type(exc).__name__,
+                            determination_mode=mode,
+                            determination_candidates=candidate_count,
+                        ))
+                    continue
+                try:
+                    for order, action in enumerate(actions):
+                        records = _rollout_branch(
+                            decision,
+                            group_id,
+                            action,
+                            order,
+                            encoder,
+                            trial_index=trial_index,
+                            trial_seed=trial_seed,
+                            root_state=root_state,
+                            determination_mode=mode,
+                            determination_candidates=candidate_count,
+                            horizon=horizon,
+                            gamma=gamma,
                         )
-                    except Exception as exc:
-                        audit_counts["search_failures"] += 1
-                        for order, action in enumerate(actions):
-                            node_records.append(_failed_node(
-                                decision,
-                                group_id,
-                                _stable_hex(group_id, trial_index, order, 1),
-                                encoder,
-                                trial_index=trial_index,
-                                trial_seed=trial_seed,
-                                root_branch_order=order,
-                                action=action,
-                                observation=decision.observation,
-                                failure_stage="search_begin",
-                                failure_type=type(exc).__name__,
-                                determination_mode=mode,
-                                determination_candidates=candidate_count,
-                            ))
-                        continue
+                        audit_counts["search_failures"] += sum(
+                            not record["valid"] for record in records
+                        )
+                        node_records.extend(records)
+                finally:
                     try:
-                        for order, action in enumerate(actions):
-                            records = _rollout_branch(
-                                decision,
-                                group_id,
-                                action,
-                                order,
-                                encoder,
-                                trial_index=trial_index,
-                                trial_seed=trial_seed,
-                                root_state=root_state,
-                                determination_mode=mode,
-                                determination_candidates=candidate_count,
-                                horizon=horizon,
-                                gamma=gamma,
-                            )
-                            audit_counts["search_failures"] += sum(
-                                not record["valid"] for record in records
-                            )
-                            node_records.extend(records)
-                    finally:
-                        try:
-                            api.search_release(root_state.searchId)
-                        except Exception:
-                            audit_counts["search_failures"] += 1
-                        try:
-                            api.search_end()
-                        except Exception:
-                            audit_counts["search_failures"] += 1
-                audit_counts["groups_emitted"] += 1
-                episode_groups += 1
-                if episode_groups >= episode_group_quota:
-                    break
+                        api.search_release(root_state.searchId)
+                    except Exception:
+                        audit_counts["search_failures"] += 1
+                    try:
+                        api.search_end()
+                    except Exception:
+                        audit_counts["search_failures"] += 1
+            audit_counts["groups_emitted"] += 1
+            episode_groups += 1
+            if (
+                episode_group_quota is not None
+                and episode_groups >= episode_group_quota
+            ):
+                break
 
     branch_records = _branch_summaries(
         decisions_by_group, root_actions, node_records, trials, encoder
@@ -908,26 +958,20 @@ def build(
     nodes = _dicts_to_array(node_records, NODE_DTYPE)
     branches = _dicts_to_array(branch_records, BRANCH_DTYPE)
     if len(branches) == 0 or int(np.count_nonzero(branches["valid"])) == 0:
-        raise RuntimeError("prospective smoke produced no valid counterfactual branch")
+        raise RuntimeError("prospective corpus produced no valid counterfactual branch")
     for array, name in ((nodes, "nodes"), (branches, "branches")):
         for field in array.dtype.names or ():
             if np.issubdtype(array.dtype[field], np.floating):
                 if not np.isfinite(array[field]).all():
                     raise RuntimeError(f"{name}.{field} contains NaN or infinity")
 
-    source_hasher = hashlib.sha256()
-    with zip_path.open("rb") as source_file:
-        while chunk := source_file.read(1024 * 1024):
-            source_hasher.update(chunk)
-    source_sha = source_hasher.hexdigest()
     contract = {
         "schema_version": SCHEMA_VERSION,
         "planner_version": PLANNER_VERSION,
         "prospective_coord_schema_version": PROSPECTIVE_COORD_SCHEMA_VERSION,
         "prospective_coordinate_schema": prospective_coordinate_schema(),
         "source": {
-            "path": str(zip_path),
-            "sha256": source_sha,
+            "archives": source_archives,
             "episodes_selected": max_episodes,
             "episode_ids": selected_episode_ids,
         },
@@ -1008,6 +1052,9 @@ def build(
         },
         "audit": audit_counts,
     }
+    if len(source_archives) == 1:
+        contract["source"]["path"] = source_archives[0]["path"]
+        contract["source"]["sha256"] = source_archives[0]["sha256"]
     fingerprint_source = json.dumps(
         contract, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -1039,7 +1086,13 @@ def build(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/train_config.json")
-    parser.add_argument("--zip", required=True, dest="zip_path")
+    parser.add_argument(
+        "--zip",
+        required=True,
+        action="append",
+        dest="zip_paths",
+        help="Real replay ZIP; repeat for a multi-archive BC corpus",
+    )
     parser.add_argument("--out", required=True)
     parser.add_argument("--max-episodes", type=int, default=None)
     parser.add_argument("--max-groups", type=int, default=32)
@@ -1059,7 +1112,7 @@ def main() -> None:
         else int(cfg.max_episodes)
     )
     manifest = build(
-        Path(args.zip_path),
+        [Path(path) for path in args.zip_paths],
         Path(args.out),
         config_path=Path(args.config),
         max_episodes=max_episodes,

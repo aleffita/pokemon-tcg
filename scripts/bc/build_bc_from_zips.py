@@ -40,8 +40,8 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 _argv = sys.argv
 sys.argv = [_argv[0]]
-from scripts.bc import build_bc_dataset as B   # B.rows_from_episode (off-by-one fixed), B.enc
-from rl.train_config import load_config
+from scripts.bc import build_bc_dataset as B  # noqa: E402
+from rl.train_config import load_config  # noqa: E402
 sys.argv = _argv
 
 DATASET_MANIFEST_VERSION = 1
@@ -54,6 +54,11 @@ def parse_args():
     )
     p.add_argument("out", nargs="?", default=None, help="Output directory (default: data_dir from config + latest date)")
     p.add_argument("zips", nargs="*", default=None, help="Zip file(s) (default: all in replay_zip_dir)")
+    p.add_argument(
+        "--latest",
+        action="store_true",
+        help="Build only the lexicographically latest local replay ZIP",
+    )
     p.add_argument("--config", default=None, help="Path to JSON config file")
     p.add_argument("--workers", type=int, default=None,
                    help="Number of worker processes (default: config or 8)")
@@ -86,13 +91,15 @@ def _job(arg):
         ep_meta = []
         wk_meta = []
         rows, labs, atk = [], [], []
-        for r, l, ia in B.rows_from_episode(
+        for row, label, is_attack in B.rows_from_episode(
             ep,
             episode_id=ep_id,
             ep_meta=ep_meta,
             would_ko_meta=wk_meta,
         ):
-            rows.append(r); labs.append(l); atk.append(ia)
+            rows.append(row)
+            labs.append(label)
+            atk.append(is_attack)
         return rows, labs, atk, ep_meta, wk_meta, {"episode_failures": 0}
     except Exception as exc:
         return [], [], [], [], [], {
@@ -408,6 +415,13 @@ def _build_contract(cfg, config_path, sources, dedup):
         "max_episodes": int(cfg.max_episodes),
         "bc_flush": int(cfg.bc_flush),
         "self_aliases": sorted(cfg.bc_self_aliases),
+        "prospective_enabled": bool(cfg.prospective_enabled),
+        "prospective_sidecar_name": str(cfg.prospective_sidecar_name),
+        "prospective_max_groups": int(cfg.prospective_max_groups),
+        "prospective_max_branches": int(cfg.prospective_max_branches),
+        "prospective_trials": int(cfg.prospective_trials),
+        "prospective_horizon": int(cfg.prospective_horizon),
+        "prospective_gamma": float(cfg.prospective_gamma),
     }
     payload = {
         "manifest_version": DATASET_MANIFEST_VERSION,
@@ -492,6 +506,151 @@ def _validate_would_ko_dataset(out_dir, enabled, stats):
     return "computed"
 
 
+def _prospective_sidecar_path(out_dir, cfg):
+    if str(out_dir).endswith(".npz"):
+        raise ValueError(
+            "prospective_enabled=true requires a directory BC dataset, not .npz"
+        )
+    name = str(cfg.prospective_sidecar_name)
+    if not name or name in (".", "..") or Path(name).name != name:
+        raise ValueError(
+            "prospective_sidecar_name must be one safe directory name"
+        )
+    return Path(out_dir) / name
+
+
+def _validate_existing_prospective(
+    sidecar_dir,
+    *,
+    cfg,
+    config_source,
+    sources,
+):
+    manifest_path = sidecar_dir / "prospective_manifest.json"
+    node_path = sidecar_dir / "prospective_nodes.npy"
+    branch_path = sidecar_dir / "prospective_branches.npy"
+    if not manifest_path.is_file() or not node_path.is_file() or not branch_path.is_file():
+        raise RuntimeError(
+            f"prospective sidecar is partial; refusing unsafe resume: {sidecar_dir}"
+        )
+    with manifest_path.open(encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    expected_config = {
+        "path": str(config_source),
+        "seed": int(cfg.seed),
+        "max_episodes": int(cfg.max_episodes),
+        "max_groups": int(cfg.prospective_max_groups),
+        "max_branches": int(cfg.prospective_max_branches),
+        "trials": int(cfg.prospective_trials),
+        "horizon": int(cfg.prospective_horizon),
+        "gamma": float(cfg.prospective_gamma),
+        "workers": 1,
+        "self_aliases": sorted(cfg.bc_self_aliases),
+    }
+    if manifest.get("config") != expected_config:
+        raise RuntimeError(
+            "existing prospective sidecar has a different config contract; "
+            "refusing unsafe resume"
+        )
+    expected_sources = [
+        {
+            "path": str(source["path"]),
+            "sha256": str(source["sha256"]),
+            "json_members": int(source["json_members"]),
+        }
+        for source in sources
+    ]
+    if manifest.get("source", {}).get("archives") != expected_sources:
+        raise RuntimeError(
+            "existing prospective sidecar has different replay sources; "
+            "refusing unsafe resume"
+        )
+    semantics = manifest.get("semantics") or {}
+    if (
+        semantics.get("hidden_opponent_deck_used") is not False
+        or semantics.get("synthetic_fill_allowed") is not False
+    ):
+        raise RuntimeError("existing prospective sidecar violates data-boundary contract")
+    if not isinstance(manifest.get("fingerprint"), str):
+        raise RuntimeError("existing prospective sidecar has no fingerprint")
+    nodes = np.load(node_path, mmap_mode="r", allow_pickle=False)
+    branches = np.load(branch_path, mmap_mode="r", allow_pickle=False)
+    outputs = manifest.get("outputs") or {}
+    if len(nodes) != int(outputs.get("node_rows", -1)):
+        raise RuntimeError("prospective node count disagrees with its manifest")
+    if len(branches) != int(outputs.get("branch_rows", -1)):
+        raise RuntimeError("prospective branch count disagrees with its manifest")
+    if not len(branches) or not int(np.count_nonzero(branches["valid"])):
+        raise RuntimeError("existing prospective sidecar has no valid branch")
+    del nodes, branches
+    return manifest
+
+
+def _ensure_prospective_sidecar(
+    out_dir,
+    *,
+    cfg,
+    config_source,
+    zip_paths,
+    sources,
+):
+    if not bool(cfg.prospective_enabled):
+        if not str(out_dir).endswith(".npz"):
+            stale = Path(out_dir) / str(cfg.prospective_sidecar_name)
+            if stale.exists():
+                raise RuntimeError(
+                    "prospective planner is disabled but the output already contains "
+                    f"{stale}; refusing to publish a misleading mixed contract"
+                )
+        return {
+            "enabled": False,
+            "status": "disabled",
+            "sidecar_name": None,
+            "fingerprint": None,
+        }
+
+    sidecar_dir = _prospective_sidecar_path(out_dir, cfg)
+    if sidecar_dir.exists():
+        manifest = _validate_existing_prospective(
+            sidecar_dir,
+            cfg=cfg,
+            config_source=config_source,
+            sources=sources,
+        )
+        status = "reused"
+    else:
+        from scripts.bc.build_prospective_groups import build as build_prospective
+
+        manifest = build_prospective(
+            [Path(path) for path in zip_paths],
+            sidecar_dir,
+            config_path=Path(config_source),
+            max_episodes=int(cfg.max_episodes),
+            max_groups=int(cfg.prospective_max_groups),
+            max_branches=int(cfg.prospective_max_branches),
+            trials=int(cfg.prospective_trials),
+            horizon=int(cfg.prospective_horizon),
+            gamma=float(cfg.prospective_gamma),
+        )
+        status = "built"
+    return {
+        "enabled": True,
+        "status": status,
+        "sidecar_name": str(cfg.prospective_sidecar_name),
+        "fingerprint": manifest["fingerprint"],
+        "coord_schema_version": manifest["prospective_coord_schema_version"],
+        "node_rows": int(manifest["outputs"]["node_rows"]),
+        "branch_rows": int(manifest["outputs"]["branch_rows"]),
+        "config": {
+            "max_groups": int(cfg.prospective_max_groups),
+            "max_branches": int(cfg.prospective_max_branches),
+            "trials": int(cfg.prospective_trials),
+            "horizon": int(cfg.prospective_horizon),
+            "gamma": float(cfg.prospective_gamma),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 #  MAIN
 # ---------------------------------------------------------------------------
@@ -511,8 +670,10 @@ def main():
         cli["bc_ep_timeout"] = args.ep_timeout
     cfg = load_config(cli_overrides=cli, config_path=args.config)
 
-    # Resolve output dir and zips from config defaults
-    OUT = args.out or os.path.join(cfg.data_dir, f"bc_{datetime.now().strftime('%Y_%m_%d')}")
+    # Resolve ZIP corpus first so --latest can name the output after its actual
+    # replay date rather than the wall-clock date on which the pipeline runs.
+    if args.latest and args.zips:
+        raise ValueError("--latest cannot be combined with explicit ZIP paths")
     if args.zips:
         ZIPS = [Path(z) for z in args.zips]
     else:
@@ -521,6 +682,17 @@ def main():
         if not ZIPS:
             print(f"No zip files found in {zip_dir}")
             return
+        if args.latest:
+            ZIPS = [ZIPS[-1]]
+    if args.out:
+        OUT = args.out
+    elif args.latest:
+        replay_date = ZIPS[0].stem.replace("-", "_")
+        OUT = os.path.join(cfg.data_dir, f"bc_{replay_date}")
+    else:
+        OUT = os.path.join(
+            cfg.data_dir, f"bc_{datetime.now().strftime('%Y_%m_%d')}"
+        )
 
     WORKERS = cfg.bc_workers
     CAP = cfg.max_episodes
@@ -594,12 +766,17 @@ def main():
             batch_skipped = 0
             for a in asyncs:
                 try:
-                    r, l, ia, m, wk, job_stats = a.get(timeout=TIMEOUT)
+                    rows, labels, attacks, metadata, wk, job_stats = a.get(
+                        timeout=TIMEOUT
+                    )
                 except Exception:
-                    r, l, ia, m, wk = [], [], [], [], []
+                    rows, labels, attacks, metadata, wk = [], [], [], [], []
                     job_stats = {"episode_failures": 1, "episode_timeout_or_worker_failures": 1}
                     batch_skipped += 1
-                buf_rows.extend(r); buf_labels.extend(l); buf_attack.extend(ia); buf_meta.extend(m)
+                buf_rows.extend(rows)
+                buf_labels.extend(labels)
+                buf_attack.extend(attacks)
+                buf_meta.extend(metadata)
                 buf_wk_meta.extend(wk)
                 _merge_counts(batch_stats, job_stats)
 
@@ -623,7 +800,8 @@ def main():
     n_shards = _discover_shards(shard_dir)
     print(f"[bc-zips] {total_rows} rows from {len(tasks)} episodes in {n_shards} shards", flush=True)
     if total_rows == 0:
-        print("[bc-zips] NO ROWS"); return
+        print("[bc-zips] NO ROWS")
+        return
     if cfg.bc_would_ko:
         if int(aggregate_stats.get("eligible_options", 0)) <= 0:
             raise RuntimeError(
@@ -639,7 +817,7 @@ def main():
     print(f"[bc-zips] merging {n_shards} shards ({total_rows} rows) -> {OUT} ...", flush=True)
     if OUT.endswith(".npz"):
         n = _merge_shards(shard_dir, OUT + "_dir", n_shards)
-        print(f"[bc-zips] packing into .npz (caution: loads all into RAM) ...", flush=True)
+        print("[bc-zips] packing into .npz (caution: loads all into RAM) ...", flush=True)
         out = {}
         for f in os.listdir(OUT + "_dir"):
             if f.endswith(".npy"):
@@ -696,6 +874,24 @@ def main():
         )
         print(f"[bc-zips] wrote {OUT}: {n} rows (.npz self-check skipped)", flush=True)
 
+    prospective_contract = _ensure_prospective_sidecar(
+        OUT,
+        cfg=cfg,
+        config_source=config_source,
+        zip_paths=ZIPS,
+        sources=source_manifest,
+    )
+    if prospective_contract["enabled"]:
+        print(
+            "[bc-zips] prospective sidecar "
+            f"{prospective_contract['status']}: "
+            f"{OUT}/{prospective_contract['sidecar_name']} "
+            f"nodes={prospective_contract['node_rows']} "
+            f"branches={prospective_contract['branch_rows']} "
+            f"fingerprint={prospective_contract['fingerprint'][:12]}",
+            flush=True,
+        )
+
     completed_manifest = {
         **build_contract,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -716,6 +912,7 @@ def main():
                 "computed=false with failed_trials>0 means computation failure"
             ),
         },
+        "prospective": prospective_contract,
         "self_identity": {
             "aliases": sorted(B.SELF_ALIASES),
             "storage": "episode_meta.npy:is_self",

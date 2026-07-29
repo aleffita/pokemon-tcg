@@ -13,6 +13,9 @@ Usage:
 import subprocess
 from datetime import datetime
 from pathlib import Path
+import shlex
+
+from rl.train_config import get_default_config_path, load_config
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,11 +43,15 @@ def main():
     import argparse
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dry-run", action="store_true", help="Show what would happen without executing")
+    p.add_argument("--config", default=None, help="Authoritative train/build config")
     p.add_argument("--skip-download", action="store_true", help="Skip Kaggle download step")
+    p.add_argument("--skip-bc", action="store_true", help="Skip config-driven BC/prospective build")
     p.add_argument("--skip-stats", action="store_true", help="Skip card/deck stats computation")
     p.add_argument("--skip-tournament", action="store_true", help="Skip local tournament")
     p.add_argument("--tournament-games", type=int, default=10, help="Games per opponent in tournament")
     args = p.parse_args()
+    cfg = load_config(config_path=args.config)
+    config_source = args.config or get_default_config_path()
 
     start_time = datetime.now()
     print(f"Pokemon TCG Daily Pipeline -- {start_time.strftime('%Y-%m-%d %H:%M')}")
@@ -54,19 +61,44 @@ def main():
 
     # Step 1: Download
     if not args.skip_download:
-        steps.append(("Download latest replay", "uv run tcg-data --last"))
+        steps.append((
+            "Download latest replay",
+            " ".join([
+                "uv run tcg-data --last",
+                "--config", shlex.quote(str(config_source)),
+            ]),
+        ))
 
-    # Step 2: Card stats
+    # Step 2: config-driven BC + real prospective sidecar.
+    if not args.skip_bc:
+        build_label = (
+            "Build BC dataset and prospective sidecar"
+            if bool(cfg.prospective_enabled)
+            else "Build BC dataset"
+        )
+        steps.append((
+            build_label,
+            " ".join([
+                "uv run tcg-build-bc",
+                "--config", shlex.quote(str(config_source)),
+                "--latest",
+            ]),
+        ))
+
+    # Step 3: Card stats
     if not args.skip_stats:
         today = start_time.strftime('%Y-%m-%d')
         steps.append(("Build card stats", f"uv run tcg-build-card-stats --date {today}"))
 
-    # Step 3: Tournament
+    # Step 4: Tournament
     if not args.skip_tournament:
         steps.append(("Run tournament", f"uv run tcg-tournament --games {args.tournament_games}"))
 
     if not steps:
-        print("Nothing to do. Use --skip-download, --skip-stats, --skip-tournament to control steps.")
+        print(
+            "Nothing to do. Use --skip-download, --skip-bc, --skip-stats, "
+            "--skip-tournament to control steps."
+        )
         return
 
     results = []
@@ -99,14 +131,14 @@ def main():
             cards_elo = db.conn.execute("SELECT COUNT(*) FROM card_elo").fetchone()[0]
             decks_elo = db.conn.execute("SELECT COUNT(*) FROM deck_elo").fetchone()[0]
             db.close()
-            print(f"\n  Database state:")
+            print("\n  Database state:")
             print(f"    Matches: {matches}")
             print(f"    Card Elo entries: {cards_elo}")
             print(f"    Deck Elo entries: {decks_elo}")
         except Exception as e:
             print(f"\n  Could not read database state: {e}")
 
-    print(f"\n  Dashboard: uv run tcg-dashboard")
+    print("\n  Dashboard: uv run tcg-dashboard")
 
 
 if __name__ == "__main__":

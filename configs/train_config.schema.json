@@ -239,6 +239,144 @@
       "minimum": 0,
       "maximum": 256
     },
+    "prospective_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable the isolated prospective planner phase. Requires a real, versioned rollout sidecar; legacy checkpoints without planner state remain disabled."
+    },
+    "prospective_sidecar_name": {
+      "type": "string",
+      "default": "prospective_v1",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "Dataset-relative directory containing prospective_nodes.npy and prospective_manifest.json."
+    },
+    "prospective_max_groups": {
+      "type": "integer",
+      "default": 0,
+      "minimum": 0,
+      "description": "Maximum real rollout groups emitted by the builder. 0 means all available groups."
+    },
+    "prospective_max_branches": {
+      "type": "integer",
+      "default": 4,
+      "minimum": 1,
+      "maximum": 192,
+      "description": "Maximum legal root branches explored per prospective group."
+    },
+    "prospective_trials": {
+      "type": "integer",
+      "default": 1,
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Real simulator trials per prospective group."
+    },
+    "prospective_horizon": {
+      "type": "integer",
+      "default": 2,
+      "minimum": 1,
+      "maximum": 64,
+      "description": "Maximum simulated action depth for the prospective tree."
+    },
+    "prospective_gamma": {
+      "type": "number",
+      "default": 1.0,
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Discount used by the sidecar to compute scalar_return."
+    },
+    "prospective_batch_size": {
+      "type": "integer",
+      "default": 128,
+      "minimum": 1,
+      "maximum": 128,
+      "description": "Maximum real rollout trees per physical prospective optimizer step."
+    },
+    "prospective_nhead": {
+      "type": "integer",
+      "default": 4,
+      "minimum": 1,
+      "maximum": 16
+    },
+    "prospective_nlayers": {
+      "type": "integer",
+      "default": 2,
+      "minimum": 1,
+      "maximum": 12
+    },
+    "prospective_ff_dim": {
+      "type": "integer",
+      "default": 512,
+      "minimum": 64,
+      "maximum": 4096
+    },
+    "prospective_rope_base": {
+      "type": "number",
+      "default": 10000.0,
+      "exclusiveMinimum": 1.0
+    },
+    "prospective_uncertainty_floor": {
+      "type": "number",
+      "default": 1e-6,
+      "exclusiveMinimum": 0.0
+    },
+    "prospective_lr": {
+      "type": "number",
+      "default": 0.0002457,
+      "exclusiveMinimum": 0.0,
+      "maximum": 1.0
+    },
+    "prospective_scheduler_total_steps": {
+      "type": "integer",
+      "default": 0,
+      "minimum": 0,
+      "description": "Explicit prospective scheduler horizon. 0 uses this invocation's real prospective optimizer-step count."
+    },
+    "prospective_clip_ratio": {
+      "type": "number",
+      "default": 0.2,
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "prospective_kl_coefficient": {
+      "type": "number",
+      "default": 0.0,
+      "minimum": 0.0
+    },
+    "prospective_policy_weight": {
+      "type": "number",
+      "default": 1.0,
+      "minimum": 0.0
+    },
+    "prospective_return_weight": {
+      "type": "number",
+      "default": 1.0,
+      "minimum": 0.0
+    },
+    "prospective_value_weight": {
+      "type": "number",
+      "default": 1.0,
+      "minimum": 0.0
+    },
+    "prospective_ko_weight": {
+      "type": "number",
+      "default": 1.0,
+      "minimum": 0.0
+    },
+    "prospective_prize_weight": {
+      "type": "number",
+      "default": 1.0,
+      "minimum": 0.0
+    },
+    "prospective_terminal_weight": {
+      "type": "number",
+      "default": 1.0,
+      "minimum": 0.0
+    },
+    "prospective_uncertainty_weight": {
+      "type": "number",
+      "default": 1.0,
+      "minimum": 0.0
+    },
     "data_dir": {
       "type": "string",
       "default": "data/bc_data",

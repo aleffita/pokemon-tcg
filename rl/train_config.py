@@ -116,6 +116,36 @@ class TrainConfig:
     # F.3: TBPTT (0 = disabled, 8/16/32 for sequential training)
     tbptt_chunk: int = 0
 
+    # Lateral prospective planner. The builder materializes a real rollout
+    # sidecar; the trainer consumes it only when explicitly enabled.
+    prospective_enabled: bool = False
+    prospective_sidecar_name: str = "prospective_v1"
+    prospective_max_groups: int = 0
+    prospective_max_branches: int = 4
+    prospective_trials: int = 1
+    prospective_horizon: int = 2
+    prospective_gamma: float = 1.0
+
+    # Prospective planner architecture/training. d_model is shared with the
+    # trunk so detached causal context can be passed without another bridge.
+    prospective_batch_size: int = 128
+    prospective_nhead: int = 4
+    prospective_nlayers: int = 2
+    prospective_ff_dim: int = 512
+    prospective_rope_base: float = 10000.0
+    prospective_uncertainty_floor: float = 1e-6
+    prospective_lr: float = 2.457e-4
+    prospective_scheduler_total_steps: int = 0
+    prospective_clip_ratio: float = 0.2
+    prospective_kl_coefficient: float = 0.0
+    prospective_policy_weight: float = 1.0
+    prospective_return_weight: float = 1.0
+    prospective_value_weight: float = 1.0
+    prospective_ko_weight: float = 1.0
+    prospective_prize_weight: float = 1.0
+    prospective_terminal_weight: float = 1.0
+    prospective_uncertainty_weight: float = 1.0
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
