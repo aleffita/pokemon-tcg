@@ -16,7 +16,7 @@ dependencies = [
     # on Linux. The Kaggle sandbox has neither, so the submission bundle vendors
     # its own wheels — see vendor/wheels/ and scripts/build_submission.py.
     "mlx>=0.32.0 ; sys_platform == 'darwin'",
-    "mlx[cpu]>=0.32.0 ; sys_platform == 'linux'",
+    # "mlx[cpu]>=0.32.0 ; sys_platform == 'linux'",
     # Lower bounds relaxed to what Python 3.11 supports — the sandbox
     # interpreter. Newer numpy/pandas require 3.12+.
     "numpy>=2.4",
