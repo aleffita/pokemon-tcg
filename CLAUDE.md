@@ -1,676 +1,327 @@
-# Pokémon TCG AI Battle — Current MLX Handoff
+# Pokemon TCG AI Battle - Operational Contract
 
-> **Authoritative scope:** this handoff governs the current implementation task. The original snapshot notes are preserved below as historical inventory and context; when they conflict with this section or the detailed plan at the end of the file, the current handoff wins.
+This file is the agent-facing contract for the current `pokemon-tcg` checkout.
+It replaces the old historical handoff. Use live code and current user
+instructions over older notes.
 
-## Repository initialization
+## Authority Order
 
-This project was extracted from the shared Google Drive artifact `tcg-pokemon-agent-mlx-port.zip` (Drive file ID `1R3wCNKXlnJ5jEHbYtqkjyQ_aOkxvEe_x`, snapshot received 2026-07-25). The repository is intentionally prepared but not yet modified to implement the plan. The initial Git commit must contain the extracted source plus this merged handoff and `TASK.md`.
+1. Alefita's current request.
+2. The live repository state in this checkout.
+3. This `CLAUDE.md`.
+4. `TASK.md` and `docs/` specifications.
+5. Canonical Wikifita pages in `/Users/alefita/Claude/wikifita`.
+6. Historical transcripts, previous handoffs, and old archive notes.
 
-## Current objective
+Alefita owns the scientific direction. Agents should provide facts,
+mechanisms, risks, uncertainty, and options when asked; do not prescribe the
+research direction or re-open settled choices.
 
-Migrate the **Mikaelzinho PyTorch snapshot** to the **Mikaelzinho MLX port** with functional parity at the intended architecture, then connect the low-risk capabilities already latent in the dataset and model:
+## Hard Boundaries
+
+- Use `uv run` for Python entry points. Do not use raw `python` or `python3`
+  commands in this repository.
+- Do not start full training, full dataset rebuilds, full prospective builds,
+  long tournaments, polling loops, or background automations unless Alefita
+  explicitly asks.
+- Agent-safe execution is smoke-sized only, usually through `configs/smoke.json`.
+- Do not touch a live build's `data/`, `.work/`, shard, checkpoint, or process
+  directories unless that is the explicit task.
+- Do not modify `engine/`; it is supplied by the Kaggle environment.
+- Do not commit credentials, tokens, private data, or raw sensitive transcripts.
+- Keep code identifiers and comments in English.
+- User-facing explanations may be in Brazilian Portuguese.
+- `AGENTS.md` must be a relative symlink to `CLAUDE.md`. Never edit
+  `AGENTS.md` as an independent file.
+
+## Current Architecture
+
+The active line is recurrent behavioral cloning with MLX training and PyTorch
+FP16 submission inference.
+
+The current full training config uses:
+
+- `d_model=128`
+- `nhead=4`
+- `nlayers=4`
+- `ff_dim=512`
+- `scratch_registers=32`
+- `structured=true`
+- `tbptt_chunk=64`
+- Muon+AdamW optimizer routing
+- Prospective V2 enabled
+- would-KO enabled
+
+Code defaults in `rl/train_config.py` are fallback defaults, not necessarily
+the active full-run contract. Check `configs/train_config.json` and the
+checkpoint payload before making current claims.
+
+## MLX Training, PyTorch Inference
+
+Training is MLX. Submission inference is PyTorch FP16.
+
+`scripts/build_submission.py` converts the selected MLX trainer checkpoint into
+`model/bc_model/bc_best_torch_fp16.pt` and packages that self-contained
+artifact. Runtime settings travel inside the checkpoint, including architecture
+schema, encoder schema, would-KO settings, prospective planner settings,
+optimizer/scheduler provenance, and training counters.
+
+Submission archives must not depend on `train_config.json`, MLX runtime files,
+vendored MLX wheels, network access, Google Drive, or an external service.
+
+The submission package deliberately excludes:
+
+- `rl/policy_mlx.py`
+- `rl/prospective_planner_mlx.py`
+- transient training configs
+- vendored MLX dependencies
+
+## Train Config And Checkpoints
+
+`train_config.json` is a transient session sheet. It can change between runs.
+The checkpoint is the durable source for architecture/runtime contracts.
+
+Resume policy:
+
+- `optimizer_state=reset` preserves model weights and starts fresh optimizer
+  buffers.
+- `optimizer_state=resume` requires a checkpoint with the identical optimizer
+  contract.
+- `scheduler_state=reset` starts a session-local scheduler phase.
+- `scheduler_state=resume` uses the checkpoint scheduler horizon and rejects
+  incompatible horizons.
+
+The scheduler counts optimizer updates, not forward passes and not rows.
+Warmup is clamped to the active scheduler horizon.
+
+Checkpoints:
+
+- `--out` is the best validation checkpoint path.
+- `*_latest.pkl` is the rolling resume checkpoint.
+- `checkpoint_every_epochs` writes numbered epoch snapshots.
+- the final local epoch is always retained.
+
+## TBPTT Contract
+
+TBPTT is decision-based.
+
+Rows are grouped by `(episode_id, side)` from `episode_meta.npy`, then split by
+contiguous `step_id`. A multi-select decision can emit multiple rows, but those
+rows remain one engine decision and share the same incoming memory.
+
+The real TBPTT work plan obeys both:
 
 ```text
-MLX semantic corrections
-  -> FP16-native trainer
-  -> reliable checkpoints and accumulation
-  -> exact padding/option compaction
-  -> complete inference logs
-  -> autoregressive multi-select
-  -> persistent scratch registers
-  -> sequential metadata and TBPTT
-  -> Elo-oriented evaluation
+decisions_per_chunk <= tbptt_chunk
+rows_per_physical_microbatch <= batch_size
 ```
 
-This is not a benchmark project. Do not spend the implementation phase comparing PyTorch speed to MLX speed or constructing a retroactive parity benchmark. MLX is the selected runtime. The required validation is semantic correctness, functional behavior, and improvement toward Elo.
+Decisions are indivisible. One decision larger than `batch_size` is an error.
 
-The author-original repository and its full PPO/self-play infrastructure are context only. They are not the comparison target for this port. The concrete baseline is the simplified Mikaelzinho behavioral-cloning implementation and the MLX code included in this archive.
-
-## Local PyTorch reference
-
-The PyTorch project used as the reference for this migration is vendored locally at:
+Optimizer accounting:
 
 ```text
-reference/mikaelzinho-pytorch/
+microbatches_per_epoch = len(real_tbptt_plan)
+optimizer_steps_per_epoch = ceil(microbatches_per_epoch / accum_steps)
+run_optimizer_steps = local_epochs * optimizer_steps_per_epoch
 ```
 
-It was downloaded from the shared Drive artifact:
+The final partial accumulation window is stepped before validation. The trainer
+raises if actual microbatches or optimizer steps diverge from the planned
+counts.
 
-- file: `tcg-pokemon-agent-main.zip`
-- Drive file ID: `1IwESPm29-6bGByS6qHcrPchhR2-QjEld`
-- MIME type: `application/zip`
-- source snapshot: 2026-07-23
+Progress display is UI accounting. Do not explain a visual progress defect by
+changing TBPTT, batch size, optimizer, or scheduler semantics without first
+reading the actual Rich task state and iterator counts.
 
-This directory is deliberately kept inside the repository so implementation agents do not need Drive access to inspect the reference. It contains the original PyTorch policy/trainer/encoder layout, model artifacts, public agents, native bindings, and the source project's own historical documentation.
+## would-KO
 
-### Reference rules
+`would-KO` is generated at dataset/build time and recomputed from visible
+runtime state when the checkpoint declares it. It is not hidden-deck lookahead.
 
-- `reference/mikaelzinho-pytorch/` is read-only reference material for this task.
-- Do not implement fixes there while porting the MLX project.
-- Do not treat its PPO/self-play files as the current implementation contract.
-- Use the corresponding Mikaelzinho PyTorch model and encoder to understand intended semantics, shapes, defaults, and data flow.
-- The active implementation remains the repository root and its MLX files, especially `rl/policy_mlx.py` and `scripts/bc/bc_train_mlx.py`.
-- If the reference archive and the current root differ, record the difference in `TASK.md` before deciding whether it is an intentional port change or a bug.
+Dataset manifests must distinguish:
 
-## Explicit non-goals for this phase
+- eligible attack rows;
+- computed would-KO rows/options;
+- valid zero outcomes;
+- simulator failures;
+- NaN/inf or out-of-range target defects.
 
-Do **not** introduce yet:
+Valid zero would-KO targets are evidence. They are not failures.
 
-- Mamba/Mamba-2;
-- Hope/Nested Learning or advanced continual learning;
-- RoPE-ND or a new positional geometry;
-- Energy-Based Transformer;
-- TRM;
-- J-Lens/mechanistic interpretability;
-- strategic MoE;
-- PPO, GRPO or GSPO;
-- a world model in the submitted inference path;
-- symbolic regression;
-- custom Metal kernels;
-- multi-Mac distributed training;
-- changes to the supplied game engine.
+## Prospective V2 And Fita GRPO
 
-Those are later research directions. This phase exists to make the current agent correct and to activate the recurrence and action semantics it already almost has.
+Prospective V2 is implemented as an offline sidecar plus planner/runtime
+scaffolding:
 
-## Development boundary
+- `prospective_v2/` sidecar arrays and manifest;
+- deterministic action coverage shared offline/runtime;
+- additive RoPE-ND-style planner coordinates;
+- group-relative branch objectives;
+- PyTorch runtime reranking fallback.
 
-Use the M3 Pro with 24 GB unified memory as the development target. The M1 Air is not part of the main runtime design for this task. Do not assume Thunderbolt creates one transparent 32 GB MLX heap.
+The current objective can be described as group-relative ranking/distillation
+over counterfactual visible-state branches. It is not strict on-policy GRPO.
 
-The final artifact must be self-contained. It must not require Google Drive, network access, external APIs, a teacher service, or a remote bucket during arena inference. Development and offline training may use local data and local tools, but the shipped agent must carry what it needs.
+A strict on-policy GRPO claim would require current-policy sampling, stored
+behavior log-probs, update cadence, and on-policy group-relative advantages.
+Keep that as research backlog unless the code and data contract actually
+change.
 
-## Authority order
+## Action Coverage
 
-When deciding whether a change belongs in this task, use this order:
+Prospective branch coverage uses deterministic full-domain enumeration when the
+legal domain fits the cap. When it does not fit, it samples evenly across the
+lexicographic legal domain with endpoints included.
 
-1. the current user request;
-2. this current handoff section;
-3. `TASK.md` and its acceptance criteria;
-4. the actual source snapshot;
-5. the historical inventory below.
+Current cap:
 
-## Imported historical inventory
+- `max_branches=64`
 
-The remainder of the original `CLAUDE.md` is intentionally preserved. It records the source archive's directory structure, known status, datasets, checkpoints, engine restrictions, and local workflow. It is useful for orientation, but statements such as the old branch labels, old hardware assumptions, future PPO plans, and direct `python3` examples are historical. Use `uv run` for Python and follow the current plan below.
+Offline builder and runtime must use the same enumeration code and compatible
+schema/fingerprint contracts. Do not create a separate approximate runtime
+branch generator.
 
+## Data Pipeline
 
-## Projeto
+Durable sources are raw replay ZIPs and checkpoints. Encoded BC arrays and
+prospective sidecars are reproducible derived artifacts.
 
-Agente de RL para a Kaggle Pokemon TCG AI Battle Challenge.
-Pipeline planejado: Behavioral Cloning (BC) → PPO self-play → deck finetune.
-Referência: repo do #1 do leaderboard (Majkel) que usa BC + PPO + Self-Play (porém com 4x H200).
+The BC builder emits directory-form NPY datasets with:
 
-## Branches
+- `__labels__.npy`
+- `__would_ko_meta__.npy`
+- `action_mask.npy`
+- `episode_meta.npy`
+- `dataset_manifest.json`
+- feature arrays
+- optional `prospective_v2/` sidecar
 
-- **main** — BC pipeline completo (PyTorch), submissions na leaderboard
-- **mlx-port** — Port do modelo e treino pra MLX (Apple Silicon nativo, sem bugs MPS)
+Shard completion is idempotent: `.done` is written last, and only completed
+shards are reused. `.dataset_base_stage.json` allows a build interrupted before
+prospective construction to resume from the validated base arrays.
 
-## Estrutura
+Prospective sidecars validate adapter versions, compact storage version, action
+schema, sources, config, BC fingerprint, and the no-hidden-deck/no-synthetic-fill
+boundary. `prospective_workers` is operational and intentionally excluded from
+the semantic sidecar fingerprint.
 
-```
-tcg-pokemon-agent/
-├── agent/                  # Nosso agente (main.py + deck.csv) — submission
-├── rl/                     # Pipeline de RL / Imitation Learning
-│   ├── encoder/            # Encoding do estado do jogo (portado do repo do #1)
-│   │   ├── enc_constants.py    # Shape/layout constants (token model + mlp)
-│   │   ├── card_features.py    # Static per-card features from EN_Card_Data.csv
-│   │   ├── encoding.py         # obs dict → numpy arrays (TokenEncoder, GameTracker)
-│   │   ├── attack_data.py      # Per-attack properties (damage, cost, effects) — gerado
-│   │   ├── buff_data.py        # Transient turn-scoped buff tables (defense/offense)
-│   │   ├── option_dedup.py     # Action-space dedup (collapse interchangeable options)
-│   │   └── effect_data.py      # Attack/ability/trainer effect multi-hots
-│   ├── deck/               # Deck definitions (decks.py, decks_generated.py, decks_kaggle.py)
-│   ├── env/                # Environment wrappers (env.py, vec_env.py) — pra PPO
-│   ├── policy.py           # TokenTransformer model (pointer-scoring Transformer)
-│   ├── lr_schedule.py      # LR schedule (warmup + cosine/linear decay)
-│   ├── train_ppo.py        # PPO self-play trainer (futuro)
-│   └── search_agent.py     # Search/MCTS agent (needed for would_ko sim + validate_dedup)
-├── model/                  # Checkpoints e modelos treinados
-│   ├── checkpoint/         # Checkpoints intermediários (bc_train --out default)
-│   └── bc_model/           # Melhor modelo BC final (copiado automaticamente)
-├── cg/                     # SDK do Kaggle (ctypes wrapper p/ engine C++)
-│   ├── sim.py              # Carrega lib nativa (dylib/so/dll) + ctypes structs
-│   ├── game.py             # battle_start/select/finish API
-│   ├── api.py              # Observation dataclasses (to_observation_class)
-│   ├── utils.py            # Dict → dataclass conversion helpers
-│   ├── libcg.dylib         # macOS native lib
-│   ├── libcg.so            # Linux x86_64 native lib
-│   ├── libcg-arm64.so      # Linux ARM64 native lib
-│   └── cg.dll              # Windows native lib
-├── engine/                 # C++ source (read-only, fornecido pelo Kaggle)
-│   └── ptcgProgram22/      # Headers do game engine (~44 arquivos .h/.cpp)
-├── data/
-│   ├── manifest.csv            # URLs dos datasets diários de replay
-│   ├── replay/                 # Replay samples (ex: 85966927.json)
-│   ├── bc_replay_zip/          # Zips de replay do Kaggle (input do pipeline BC)
-│   │   ├── 2026-07-16.zip     # 4760 episodes, ~698MB
-│   │   └── 2026-07-21.zip     # ~5000 episodes, ~700MB (novo)
-│   └── bc_data/                # Output do pipeline BC (.npy dir)
-│       └── bc_2026_07_21/     # 801,865 rows, masked_rate=0.0
-├── public_agents/          # Agentes públicos pra benchmark
-│   ├── lb1009_mega_lucario_ex_islet/
-│   ├── lb945_multiply_ivan/
-│   ├── lb826_alakazam_seok/
-│   ├── lb814_crustle_emre/
-│   ├── lb798_lucario_pilkwang/
-│   ├── starters/           # Starters do staff (lb600_dragapult, lb600_mega_lucario, etc.)
-│   └── submissions/        # Submissions salvas pra benchmark
-│       └── lb881_alakazam_v1/submission.tar.gz
-├── scripts/
-│   ├── bc/                     # BC pipeline
-│   │   ├── bc_train.py             # BC trainer (TokenTransformer, CPU-only on M1)
-│   │   ├── build_bc_dataset.py     # Single-replay builder (offline, streaming)
-│   │   ├── build_bc_from_zips.py   # Zip builder (batch streaming, checkpoint resume)
-│   │   ├── debug_nan.py            # NaN diagnostic (single step, data/model/grad check)
-│   │   └── debug_nan_steps.py      # NaN diagnostic (multi-step, finds exact NaN step)
-│   ├── deck_builder/           # Visual deck builder
-│   │   ├── extract_card_images.py  # Extract card images from PDF
-│   │   ├── build_deck_tool.py      # Generate HTML deck builder tool
-│   │   ├── card_pages.json         # Card ID → PDF page mapping
-│   │   ├── card_images/            # Extracted card images (1267 JPGs)
-│   │   └── deck_builder.html       # Visual deck builder (generated)
-│   ├── _common.py              # Shared helpers (load_agent, make_env, load_submission)
-│   ├── evaluate.py             # 1v1 eval (win rate vs random/first)
-│   ├── run_battle.py           # Single battle + HTML replay
-│   ├── tournament.py           # Mini-torneio vs múltiplos oponentes (--note flag)
-│   ├── build_submission.py     # Empacota + valida submission.tar.gz
-│   ├── play_test.py            # Smoke test do SDK (random vs random)
-│   └── validate/               # Validação do encoding
-├── EN_Card_Data.csv        # Card data completo (all cards, attacks, costs)
-├── pyproject.toml          # uv project (Python 3.13, numpy)
-└── uv.lock                 # Lock file do uv
+## Local Platform Status
+
+`rl/results_db.py` currently implements partial local platform support:
+
+- SQLite schema v2 with exact schema rejection/rebuild behavior;
+- local/remote sources;
+- teams, cards, exact deck fingerprints, submissions, and submission decks;
+- tournaments, matchups, matches, participants, card usage;
+- local replay steps/options/events/snapshots/Pokemon-on-field;
+- idempotent receipts for tournaments and matches;
+- source-separated card/deck Elo initialized from 600.
+
+`scripts/tournament.py` persists aggregate tournaments and normalized local
+match replay rows. `scripts/rebuild_db.py` rebuilds a remote-context database
+atomically from canonical cards, decks, and replay ZIPs. `scripts/dashboard.py`
+is a real Streamlit surface with overview, cards, decks, deck builder, agents,
+arena, replays, and config tabs.
+
+Still incomplete relative to `TASK.md`:
+
+- model/model_revision tables;
+- generic experiments and anamnese;
+- training config/run tables;
+- dashboard-editable tournament configs;
+- full submission lifecycle/events;
+- rating policies, epochs, submission/model Elo, append-only rating events;
+- complete official visualizer reconstruction/launch.
+
+## Deck Strategy
+
+The submitted archive contains `deck.csv` at the root. That deck is immutable
+for the submitted artifact.
+
+Deck optimization is an outer loop:
+
+```text
+candidate decks -> local arena/self-play -> select one deck -> agent/deck.csv -> submission.tar.gz
 ```
 
-## Referência externa (read-only)
+The dashboard can write `agent/deck.csv` locally with a `.bak` backup. That is
+pre-submission preparation, not hidden runtime deck selection.
 
-`~/Workspaces/poke-rl-ref/` — repo clonado do Majkel (#1 leaderboard, branch encoding-overhaul)
+`suggested_deck.csv` is future/planned only. It is not implemented in the
+inspected code.
 
-- `rl/` — encoding, card_features, policy, training
-- `scripts/` — build_bc, evaluate, build_submission
-- `native_encode/` — Cython fast path
-- `HANDOFF.md` — playbook completo do #1
+## Evaluation Boundaries
 
-## Status do projeto
+Historical `model/eval_results.txt` tournaments are useful regression context
+but depend on older checkpoints, decks, opponents, and dates.
 
-### Encoder (validado ✅)
-TokenEncoder converte obs dict → arrays numpy. 46 feature keys, N_STATE_TOKENS=337, MAX_OPTIONS=192.
+The July 29, 2026 one-epoch prospective run completed `320/320` local games.
+The aggregate was about `10.3%` including smoke, but the useful breakdown was:
 
-### Datasets
-| Dataset | Rows | Source | Status |
-|---|---|---|---|
-| bc_2026_07_16 | 788,369 | 4760 eps, dia 16 | Treinado (checkpoint v1) |
-| bc_2026_07_21 | 801,865 | ~5000 eps, dia 21 | Em treino (continual learning) |
+- `18/20`, `90%` vs smoke;
+- `15/300`, `5%` without smoke.
 
-### BC Model
-- **Arquitetura**: d128, L3, h4, static, split-heads — **1,090,947 params** (PyTorch)
-- **Checkpoint v1**: 3 epochs (dia16), val_acc=0.6882, equiv=0.7036, top3=0.9121
-- **Checkpoint v2**: em treino (dia21, continual learning do v1)
+Interpretation: the architecture and MLX-to-PyTorch inference path worked
+end-to-end, but the one-epoch policy was undertrained and not submission-ready.
 
-### MLX Port (funcional — branch mlx-port)
-- **Modelo**: `rl/policy_mlx.py` — TokenTransformerMLX (1,202,352 params)
-- **Encoder**: `rl/encoder/` — reutilizado (numpy, sem mudanças)
-- **Trainer**: `scripts/bc/bc_train_mlx.py` — MLX Metal GPU, fp16 dataset, checkpoint resume
-- **Dataset fp16**: `data/bc_data/bc_2026_07_21_fp16/` (18.9 GB, -40.6% vs float32)
-- **Status**: Treinando, val_acc=0.6947 (epoch1, fp16)
-- **Velocidade**: ~2.7h/epoch (batch 128, fp16, MLX Metal GPU)
-- **Notas**: PyTorch MPS tem NaN com Transformers — MLX funciona sem problemas
-- **Análise**: `data/reports/architecture_analysis.md`, `data/reports/mlx_research.md`
+Earlier Kaggle `900-930` ladder/rating references are user-reported historical
+provenance. Do not compare them directly to local tournament Elo.
 
-### Torneio (v1, 20 jogos cada)
-| Oponente | LB Score | Win Rate |
-|---|---|---|
-| random | — | 100% |
-| first | — | 100% |
-| lb1009_mega_lucario_ex_islet | 1009 | 95% |
-| lb945_multiply_ivan | 945 | 85% |
-| lb826_alakazam_seok | 826 | 100% |
-| lb814_crustle_emre | 814 | 100% |
-| lb798_lucario_pilkwang | 798 | 90% |
-| starters/lb600_mega_lucario_ex | 600 | 95% |
-| starters/lb600_dragapult_ex | 600 | 65% |
-| starters/lb526_iono | 526 | 55% |
-| starters/lb510_mega_abomasnow_ex | 510 | 90% |
-| sub/lb881_alakazam_v1 | 881 | 65% |
-| **OVERALL** | — | **82.5%** |
+## Agent-Safe Commands
 
-### Submissions no Kaggle
-| Sub | Data | Epochs | Dataset | LB Score |
-|---|---|---|---|---|
-| v1 | 2026-07-21 | 2 | dia 16 | 889.7 |
-| v2 | 2026-07-21 | 3 | dia 16 | ~873 |
-| v3 | 2026-07-22 | — | dia 16 + deck Yushin | pendente |
-
-### Deck Builder (novo ✅)
-Tool visual HTML pra montar/visualizar decks:
-- `scripts/deck_builder/extract_card_images.py` — extrai imagens do PDF
-- `scripts/deck_builder/build_deck_tool.py` — gera HTML interativo
-- Suporta: busca, filtros, load/export CSV, View Deck
-
-### Estratégia de dados
-- Datasets encodados no Google Drive (1TB disponível)
-- M1 com ~50GB livres — trocar datasets conforme necessário
-- Continual learning: checkpoint preserva conhecimento dos dados antigos
-- Zips pequenos (~700MB/dia) — manter vários
-
-### Próximos passos
-1. Avaliar treino v2 (continual learning, dia21) — em andamento
-2. Rebuildar submission com modelo atualizado
-3. Testar decks alternativos (Marnie's Impidimp, Team Rocket, Garchomp)
-4. PPO self-play (futuro)
-
-## Known issues
-- **PyTorch MPS + Transformer = NaN**: MPS tem bug numérico com attention/layer norm. CPU funciona. MLX Metal funciona sem problemas — usar `bc_train_mlx.py`.
-- **MLX mx.savez + model.update**: flatten/unflatten de params causa mismatch de nomes. Usar pickle (.pkl) pra checkpoints.
-- **MLX bf16**: `mx.set_default_dtype` não existe. Converter arrays manualmente.
-- **Engine crasha no sandbox Linux**: `libcg.dylib` é Mach-O. Funciona no Mac local.
-- **OOM com multiprocessing**: batch streaming resolve (500 eps/batch + checkpoint resume).
-- **Kaggle __file__**: `__file__` não é definido no sandbox — usar sys.path lookup.
-- **bc_train --epochs**: precisa ser MAIOR que o epoch do checkpoint, senão não treina.
-
-## Regras importantes
-
-- **NÃO modificar** nada em `engine/` (read-only, fornecido pelo Kaggle)
-- **Código em inglês** (variáveis, funções, comentários)
-- **Explicações em português** brasileiro informal
-
-## Hardware
-
-- Dev local: MacBook Air M1, 8 GB RAM unificada, CPU (MPS bugado pra Transformers)
-- Kaggle: 12h CPU/dia, 30h GPU/mês (P4/P100)
-- Competição: submissions rodam CPU-only, GPU-P4x2, ou GPU-P100
-- Google Drive: 1TB (backup de datasets, Colab plugin)
-
-## Ambiente Python
-
-- **Runtime**: Python 3.13.5 via uv (`.venv/bin/python`)
-- Dependências: numpy, PyTorch (CPU), kaggle-environments (GitHub master)
-- `PYTHONPATH=.` necessário pra rodar scripts
-
-## Comandos úteis
+Light checks:
 
 ```bash
-# Build BC dataset (de zip)
-PYTHONPATH=. python3 scripts/bc/build_bc_from_zips.py data/bc_data/bc_novo data/bc_replay_zip/2026-07-XX.zip
-
-# Treinar BC (novo treino)
-PYTHONPATH=. python3 -u scripts/bc/bc_train.py data/bc_data/bc_2026_07_21 --d-model 128 --static --split-heads --epochs 8 --batch 128
-
-# Treinar BC (continual learning — epochs > checkpoint epoch!)
-PYTHONPATH=. python3 -u scripts/bc/bc_train.py data/bc_data/bc_2026_07_21 --d-model 128 --static --split-heads --epochs 8 --resume model/checkpoint/bc_best.pt --batch 128
-
-# Eval 1v1
-PYTHONPATH=. python3 scripts/evaluate.py -n 50
-
-# Torneio (com nota)
-PYTHONPATH=. python3 scripts/tournament.py --games 20 --note "descrição da run"
-
-# Torneio contra submission salva
-PYTHONPATH=. python3 scripts/evaluate.py agent/main.py public_agents/submissions/lb881_alakazam_v1/submission.tar.gz -n 20
-
-# Build + validar submission
-PYTHONPATH=. python3 scripts/build_submission.py
-
-# Deck builder
-python3 scripts/deck_builder/extract_card_images.py
-python3 scripts/deck_builder/build_deck_tool.py
-open scripts/deck_builder/deck_builder.html
-
-## Current architectural contract
-
-Freeze this contract while implementing the migration:
-
-```text
-d_model              = 128
-attention heads      = 4
-Transformer layers   = 3
-FFN width            = 512 (4 * d_model)
-scratch registers    = 4
-static card features = enabled
-split policy/value   = enabled
-structured head      = disabled for the current BC baseline
-max options          = 192 plus SUBMIT where applicable
+uv run tcg-train --help
+uv run tcg-build --help
+uv run tcg-tournament --help
+uv run tcg-rebuild-db --help
+uv run scripts/bc/build_prospective_groups.py --help
+git diff --check
 ```
 
-The model is an entity/action Transformer with structured option scoring. It is not a causal language decoder. The potential sequence is approximately:
+Smoke-only work, when explicitly useful:
 
-```text
-[CLS] [SELECT_TYPE] [SELECT_CONTEXT]
-[state entity tokens]
-[scratch tokens]
-[option tokens]
+```bash
+uv run tcg-build --smoke
+uv run tcg-tournament --smoke --games 1 --no-sweep --note "smoke check"
+uv run tcg-rebuild-db --dry-run --target model/checkpoint/smoke/results.db
 ```
 
-The state has roughly 337 potential positions. There are up to 192 option positions plus `SUBMIT`. Padding slots are capacity in the storage format, not necessarily real entities or actions.
+Full-run examples, not agent-safe unless explicitly authorized:
 
-### One canonical token schema
-
-Create one versioned architecture specification shared by encoder, MLX policy, trainer, loader, and agent. It must distinguish at least:
-
-```text
-CLS, SELECT_TYPE, SELECT_CONTEXT,
-SELF_DECK, OPP_DECK,
-SELF_PRIZE, OPP_PRIZE,
-SELF_HAND, OPP_HAND,
-SELF_DISCARD, OPP_DISCARD,
-STADIUM,
-SELF_ACTIVE, SELF_BENCH,
-OPP_ACTIVE, OPP_BENCH,
-EFFECT, OPTION, SCRATCH
+```bash
+uv run tcg-build-bc data/bc_data/bc_2026_07_28 data/bc_replay_zip/2026-07-28.zip --config configs/train_config.json
+uv run tcg-train data/bc_data/bc_2026_07_28 --config configs/train_config.json --out model/checkpoint/bc_temporal_v2_mlx.pkl
+uv run tcg-build --checkpoint model/checkpoint/bc_temporal_v2_mlx.pkl
+uv run tcg-tournament --games 20 --no-sweep --note "describe the run"
 ```
 
-Do not keep independent hardcoded ID maps. The known MLX audit found semantic collisions in the unit token mapping; own bench, opponent active, and opponent bench must not share a type by accident.
+## Documentation Map
 
-### Padding IDs
+- `README.md` - project overview and command map.
+- `docs/README.md` - internal documentation map.
+- `TASK.md` - exhaustive local platform target contract, not fully complete.
+- `/Users/alefita/Claude/wikifita/kaggle/pokemon_tcg_ai_battle.md` - canonical
+  Wikifita project hub.
+- `/Users/alefita/Claude/wikifita/kaggle/pokemon_tcg_tbptt_training_contract.md`
+  - exact TBPTT accounting.
+- `/Users/alefita/Claude/wikifita/kaggle/pokemon_tcg_prospective_v2.md` -
+  Prospective V2 and Fita GRPO boundary.
+- `/Users/alefita/Claude/wikifita/kaggle/pokemon_tcg_data_pipeline.md` - data
+  pipeline and sidecar idempotence.
+- `/Users/alefita/Claude/wikifita/kaggle/pokemon_tcg_local_platform_status.md`
+  - local platform implementation status.
 
-Card and attack ID zero is padding, including empty positions inside pre-evolution, tool, energy, and attack bags. It must contribute a zero vector, not a learned “absence” embedding copied multiple times. Apply an explicit `ids != 0` mask to the embedding output or otherwise reproduce the PyTorch `padding_idx=0` semantics.
+## Before Committing
 
-### Config versioning
+Always check status and preserve unrelated work:
 
-Every checkpoint must record and validate `architecture_version`, dimensions, scratch count, static/split-head flags, structured-head flag, option capacity, dtype, and token schema version. Never silently load a checkpoint with a different ontology.
-
-## P0 semantic corrections
-
-These are correctness fixes, not optional performance work.
-
-### Additive attention mask
-
-The MLX port currently builds a boolean padding mask and passes it to multi-head attention. The intended mask is additive:
-
-```text
-0       for an available key
--inf    for a padded or blocked key
+```bash
+git status --short --branch
+git diff --check
 ```
 
-Use the actual installed MLX API contract and a dtype-compatible large negative value. Add a functional test proving that right-padding does not change the outputs of real tokens.
-
-### MHA bias
-
-The PyTorch reference uses bias in the attention projections. Instantiate the MLX attention explicitly with the matching bias behavior; do not inherit an MLX default that silently changes the model.
-
-### Static tables
-
-Keep `card_feat` and `atom_support` immutable. They are domain data/buffer-like inputs, not trainable parameters. Learn a projection of the static features if needed, but do not update the table itself or allocate optimizer state for it.
-
-### Categorical value head
-
-When categorical value is enabled, return the expected scalar:
-
-```text
-p = softmax(atom_logits)
-value = sum(p_i * atom_support_i)
-```
-
-Do not return atom logits as a scalar value.
-
-## FP16-native trainer
-
-Treat FP16 as the correct representation for the current workload, not as a benchmark experiment. The current port writes FP16 data but converts it back to NumPy FP32 before creating MLX arrays; remove that round trip.
-
-Use this dtype contract:
-
-```text
-IDs/labels/positions       int32
-masks                      bool or uint8
-numeric features           float16
-embeddings/linear/QKV      float16
-residual stream            float16
-logits for loss            float32
-loss reductions            float32
-accumulated gradients      preferably float32
-Adam state                 float32
-metrics                    float32 or host
-```
-
-Do not add dynamic loss scaling until there is evidence of underflow. First use FP16 model/data with FP32 loss, reductions, accumulation, and optimizer state; check finiteness.
-
-### Gradient accumulation
-
-Implement accumulation in the first functional trainer. For `K` microbatches, accumulate in FP32 and normalize by the real example count, including an incomplete final microbatch. Clip once after accumulation, then perform one optimizer step.
-
-The sequence is:
-
-```text
-forward -> FP32 CE -> backward -> accumulate
-repeat K times
-normalize -> clip -> optimizer update
-increment optimizer step -> scheduler update -> mx.eval
-```
-
-The scheduler counts optimizer updates, not forwards.
-
-### Compile/eval boundaries
-
-Keep forward, loss, backward, clipping, and optimizer update in the MLX graph where shapes are stable. Do not convert gradient norms to Python `float` each step. Use an MLX graph-safe clipping operation. Materialize the model/optimizer state explicitly with `mx.eval` at update and buffer-reuse boundaries.
-
-### Scheduler and validation
-
-Compute total steps across every epoch and accumulation step:
-
-```text
-total_optimizer_steps = epochs * ceil(microbatches / accumulation_steps)
-```
-
-Restore scheduler position on resume. The known port bug computes steps for one epoch while the global counter crosses all epochs.
-
-Validation must use true cross-entropy:
-
-```text
-CE = -(logit[label] - logsumexp(logits))
-```
-
-The legacy `log(raw_logit)` calculation is not a valid loss and must not select checkpoints.
-
-### Complete checkpoints
-
-Save model parameters, optimizer state, architecture config, trainer state, scheduler/global step, seed, and dataset manifest. Resume must restore all of them, not just model weights.
-
-## Exact padding and memory handling
-
-The purpose of compaction is to remove exact zeros and inaccessible slots without approximating the model.
-
-### Option buckets
-
-Compute the largest real option index in a batch and round to a finite set such as:
-
-```text
-32, 64, 128, 192
-```
-
-Keep a finite set of compiled shapes. Preserve `SUBMIT`, action masks, and option indexing.
-
-### State compaction
-
-Remove a state column only when it is padded for every row in the batch. Always retain tokens needed by CLS, selection/context, scratch, value, and option source/target references. Remap source/target indices after compaction using the existing reference logic.
-
-### Slabs
-
-The archive default of 262,144 rows is too aggressive for the M3 Pro. `opt_attr` is about 13,824 bytes per row in FP16, so one such slab is roughly 3.6 GB before other columns, model state, optimizer, gradients, activations, and macOS. With a prefetched slab, two can coexist.
-
-Use a conservative, manifest-derived slab policy, initially around 32k–64k rows on the M3 Pro, with prefetch depth 1. Treat the slab as an I/O unit, not a fixed memory claim.
-
-## Inference correctness before architecture changes
-
-The dataset builder uses observations and incremental logs, but the current agent reduces the live input to `logs=[]`. This creates different belief states in training and inference. The same complete observation must flow to the game tracker, ability tracker, encoder, and persistent memory.
-
-Change the conceptual API from:
-
-```python
-choose(select, current)
-```
-
-to:
-
-```python
-choose(obs)
-```
-
-Do not discard revealed cards, serials, zone moves, attacks, or effects contained in logs.
-
-## Autoregressive multi-select
-
-The dataset teaches a sequence:
-
-```text
-state, picked=[]       -> option_1
-state, picked=[1]      -> option_2
-state, picked=[1, 2]   -> SUBMIT
-```
-
-The current `topk(count)` inference is not the same policy. Implement a loop that chooses one legal option, updates `picked`, rebuilds the option mask/tokens, and runs the next substep until legal `SUBMIT` or `max_count`. Respect minimum count, maximum count, and duplicate prevention. Recompute logits after each selected option.
-
-## Sequential metadata and persistent scratch
-
-The builder is temporally aware while reading replays, but the saved rows are independent. Add sidecars or an equivalent schema containing:
-
-```text
-episode_id
-side
-step_id
-decision_id
-substep
-new_episode/reset
-terminal
-reward
-```
-
-Split by episode, never by a raw row suffix. Chunks must not cross episodes; daily ingestion must deduplicate episodes.
-
-The minimum recurrent change uses the existing four scratch registers:
-
-```text
-J_0_in  = learned_initial_registers
-J_{t+1} = scratch_slice(model_output_t)
-```
-
-Expose `memory_in` and `memory_out`. Store memory per match and per side. Reset at a new match, never share it across sides or processes, and do not add a new recurrent cell in this phase.
-
-## TBPTT
-
-Train sequences grouped by `(episode_id, side)` in ordered chunks of 8, 16, or 32 decisions. Carry the register state between chunks and apply `stop_gradient` only at the chunk boundary. Mask padded timesteps and normalize loss by real decisions. Gradient accumulation operates over chunks.
-
-## Functional tests
-
-### Model
-
-- token types match the canonical schema;
-- ID zero contributes no embedding;
-- static card/support tables are unchanged after an update;
-- padding does not affect real-token outputs;
-- invalid options are masked;
-- loss and gradients are finite;
-- categorical value returns a scalar expectation;
-- checkpoint round-trip restores config and state.
-
-### Data
-
-- every label is legal under its action mask;
-- episode and step metadata are consistent;
-- chunks do not cross episodes;
-- reset flags are exact;
-- validation shares no episode with training;
-- multi-select substeps preserve order.
-
-### Multi-select
-
-- selected options disappear from the mask;
-- min/max counts are enforced;
-- `SUBMIT` is only accepted when legal;
-- forward count follows the number of substeps.
-
-### Recurrence
-
-- initial memory is deterministic/resettable;
-- memory persists between decisions;
-- match and side memories are isolated;
-- `stop_gradient` only occurs at TBPTT boundaries;
-- a new match does not inherit old memory.
-
-### Submission
-
-- full logs are passed to the tracker;
-- the bundle runs without external files or network;
-- the CPU path remains available as a fallback;
-- no engine files were modified.
-
-## Implementation phases
-
-### Phase A — canonical MLX contract
-
-Centralize architecture/token schema, fix IDs, freeze `128/4/3/512/4`, version checkpoints, and remove misleading configuration flags.
-
-**Exit:** encoder, policy, trainer, agent, and checkpoint share one semantic contract.
-
-### Phase B — semantic P0 fixes
-
-Fix additive mask, MHA bias, padding ID zero, static buffers, categorical value, and config loading.
-
-**Exit:** valid MLX forward with no known semantic collisions or accidental trainable static data.
-
-### Phase C — FP16 trainer
-
-FP16 end-to-end, FP32 loss/reductions/accumulation, accumulation, post-accumulation clipping, optimizer-step scheduler, compile/eval boundaries, validation CE, complete checkpoints.
-
-**Exit:** resumable, finite, effective-batch-controlled training.
-
-### Phase D — data and shapes
-
-Adaptive slabs, exact state/option compaction, finite compiled buckets, sequential metadata, episode split, deduplication and validation.
-
-**Exit:** no unnecessary padding work and enough metadata to preserve trajectories.
-
-### Phase E — inference semantics
-
-Complete logs, autoregressive multi-select, batch-one compaction, FP16 input path, self-contained bundle.
-
-**Exit:** training and inference see the same information and action factorization.
-
-### Phase F — minimal recurrence
-
-Memory API, per-match/per-side registers, sequence batcher, TBPTT, chunk accumulation, and counterfactual validation.
-
-**Exit:** the agent is no longer single-shot between decisions without introducing Mamba, Hope, TRM, EBT, or another new paradigm.
-
-## Release candidates oriented to Elo
-
-### RC1 — corrected MLX
-
-Semantic contract, mask, embeddings, static tables, FP16, valid loss, complete checkpoint.
-
-### RC2 — action semantics
-
-Exact compaction, complete logs, autoregressive multi-select, same current model otherwise.
-
-### RC3 — recurrent registers
-
-Persistent memory, sequential dataset, TBPTT, reset/isolation tests.
-
-### RC4 — refined corpus
-
-Episode deduplication, historical/recent mixture, rare matchups/actions, episode holdout and manifest.
-
-Record for every release:
-
-```text
-release id
-dataset manifest
-architecture config
-training state
-deck
-submission artifact
-observed Elo/rating
-matchup results
-known regressions
-```
-
-Elo, matchup robustness, action legality, long-horizon behavior, and absence of semantic regressions are the evaluation criteria. Throughput is only an enabler for the correct training unit; it is not the target.
-
-## Repository rules
-
-- Do not modify `engine/`.
-- Do not add credentials, tokens, or private data to Git.
-- Use `uv run` for Python commands.
-- Keep code identifiers and comments in English.
-- Keep explanations and handoff in Brazilian Portuguese.
-- Preserve existing checkpoints/data while implementing.
-- Add a functional test for every semantic change.
-- Update `TASK.md` only when work is actually verified.
-```
+For documentation-only changes, do not run training or rebuild datasets. Use
+the light command checks above only when proportional.
