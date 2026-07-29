@@ -8,6 +8,14 @@ from pathlib import Path
 
 import numpy as np
 
+from rl.encoder.encoding import MAX_OPTIONS
+from rl.prospective_input_adapter import (
+    ACTION_ATTR_AGGREGATE_VERSION,
+    ACTION_SET_FEATURE_VERSION,
+    BRANCH_FEATURE_LAYOUT_VERSION,
+    PROSPECTIVE_INPUT_ADAPTER_VERSION,
+    aggregate_action_opt_attr,
+)
 from rl.train_config import load_config
 from scripts.bc.build_bc_from_zips import _ensure_prospective_sidecar
 from scripts.validate.test_prospective_groups import validate
@@ -33,6 +41,19 @@ def main() -> None:
     assert prospective["status"] in {"built", "reused"}
     assert prospective["sidecar_name"] == "prospective_v1"
     assert prospective["fingerprint"] == sidecar_manifest["fingerprint"]
+    assert prospective["input_adapter_version"] == PROSPECTIVE_INPUT_ADAPTER_VERSION
+    assert (
+        prospective["action_attr_aggregate_version"]
+        == ACTION_ATTR_AGGREGATE_VERSION
+    )
+    assert (
+        prospective["branch_feature_layout_version"]
+        == BRANCH_FEATURE_LAYOUT_VERSION
+    )
+    assert (
+        prospective["action_set_feature_version"]
+        == ACTION_SET_FEATURE_VERSION
+    )
     assert prospective["node_rows"] == sidecar_manifest["outputs"]["node_rows"]
     assert prospective["branch_rows"] == sidecar_manifest["outputs"]["branch_rows"]
     assert dataset_manifest["config"]["prospective_enabled"] is True
@@ -48,6 +69,35 @@ def main() -> None:
     branches = np.load(SIDECAR / "prospective_branches.npy", allow_pickle=False)
     assert len(nodes) == 24 and int(nodes["valid"].sum()) == 24
     assert len(branches) == 12 and int(branches["valid"].sum()) == 12
+
+    metadata = np.load(DATASET / "episode_meta.npy", allow_pickle=False)
+    labels = np.load(DATASET / "__labels__.npy", allow_pickle=False)
+    option_attributes = np.load(DATASET / "opt_attr.npy", allow_pickle=False)
+    rows_by_decision: dict[tuple[str, int, int], list[int]] = {}
+    for row_index, row in enumerate(metadata):
+        key = (
+            str(row["episode_id"]),
+            int(row["side"]),
+            int(row["step_id"]),
+        )
+        rows_by_decision.setdefault(key, []).append(row_index)
+    real_multi_select_checked = False
+    for row_indices in rows_by_decision.values():
+        selected = [
+            int(labels[index])
+            for index in row_indices
+            if 0 <= int(labels[index]) < MAX_OPTIONS
+        ]
+        if len(selected) < 2 or len(set(selected)) < 2:
+            continue
+        selected = list(dict.fromkeys(selected))
+        source = np.asarray(option_attributes[row_indices[0]], dtype=np.float32)
+        combined = aggregate_action_opt_attr(source, selected)
+        expected = np.mean(source[selected], axis=0, dtype=np.float32)
+        np.testing.assert_array_equal(combined, expected)
+        real_multi_select_checked = True
+        break
+    assert real_multi_select_checked
 
     disabled_out = DATASET.parent / "bc_smoke_pipeline_disabled_probe"
     assert not disabled_out.exists()

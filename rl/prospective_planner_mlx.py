@@ -14,6 +14,12 @@ import pickle
 import mlx.core as mx
 import mlx.nn as nn
 
+from rl.prospective_input_adapter import (
+    ACTION_ATTR_AGGREGATE_VERSION,
+    ACTION_SET_FEATURE_VERSION,
+    BRANCH_FEATURE_LAYOUT_VERSION,
+    PROSPECTIVE_INPUT_ADAPTER_VERSION,
+)
 from rl.prospective_schema import (
     BRANCH_POLICY_SCORE,
     BRANCH_VALID,
@@ -494,6 +500,10 @@ def prospective_mlx_checkpoint_payload(
         raise ValueError(f"prospective planner has non-FP16 parameters: {invalid}")
     return {
         **prospective_checkpoint_metadata(model.config),
+        "input_adapter_version": PROSPECTIVE_INPUT_ADAPTER_VERSION,
+        "action_attr_aggregate_version": ACTION_ATTR_AGGREGATE_VERSION,
+        "action_set_feature_version": ACTION_SET_FEATURE_VERSION,
+        "branch_feature_layout_version": BRANCH_FEATURE_LAYOUT_VERSION,
         "model": model.parameters(),
     }
 

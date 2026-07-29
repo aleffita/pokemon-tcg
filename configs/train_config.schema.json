@@ -288,8 +288,7 @@
       "type": "integer",
       "default": 128,
       "minimum": 1,
-      "maximum": 128,
-      "description": "Maximum real rollout trees per physical prospective optimizer step."
+      "description": "Real rollout trees per physical prospective optimizer step. Smoke validation uses 128, but full runs may configure larger batches."
     },
     "prospective_nhead": {
       "type": "integer",

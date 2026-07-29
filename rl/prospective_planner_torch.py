@@ -16,6 +16,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from rl.prospective_input_adapter import (
+    ACTION_ATTR_AGGREGATE_VERSION,
+    ACTION_SET_FEATURE_VERSION,
+    BRANCH_FEATURE_LAYOUT_VERSION,
+    PROSPECTIVE_INPUT_ADAPTER_VERSION,
+)
 from rl.prospective_schema import (
     BRANCH_POLICY_SCORE,
     BRANCH_VALID,
@@ -63,6 +69,52 @@ def _validate_checkpoint_contract(payload: dict[str, Any]) -> ProspectivePlanner
     if config.coord_schema_version != payload["coord_schema_version"]:
         raise ValueError("coordinate schema disagrees with serialized config")
     return config
+
+
+def _validate_input_adapter(payload: dict[str, Any]) -> str:
+    adapter_version = payload.get("input_adapter_version")
+    if adapter_version != PROSPECTIVE_INPUT_ADAPTER_VERSION:
+        raise ValueError(
+            "unsupported prospective input adapter "
+            f"{adapter_version!r}; expected "
+            f"{PROSPECTIVE_INPUT_ADAPTER_VERSION!r}"
+        )
+    if (
+        payload.get("action_attr_aggregate_version")
+        != ACTION_ATTR_AGGREGATE_VERSION
+    ):
+        raise ValueError("prospective action attribute aggregate is incompatible")
+    if (
+        payload.get("action_set_feature_version")
+        != ACTION_SET_FEATURE_VERSION
+    ):
+        raise ValueError("prospective action set feature is incompatible")
+    if (
+        int(payload.get("branch_feature_layout_version", -1))
+        != BRANCH_FEATURE_LAYOUT_VERSION
+    ):
+        raise ValueError("prospective branch feature layout is incompatible")
+    return str(adapter_version)
+
+
+def extract_mlx_prospective_payload(
+    checkpoint: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Extract either a lateral payload or the nested trunk-checkpoint payload."""
+
+    nested = checkpoint.get("prospective_planner")
+    if nested is not None:
+        if not isinstance(nested, dict):
+            raise ValueError("checkpoint prospective_planner must be an object")
+        return nested
+    if {
+        "planner_version",
+        "coord_schema_version",
+        "config",
+        "model",
+    } <= set(checkpoint):
+        return checkpoint
+    return None
 
 
 class ProspectiveAttentionTorch(nn.Module):
@@ -395,7 +447,16 @@ def _strict_state_from_arrays(
 
 def prospective_torch_checkpoint_payload(
     model: ProspectivePlannerTorch,
+    *,
+    input_adapter_version: str = PROSPECTIVE_INPUT_ADAPTER_VERSION,
+    trained_optimizer_steps: int = 0,
 ) -> dict[str, Any]:
+    if input_adapter_version != PROSPECTIVE_INPUT_ADAPTER_VERSION:
+        raise ValueError(
+            f"unsupported prospective input adapter {input_adapter_version!r}"
+        )
+    if trained_optimizer_steps < 0:
+        raise ValueError("trained_optimizer_steps must be non-negative")
     state_dict = model.state_dict()
     non_fp16 = {
         key: str(value.dtype)
@@ -409,6 +470,11 @@ def prospective_torch_checkpoint_payload(
         "planner_version": PROSPECTIVE_PLANNER_VERSION,
         "coord_schema_version": PROSPECTIVE_COORD_SCHEMA_VERSION,
         "config": model.get_config(),
+        "input_adapter_version": input_adapter_version,
+        "action_attr_aggregate_version": ACTION_ATTR_AGGREGATE_VERSION,
+        "action_set_feature_version": ACTION_SET_FEATURE_VERSION,
+        "branch_feature_layout_version": BRANCH_FEATURE_LAYOUT_VERSION,
+        "trained_optimizer_steps": int(trained_optimizer_steps),
         "state_dict": state_dict,
     }
 
@@ -426,11 +492,20 @@ def load_prospective_torch_checkpoint(
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(payload, dict):
         raise ValueError("prospective PyTorch checkpoint must be an object")
+    return load_prospective_torch_payload(payload)
+
+
+def load_prospective_torch_payload(
+    payload: dict[str, Any],
+) -> tuple[ProspectivePlannerTorch, ProspectivePlannerConfig]:
+    """Load a nested or standalone planner artifact without filesystem config."""
+
     if payload.get("format") != PROSPECTIVE_TORCH_CHECKPOINT_FORMAT:
         raise ValueError(
             f"unsupported prospective torch format {payload.get('format')!r}"
         )
     config = _validate_checkpoint_contract(payload)
+    _validate_input_adapter(payload)
     model = ProspectivePlannerTorch(config).to(torch.float16)
     state = payload.get("state_dict")
     if not isinstance(state, dict):
@@ -449,6 +524,26 @@ def load_prospective_torch_checkpoint(
     return model, config
 
 
+def convert_mlx_prospective_payload(
+    checkpoint: dict[str, Any],
+) -> tuple[ProspectivePlannerTorch, ProspectivePlannerConfig]:
+    """Strictly convert a lateral or nested MLX planner payload in memory."""
+
+    payload = extract_mlx_prospective_payload(checkpoint)
+    if payload is None:
+        raise ValueError("MLX checkpoint has no prospective_planner")
+    config = _validate_checkpoint_contract(payload)
+    _validate_input_adapter(payload)
+    model_tree = payload.get("model")
+    if model_tree is None:
+        raise ValueError("prospective MLX checkpoint has no model")
+    model = ProspectivePlannerTorch(config).to(torch.float16)
+    arrays = _flatten_checkpoint_tree(model_tree)
+    model.load_state_dict(_strict_state_from_arrays(model, arrays), strict=True)
+    model.eval()
+    return model, config
+
+
 def convert_mlx_prospective_checkpoint(
     mlx_path: str | Path,
     torch_path: str | Path,
@@ -458,14 +553,7 @@ def convert_mlx_prospective_checkpoint(
         payload = pickle.load(handle)
     if not isinstance(payload, dict):
         raise ValueError("prospective MLX checkpoint must be an object")
-    config = _validate_checkpoint_contract(payload)
-    model_tree = payload.get("model")
-    if model_tree is None:
-        raise ValueError("prospective MLX checkpoint has no model")
-    model = ProspectivePlannerTorch(config).to(torch.float16)
-    arrays = _flatten_checkpoint_tree(model_tree)
-    model.load_state_dict(_strict_state_from_arrays(model, arrays), strict=True)
-    model.eval()
+    model, config = convert_mlx_prospective_payload(payload)
     save_prospective_torch_checkpoint(torch_path, model)
     return config
 
@@ -477,7 +565,10 @@ __all__ = [
     "ProspectivePlannerLayerTorch",
     "ProspectivePlannerTorch",
     "convert_mlx_prospective_checkpoint",
+    "convert_mlx_prospective_payload",
+    "extract_mlx_prospective_payload",
     "load_prospective_torch_checkpoint",
+    "load_prospective_torch_payload",
     "prospective_torch_checkpoint_payload",
     "save_prospective_torch_checkpoint",
 ]

@@ -527,14 +527,50 @@ def _validate_existing_prospective(
     sources,
 ):
     manifest_path = sidecar_dir / "prospective_manifest.json"
-    node_path = sidecar_dir / "prospective_nodes.npy"
-    branch_path = sidecar_dir / "prospective_branches.npy"
-    if not manifest_path.is_file() or not node_path.is_file() or not branch_path.is_file():
+    required_paths = {
+        "nodes": sidecar_dir / "prospective_nodes.npy",
+        "branches": sidecar_dir / "prospective_branches.npy",
+        "actions": sidecar_dir / "prospective_actions.npy",
+        "groups": sidecar_dir / "prospective_groups.npy",
+        "group_offsets": sidecar_dir / "prospective_group_offsets.npy",
+        "episode_sides": sidecar_dir / "prospective_episode_sides.npy",
+    }
+    if not manifest_path.is_file() or any(
+        not path.is_file() for path in required_paths.values()
+    ):
         raise RuntimeError(
             f"prospective sidecar is partial; refusing unsafe resume: {sidecar_dir}"
         )
     with manifest_path.open(encoding="utf-8") as stream:
         manifest = json.load(stream)
+    from rl.prospective_input_adapter import (
+        ACTION_ATTR_AGGREGATE_VERSION,
+        ACTION_SET_FEATURE_VERSION,
+        BRANCH_FEATURE_LAYOUT_VERSION,
+        PROSPECTIVE_INPUT_ADAPTER_VERSION,
+    )
+    if (
+        manifest.get("input_adapter_version")
+        != PROSPECTIVE_INPUT_ADAPTER_VERSION
+    ):
+        raise RuntimeError(
+            "existing prospective sidecar uses an incompatible input adapter"
+        )
+    if manifest.get("storage", {}).get("version") != "compact-sharded-v1":
+        raise RuntimeError(
+            "existing prospective sidecar uses incompatible compact storage"
+        )
+    action_schema = manifest.get("action_feature_schema") or {}
+    if (
+        action_schema.get("aggregate_version") != ACTION_ATTR_AGGREGATE_VERSION
+        or action_schema.get("action_set_feature_version")
+        != ACTION_SET_FEATURE_VERSION
+        or action_schema.get("branch_feature_layout_version")
+        != BRANCH_FEATURE_LAYOUT_VERSION
+    ):
+        raise RuntimeError(
+            "existing prospective sidecar uses an incompatible action feature schema"
+        )
     expected_config = {
         "path": str(config_source),
         "seed": int(cfg.seed),
@@ -573,16 +609,42 @@ def _validate_existing_prospective(
         raise RuntimeError("existing prospective sidecar violates data-boundary contract")
     if not isinstance(manifest.get("fingerprint"), str):
         raise RuntimeError("existing prospective sidecar has no fingerprint")
-    nodes = np.load(node_path, mmap_mode="r", allow_pickle=False)
-    branches = np.load(branch_path, mmap_mode="r", allow_pickle=False)
     outputs = manifest.get("outputs") or {}
+    arrays = {
+        key: np.load(path, mmap_mode="r", allow_pickle=False)
+        for key, path in required_paths.items()
+    }
+    nodes = arrays["nodes"]
+    branches = arrays["branches"]
     if len(nodes) != int(outputs.get("node_rows", -1)):
         raise RuntimeError("prospective node count disagrees with its manifest")
     if len(branches) != int(outputs.get("branch_rows", -1)):
         raise RuntimeError("prospective branch count disagrees with its manifest")
+    for key, manifest_key in (
+        ("actions", "action_rows"),
+        ("groups", "group_rows"),
+        ("episode_sides", "episode_side_rows"),
+    ):
+        if len(arrays[key]) != int(outputs.get(manifest_key, -1)):
+            raise RuntimeError(
+                f"prospective {key} count disagrees with its manifest"
+            )
+    if len(arrays["group_offsets"]) != len(arrays["groups"]) + 1:
+        raise RuntimeError("prospective group offset count is invalid")
     if not len(branches) or not int(np.count_nonzero(branches["valid"])):
         raise RuntimeError("existing prospective sidecar has no valid branch")
-    del nodes, branches
+    dataset_manifest_path = Path(sidecar_dir).parent / "dataset_manifest.json"
+    if dataset_manifest_path.is_file():
+        with dataset_manifest_path.open(encoding="utf-8") as stream:
+            dataset_manifest = json.load(stream)
+        if (
+            manifest.get("source", {}).get("bc_dataset_build_fingerprint")
+            != dataset_manifest.get("build_fingerprint")
+        ):
+            raise RuntimeError(
+                "prospective target joins belong to a different BC corpus"
+            )
+    del arrays, nodes, branches
     return manifest
 
 
@@ -593,6 +655,7 @@ def _ensure_prospective_sidecar(
     config_source,
     zip_paths,
     sources,
+    bc_dataset_contract=None,
 ):
     if not bool(cfg.prospective_enabled):
         if not str(out_dir).endswith(".npz"):
@@ -631,6 +694,7 @@ def _ensure_prospective_sidecar(
             trials=int(cfg.prospective_trials),
             horizon=int(cfg.prospective_horizon),
             gamma=float(cfg.prospective_gamma),
+            bc_dataset_contract=bc_dataset_contract,
         )
         status = "built"
     return {
@@ -639,6 +703,16 @@ def _ensure_prospective_sidecar(
         "sidecar_name": str(cfg.prospective_sidecar_name),
         "fingerprint": manifest["fingerprint"],
         "coord_schema_version": manifest["prospective_coord_schema_version"],
+        "input_adapter_version": manifest["input_adapter_version"],
+        "action_attr_aggregate_version": manifest[
+            "action_feature_schema"
+        ]["aggregate_version"],
+        "action_set_feature_version": manifest[
+            "action_feature_schema"
+        ]["action_set_feature_version"],
+        "branch_feature_layout_version": manifest[
+            "action_feature_schema"
+        ]["branch_feature_layout_version"],
         "node_rows": int(manifest["outputs"]["node_rows"]),
         "branch_rows": int(manifest["outputs"]["branch_rows"]),
         "config": {
@@ -880,6 +954,7 @@ def main():
         config_source=config_source,
         zip_paths=ZIPS,
         sources=source_manifest,
+        bc_dataset_contract=build_contract,
     )
     if prospective_contract["enabled"]:
         print(
