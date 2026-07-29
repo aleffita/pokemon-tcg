@@ -22,8 +22,8 @@ from scripts.validate.test_prospective_groups import validate
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DATASET = ROOT / "data" / "bc_data" / "bc_smoke_pipeline_2026_07_28"
-SIDECAR = DATASET / "prospective_v1"
+DATASET = ROOT / "data" / "bc_data" / "bc_smoke_2026_07_28"
+SIDECAR = DATASET / "prospective_v2"
 REPLAY_ZIP = ROOT / "data" / "bc_replay_zip" / "2026-07-28.zip"
 CONFIG = ROOT / "configs" / "smoke.json"
 
@@ -39,7 +39,7 @@ def main() -> None:
     prospective = dataset_manifest["prospective"]
     assert prospective["enabled"] is True
     assert prospective["status"] in {"built", "reused"}
-    assert prospective["sidecar_name"] == "prospective_v1"
+    assert prospective["sidecar_name"] == "prospective_v2"
     assert prospective["fingerprint"] == sidecar_manifest["fingerprint"]
     assert prospective["input_adapter_version"] == PROSPECTIVE_INPUT_ADAPTER_VERSION
     assert (
@@ -57,9 +57,9 @@ def main() -> None:
     assert prospective["node_rows"] == sidecar_manifest["outputs"]["node_rows"]
     assert prospective["branch_rows"] == sidecar_manifest["outputs"]["branch_rows"]
     assert dataset_manifest["config"]["prospective_enabled"] is True
-    assert dataset_manifest["config"]["prospective_sidecar_name"] == "prospective_v1"
+    assert dataset_manifest["config"]["prospective_sidecar_name"] == "prospective_v2"
     assert dataset_manifest["config"]["prospective_max_groups"] == 4
-    assert dataset_manifest["config"]["prospective_max_branches"] == 4
+    assert dataset_manifest["config"]["prospective_max_branches"] == 64
     assert dataset_manifest["config"]["prospective_trials"] == 1
     assert dataset_manifest["config"]["prospective_horizon"] == 2
     assert dataset_manifest["config"]["prospective_gamma"] == 1.0
@@ -67,8 +67,8 @@ def main() -> None:
 
     nodes = np.load(SIDECAR / "prospective_nodes.npy", allow_pickle=False)
     branches = np.load(SIDECAR / "prospective_branches.npy", allow_pickle=False)
-    assert len(nodes) == 24 and int(nodes["valid"].sum()) == 24
-    assert len(branches) == 12 and int(branches["valid"].sum()) == 12
+    assert len(nodes) == 44 and int(nodes["valid"].sum()) == 44
+    assert len(branches) == 22 and int(branches["valid"].sum()) == 22
 
     metadata = np.load(DATASET / "episode_meta.npy", allow_pickle=False)
     labels = np.load(DATASET / "__labels__.npy", allow_pickle=False)

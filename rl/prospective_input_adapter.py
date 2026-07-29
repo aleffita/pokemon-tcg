@@ -20,6 +20,7 @@ import numpy as np
 
 from rl.encoder.enc_constants import MAX_OPTIONS, OPT_STRUCT
 from rl.encoder.effect_data import N_ATTACK_FX
+from rl.prospective_actions import PROSPECTIVE_ACTION_CANDIDATE_VERSION
 from rl.prospective_schema import (
     BRANCH_ACTION_AXIS,
     ENTITY_ZONE_RELATION_AXIS,
@@ -37,6 +38,8 @@ PROSPECTIVE_INPUT_ADAPTER_VERSION = "real-sidecar-direct-v3"
 ACTION_ATTR_AGGREGATE_VERSION = "opt-attr-mean-v1"
 ACTION_SET_FEATURE_VERSION = "option-set-moments-fourier-v1"
 BRANCH_FEATURE_LAYOUT_VERSION = 3
+SUPPORTED_PROSPECTIVE_SIDECAR_SCHEMA_VERSION = 3
+SUPPORTED_PROSPECTIVE_SIDECAR_PLANNER_VERSION = 2
 ACTION_ATTR_WIDTH = OPT_STRUCT + N_ATTACK_FX
 ACTION_SET_FEATURE_WIDTH = 20
 ACTION_SET_MOMENT_ORDER = (
@@ -266,6 +269,17 @@ def _read_manifest(sidecar_dir: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as stream:
         manifest = json.load(stream)
     if (
+        manifest.get("schema_version")
+        != SUPPORTED_PROSPECTIVE_SIDECAR_SCHEMA_VERSION
+        or manifest.get("planner_version")
+        != SUPPORTED_PROSPECTIVE_SIDECAR_PLANNER_VERSION
+        or manifest.get("action_candidate_version")
+        != PROSPECTIVE_ACTION_CANDIDATE_VERSION
+    ):
+        raise ValueError(
+            "prospective sidecar action-candidate contract is incompatible"
+        )
+    if (
         manifest.get("prospective_coord_schema_version")
         != PROSPECTIVE_COORD_SCHEMA_VERSION
     ):
@@ -411,7 +425,7 @@ def encode_prospective_branch_features(
 def load_real_prospective_planner_index(
     dataset_dir: str | Path,
     *,
-    sidecar_name: str = "prospective_v1",
+    sidecar_name: str = "prospective_v2",
 ) -> RealProspectivePlannerIndex:
     """Open compact real sidecar arrays and validate every target join."""
 
@@ -689,7 +703,7 @@ def materialize_real_prospective_planner_batch(
 def load_real_prospective_planner_batch(
     dataset_dir: str | Path,
     *,
-    sidecar_name: str = "prospective_v1",
+    sidecar_name: str = "prospective_v2",
     config: ProspectivePlannerConfig | None = None,
 ) -> ProspectivePlannerNumpyBatch:
     """Small-test compatibility wrapper that materializes every sidecar group."""

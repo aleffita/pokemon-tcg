@@ -353,10 +353,10 @@ class ProspectivePlannerTorch(nn.Module):
 
         scalar_return = torch.tanh(
             return_logit.to(torch.float32)
-        ).to(parameter_dtype)
+        ).mul(self.config.return_scale).to(parameter_dtype)
         scalar_value = torch.tanh(
             value_logit.to(torch.float32)
-        ).to(parameter_dtype)
+        ).mul(self.config.return_scale).to(parameter_dtype)
         ko_probability = torch.sigmoid(
             ko_logit.to(torch.float32)
         ).to(parameter_dtype)

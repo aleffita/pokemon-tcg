@@ -2,7 +2,7 @@
 
 Coordinate invariants remain independently audited from ``episode_meta``.
 Forward validation consumes the causal, target-free shared input adapter over
-the real ``prospective_v1`` sidecar; no synthetic rows or hidden states are
+the real ``prospective_v2`` sidecar; no synthetic rows or hidden states are
 created.
 """
 from __future__ import annotations
@@ -64,7 +64,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SMOKE_DATA = ROOT / "data" / "bc_data" / "bc_smoke_2026_07_28"
 SMOKE_CONFIG = ROOT / "configs" / "smoke.json"
 PHYSICAL_BATCH_SIZE = 128
-PROSPECTIVE_DIR = SMOKE_DATA / "prospective_v1"
+PROSPECTIVE_DIR = SMOKE_DATA / "prospective_v2"
 TRUNK_CHECKPOINT = ROOT / "model" / "checkpoint" / "bc_smoke_temporal_mlx.pkl"
 
 
@@ -282,7 +282,6 @@ def test_real_sidecar_forward_and_group_relative_mode() -> None:
         2 + trunk.scratch_tokens,
         config.d_model,
     )
-    assert context.shape[1] == 18
 
     model = ProspectivePlannerMLX(config)
     outputs = model(

@@ -119,9 +119,9 @@ class TrainConfig:
     # Lateral prospective planner. The builder materializes a real rollout
     # sidecar; the trainer consumes it only when explicitly enabled.
     prospective_enabled: bool = False
-    prospective_sidecar_name: str = "prospective_v1"
+    prospective_sidecar_name: str = "prospective_v2"
     prospective_max_groups: int = 0
-    prospective_max_branches: int = 4
+    prospective_max_branches: int = 64
     prospective_trials: int = 1
     prospective_horizon: int = 2
     prospective_gamma: float = 1.0

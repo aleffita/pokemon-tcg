@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import hashlib
-import itertools
 import json
 import os
 from pathlib import Path
@@ -42,6 +41,10 @@ from rich.progress import (
 
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import MAX_OPTIONS, TokenEncoder
+from rl.prospective_actions import (
+    PROSPECTIVE_ACTION_CANDIDATE_VERSION,
+    enumerate_prospective_actions,
+)
 from rl.prospective_input_adapter import (
     ACTION_ATTR_AGGREGATE_VERSION,
     ACTION_ATTR_WIDTH,
@@ -68,8 +71,8 @@ from rl.search_agent import _determinize
 from rl.train_config import load_config
 
 
-SCHEMA_VERSION = 2
-PLANNER_VERSION = 1
+SCHEMA_VERSION = 3
+PLANNER_VERSION = 2
 ROOT_PARENT_ID = ""
 
 NODE_DTYPE = np.dtype([
@@ -316,18 +319,11 @@ def _entity_relation(
 
 
 def _legal_actions(select: dict[str, Any], max_branches: int) -> list[tuple[int, ...]]:
-    """Enumerate a stable bounded prefix of legal selections."""
-    options = select.get("option") or []
-    count = len(options)
-    min_count = max(0, int(select.get("minCount", 1) or 0))
-    max_count = min(count, max(min_count, int(select.get("maxCount", 1) or 0)))
-    actions: list[tuple[int, ...]] = []
-    for size in range(min_count, max_count + 1):
-        for action in itertools.combinations(range(count), size):
-            actions.append(tuple(int(index) for index in action))
-            if len(actions) >= max_branches:
-                return actions
-    return actions
+    """Resolve the shared, full-domain prospective candidate set."""
+
+    return list(
+        enumerate_prospective_actions(select, max_branches=max_branches)
+    )
 
 
 def _sample_legal_action(select: dict[str, Any], rng: random.Random) -> tuple[int, ...]:
@@ -1378,12 +1374,6 @@ def build(
             materialized_root_opt_attr = root_opt_attr.get(decision_key)
             select = decision.observation.get("select") or {}
             actions = _legal_actions(select, max_branches)
-            if decision.behavior_action not in actions:
-                if len(actions) < max_branches:
-                    actions.append(decision.behavior_action)
-                elif actions:
-                    actions[-1] = decision.behavior_action
-            actions = sorted(set(actions))
             if len(actions) < 2:
                 continue
             side_key = (decision.episode_id, decision.side)
@@ -1608,6 +1598,7 @@ def build(
         contract = {
         "schema_version": SCHEMA_VERSION,
         "planner_version": PLANNER_VERSION,
+        "action_candidate_version": PROSPECTIVE_ACTION_CANDIDATE_VERSION,
         "input_adapter_version": PROSPECTIVE_INPUT_ADAPTER_VERSION,
         "prospective_coord_schema_version": PROSPECTIVE_COORD_SCHEMA_VERSION,
         "prospective_coordinate_schema": prospective_coordinate_schema(),

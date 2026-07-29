@@ -304,12 +304,14 @@ class ProspectivePlannerMLX(nn.Module):
 
         # Nonlinear transforms run in FP32 and return to the FP16 activation
         # contract.  Consumers must retain branch_valid for all reductions.
-        scalar_return = mx.tanh(return_logit.astype(mx.float32)).astype(
-            parameter_dtype
-        )
-        scalar_value = mx.tanh(value_logit.astype(mx.float32)).astype(
-            parameter_dtype
-        )
+        scalar_return = (
+            self.config.return_scale
+            * mx.tanh(return_logit.astype(mx.float32))
+        ).astype(parameter_dtype)
+        scalar_value = (
+            self.config.return_scale
+            * mx.tanh(value_logit.astype(mx.float32))
+        ).astype(parameter_dtype)
         ko_probability = mx.sigmoid(ko_logit.astype(mx.float32)).astype(
             parameter_dtype
         )

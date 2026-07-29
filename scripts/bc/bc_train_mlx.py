@@ -696,6 +696,67 @@ def _prospective_training_has_node_flag(
     return False
 
 
+def _prospective_training_target_balance(
+    index: RealProspectivePlannerIndex,
+    group_indices: np.ndarray,
+) -> dict[str, float]:
+    """Derive normalized rare-target weights from the real training split."""
+
+    counts = {
+        "valid": 0,
+        "return_nonzero": 0,
+        "ko_positive": 0,
+        "prize_nonzero": 0,
+        "terminal_positive": 0,
+    }
+    selected = np.asarray(group_indices, dtype=np.int64)
+    starts = np.asarray(index.node_starts[selected], dtype=np.int64)
+    stops = starts + np.asarray(index.node_counts[selected], dtype=np.int64)
+    if np.any(starts[1:] < starts[:-1]):
+        order = np.argsort(starts)
+        starts, stops = starts[order], stops[order]
+    breaks = np.flatnonzero(starts[1:] != stops[:-1]) + 1
+    range_starts = np.concatenate((starts[:1], starts[breaks]))
+    range_stops = np.concatenate((stops[breaks - 1], stops[-1:]))
+    scan_rows = 1_000_000
+    for range_start, range_stop in zip(range_starts, range_stops):
+        for start in range(int(range_start), int(range_stop), scan_rows):
+            stop = min(start + scan_rows, int(range_stop))
+            nodes = index.nodes[start:stop]
+            valid = np.asarray(nodes["valid"], dtype=np.bool_)
+            counts["valid"] += int(np.count_nonzero(valid))
+            counts["return_nonzero"] += int(
+                np.count_nonzero(
+                    valid & (np.abs(nodes["scalar_return"]) > 1e-8)
+                )
+            )
+            counts["ko_positive"] += int(
+                np.count_nonzero(valid & (nodes["ko_signal"] > 0))
+            )
+            counts["prize_nonzero"] += int(
+                np.count_nonzero(valid & (nodes["prizes_taken"] > 0))
+            )
+            counts["terminal_positive"] += int(
+                np.count_nonzero(valid & nodes["terminal"])
+            )
+    total = counts["valid"]
+    if total <= 0:
+        raise ValueError("prospective training split has no valid nodes")
+
+    def ratio(positive_key: str) -> float:
+        positive = counts[positive_key]
+        if positive <= 0 or positive >= total:
+            return 1.0
+        return float(total - positive) / float(positive)
+
+    return {
+        "return_nonzero": ratio("return_nonzero"),
+        "ko_positive": ratio("ko_positive"),
+        "prize_nonzero": ratio("prize_nonzero"),
+        "terminal_positive": ratio("terminal_positive"),
+    }
+
+
 def _prospective_physical_group_batches(
     group_indices: np.ndarray,
     batch_size: int,
@@ -960,8 +1021,6 @@ def _prospective_sibling_policy_terms(
         parent_index[:, :, None] == parent_index[:, None, :]
     ) & valid_bool[:, :, None] & valid_bool[:, None, :]
     sibling_count = mx.sum(sibling_mask.astype(mx.int32), axis=2)
-    policy_valid = valid_bool & (sibling_count >= 2)
-
     scores_fp32 = scores.astype(mx.float32)
     sibling_scores = mx.where(
         sibling_mask,
@@ -985,6 +1044,7 @@ def _prospective_sibling_policy_terms(
         weights * (returns_fp32[:, None, :] - means[:, :, None]) ** 2,
         axis=2,
     ) / counts
+    policy_valid = valid_bool & (sibling_count >= 2) & (variances > eps)
     advantages = centered / mx.sqrt(variances + eps)
     advantages = mx.where(
         policy_valid, advantages, mx.zeros_like(advantages)
@@ -1006,10 +1066,11 @@ def _prospective_loss(
     parent_index: mx.array,
     targets: dict[str, mx.array],
     cfg,
+    target_balance: dict[str, float],
     *,
     use_behavior_logprobs: bool,
     use_reference_logprobs: bool,
-) -> mx.array:
+) -> tuple[mx.array, ...]:
     """FP32 multi-head prospective objective over real rollout nodes."""
 
     outputs = planner(
@@ -1021,12 +1082,22 @@ def _prospective_loss(
     )
     valid = branch_valid.astype(mx.bool_)
     valid_fp32 = valid.astype(mx.float32)
-    valid_count = mx.maximum(
-        mx.sum(valid_fp32), mx.array(1.0, dtype=mx.float32)
-    )
 
-    def mean_valid(value: mx.array) -> mx.array:
-        return mx.sum(value.astype(mx.float32) * valid_fp32) / valid_count
+    def mean_valid(
+        value: mx.array,
+        *,
+        rare: mx.array | None = None,
+        rare_weight: float = 1.0,
+    ) -> mx.array:
+        weights = valid_fp32
+        if rare is not None:
+            weights = weights * (
+                1.0
+                + (float(rare_weight) - 1.0) * rare.astype(mx.float32)
+            )
+        return mx.sum(value.astype(mx.float32) * weights) / mx.maximum(
+            mx.sum(weights), mx.array(1.0, dtype=mx.float32)
+        )
 
     current_logprobs, advantages, policy_valid = (
         _prospective_sibling_policy_terms(
@@ -1065,35 +1136,60 @@ def _prospective_loss(
     )
 
     target_return = targets["scalar_return"].astype(mx.float32)
+    return_nonzero = mx.abs(target_return) > 1e-8
     return_error = outputs[SCALAR_RETURN].astype(mx.float32) - target_return
     value_error = outputs[SCALAR_VALUE].astype(mx.float32) - target_return
-    return_loss = mean_valid(return_error * return_error)
-    value_loss = mean_valid(value_error * value_error)
+    return_loss = mean_valid(
+        return_error * return_error,
+        rare=return_nonzero,
+        rare_weight=target_balance["return_nonzero"],
+    )
+    value_loss = mean_valid(
+        value_error * value_error,
+        rare=return_nonzero,
+        rare_weight=target_balance["return_nonzero"],
+    )
 
-    def binary_loss(logit_key: str, target_key: str) -> mx.array:
+    def binary_loss(
+        logit_key: str,
+        target_key: str,
+        balance_key: str,
+    ) -> mx.array:
         logits = outputs[logit_key].astype(mx.float32)
         target = targets[target_key].astype(mx.float32)
         per_item = mx.logaddexp(
             mx.array(0.0, dtype=mx.float32), logits
         ) - target * logits
-        return mean_valid(per_item)
+        return mean_valid(
+            per_item,
+            rare=target > 0.5,
+            rare_weight=target_balance[balance_key],
+        )
 
-    ko_loss = binary_loss(KO_LOGIT, "ko")
-    terminal_loss = binary_loss(TERMINAL_LOGIT, "terminal")
+    ko_loss = binary_loss(KO_LOGIT, "ko", "ko_positive")
+    terminal_loss = binary_loss(
+        TERMINAL_LOGIT, "terminal", "terminal_positive"
+    )
     prize_error = (
         outputs[EXPECTED_PRIZES].astype(mx.float32)
         - targets["prizes"].astype(mx.float32)
+    ) / float(planner.config.max_prizes)
+    prize_loss = mean_valid(
+        prize_error * prize_error,
+        rare=targets["prizes"] > 0,
+        rare_weight=target_balance["prize_nonzero"],
     )
-    prize_loss = mean_valid(prize_error * prize_error)
     scale = mx.maximum(
         outputs[UNCERTAINTY].astype(mx.float32),
         mx.array(float(cfg.prospective_uncertainty_floor), dtype=mx.float32),
     )
     uncertainty_loss = mean_valid(
-        0.5 * (return_error / scale) ** 2 + mx.log(scale)
+        0.5 * (return_error / scale) ** 2 + mx.log(scale),
+        rare=return_nonzero,
+        rare_weight=target_balance["return_nonzero"],
     )
 
-    return (
+    total_loss = (
         float(cfg.prospective_policy_weight) * policy.loss
         + float(cfg.prospective_return_weight) * return_loss
         + float(cfg.prospective_value_weight) * value_loss
@@ -1102,6 +1198,16 @@ def _prospective_loss(
         + float(cfg.prospective_terminal_weight) * terminal_loss
         + float(cfg.prospective_uncertainty_weight) * uncertainty_loss
     ).astype(mx.float32)
+    return (
+        total_loss,
+        policy.loss.astype(mx.float32),
+        return_loss.astype(mx.float32),
+        value_loss.astype(mx.float32),
+        ko_loss.astype(mx.float32),
+        prize_loss.astype(mx.float32),
+        terminal_loss.astype(mx.float32),
+        uncertainty_loss.astype(mx.float32),
+    )
 
 
 def _bool_arg(s: str) -> bool:
@@ -2107,6 +2213,7 @@ def main() -> None:
 
     prospective_use_behavior_logprobs = False
     prospective_use_reference_logprobs = False
+    prospective_target_balance: dict[str, float] = {}
     prospective_grad_fn = None
     if prospective_planner is not None:
         if (
@@ -2127,6 +2234,10 @@ def main() -> None:
                 prospective_group_indices,
                 "has_reference_logprob",
             )
+        )
+        prospective_target_balance = _prospective_training_target_balance(
+            prospective_index,
+            prospective_group_indices,
         )
 
         def _prospective_loss_fn(
@@ -2149,6 +2260,7 @@ def main() -> None:
                 parent_index,
                 targets,
                 cfg,
+                prospective_target_balance,
                 use_behavior_logprobs=prospective_use_behavior_logprobs,
                 use_reference_logprobs=prospective_use_reference_logprobs,
             )
@@ -2164,7 +2276,11 @@ def main() -> None:
         print(
             "[bc-train-mlx] prospective objective: "
             f"{prospective_method}; reference_kl="
-            f"{prospective_use_reference_logprobs}",
+            f"{prospective_use_reference_logprobs}; normalized_balance="
+            + ",".join(
+                f"{key}:{value:.2f}"
+                for key, value in prospective_target_balance.items()
+            ),
             flush=True,
         )
     run_end_epoch = start_epoch + run_epochs
@@ -2421,7 +2537,7 @@ def main() -> None:
             loss, grads = grad_fn(model, ob, yb)
             return loss, grads
 
-        print(f"[bc-train-mlx] compiled train_step with state capture", flush=True)
+        print("[bc-train-mlx] compiled train_step with state capture", flush=True)
 
     # ---- prefetch helper (stream overlap: CPU loads next slab while GPU trains) ----
     def _slab_generator(slab_indices, ep_seed):
@@ -2972,10 +3088,13 @@ def main() -> None:
                 or prospective_grad_fn is None
             ):
                 raise AssertionError("prospective phase is incompletely initialized")
-            group_total = len(prospective_group_indices)
+            prospective_epoch_groups = np.random.default_rng(
+                [int(a.seed), int(ep), 0x50524F]
+            ).permutation(prospective_group_indices)
+            group_total = len(prospective_epoch_groups)
             group_target_keys = tuple(
                 prospective_index.group_target_keys[int(group_index)]
-                for group_index in prospective_group_indices
+                for group_index in prospective_epoch_groups
             )
             prospective_context_plan, prospective_context_work = (
                 _prospective_context_work_plan(
@@ -3055,12 +3174,13 @@ def main() -> None:
                 phase_step = 0
                 processed_groups = 0
                 loss_sum = 0.0
+                component_sums = np.zeros(7, dtype=np.float64)
                 for (
                     group_start,
                     group_stop,
                     physical_group_indices,
                 ) in _prospective_physical_group_batches(
-                    prospective_group_indices,
+                    prospective_epoch_groups,
                     int(cfg.prospective_batch_size),
                 ):
                     prospective_batch = (
@@ -3091,7 +3211,7 @@ def main() -> None:
                             context_length=context_shape[1],
                         )
                     )
-                    loss, grads = prospective_grad_fn(
+                    loss_parts, grads = prospective_grad_fn(
                         prospective_planner,
                         mx.array(
                             trunk_context[group_start:group_stop]
@@ -3103,9 +3223,14 @@ def main() -> None:
                         mx.array(prospective_batch.parent_index),
                         planner_targets,
                     )
+                    loss = loss_parts[0]
                     grads = _to_fp32_grads(grads)
-                    mx.eval(loss, grads)
+                    mx.eval(loss_parts, grads)
                     loss_value = float(loss)
+                    component_values = np.asarray(
+                        [float(value) for value in loss_parts[1:]],
+                        dtype=np.float64,
+                    )
                     if not np.isfinite(loss_value):
                         _progress_bar.stop()
                         raise FloatingPointError(
@@ -3115,7 +3240,9 @@ def main() -> None:
                     prospective_optimizer_step(grads)
                     phase_step += 1
                     processed_groups = group_stop
-                    loss_sum += loss_value * (group_stop - group_start)
+                    groups_in_batch = group_stop - group_start
+                    loss_sum += loss_value * groups_in_batch
+                    component_sums += component_values * groups_in_batch
                     prospective_epoch_loss = loss_sum / processed_groups
                     _progress_bar.update(
                         _progress_task,
@@ -3141,6 +3268,26 @@ def main() -> None:
                         f"expected={prospective_steps_per_epoch}, "
                         f"actual={phase_step}"
                     )
+                component_means = component_sums / max(processed_groups, 1)
+                print(
+                    "[bc-train-mlx] prospective losses: "
+                    + " ".join(
+                        f"{name}={value:.5f}"
+                        for name, value in zip(
+                            (
+                                "policy",
+                                "return",
+                                "value",
+                                "ko",
+                                "prize",
+                                "terminal",
+                                "uncertainty",
+                            ),
+                            component_means,
+                        )
+                    ),
+                    flush=True,
+                )
                 del trunk_context
             prospective_planner.eval()
 

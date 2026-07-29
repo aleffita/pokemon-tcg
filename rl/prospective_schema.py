@@ -16,7 +16,7 @@ import numpy as np
 
 
 PROSPECTIVE_COORD_SCHEMA_VERSION = "1.0.0"
-PROSPECTIVE_PLANNER_VERSION = "1.0.0"
+PROSPECTIVE_PLANNER_VERSION = "1.1.0"
 
 MATCH_TIME_AXIS = 0
 ROLLOUT_DEPTH_AXIS = 1
@@ -119,6 +119,7 @@ class ProspectivePlannerConfig:
     rope_base: float = 10_000.0
     uncertainty_floor: float = 1e-6
     max_prizes: float = 6.0
+    return_scale: float = 2.0
     parameter_dtype: str = "float16"
     reduction_dtype: str = "float32"
 
@@ -150,6 +151,8 @@ class ProspectivePlannerConfig:
             raise ValueError("uncertainty_floor must be positive")
         if self.max_prizes <= 0.0:
             raise ValueError("max_prizes must be positive")
+        if self.return_scale <= 0.0:
+            raise ValueError("return_scale must be positive")
         if self.parameter_dtype != "float16":
             raise ValueError("prospective planner parameters must be float16")
         if self.reduction_dtype != "float32":

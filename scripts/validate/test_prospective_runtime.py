@@ -30,7 +30,7 @@ from scripts.validate.test_prospective_planner_torch import (
 ROOT = Path(__file__).resolve().parents[2]
 REPLAY_ZIP = ROOT / "data" / "bc_replay_zip" / "2026-07-28.zip"
 SMOKE_DATA = ROOT / "data" / "bc_data" / "bc_smoke_2026_07_28"
-SIDECAR = SMOKE_DATA / "prospective_v1"
+SIDECAR = SMOKE_DATA / "prospective_v2"
 SMOKE_CONFIG = ROOT / "configs" / "smoke.json"
 
 

@@ -309,7 +309,7 @@ def test_real_sidecar_forward_and_tree_mask() -> None:
                      & (outputs[EXPECTED_PRIZES][valid] <= config.max_prizes))
     assert torch.all(outputs[UNCERTAINTY][valid] > 0)
     print(
-        "  PASS: real prospective_v1 trees, 18-token recurrent trunk context, "
+        "  PASS: real prospective_v2 trees, checkpoint-owned recurrent trunk context, "
         "four-axis mask, FP16 safe forward"
     )
 

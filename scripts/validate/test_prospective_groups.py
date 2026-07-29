@@ -14,6 +14,8 @@ import zipfile
 
 import numpy as np
 
+from rl.prospective_actions import PROSPECTIVE_ACTION_CANDIDATE_VERSION
+from rl.prospective_actions import enumerate_prospective_actions
 from rl.prospective_input_adapter import (
     ACTION_ATTR_AGGREGATE_VERSION,
     ACTION_ATTR_WIDTH,
@@ -79,6 +81,29 @@ REQUIRED_BRANCH_FIELDS = {
 }
 
 
+def test_candidate_enumeration_covers_the_legal_domain() -> None:
+    simple = {
+        "option": list(range(51)),
+        "minCount": 1,
+        "maxCount": 1,
+    }
+    assert enumerate_prospective_actions(simple, max_branches=64) == tuple(
+        (index,) for index in range(51)
+    )
+    bounded = {
+        "option": list(range(20)),
+        "minCount": 2,
+        "maxCount": 2,
+    }
+    actions = enumerate_prospective_actions(bounded, max_branches=4)
+    assert len(actions) == 4
+    assert actions[0] == (0, 1)
+    assert actions[-1] == (18, 19)
+    assert actions == enumerate_prospective_actions(
+        bounded, max_branches=4
+    )
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -104,7 +129,11 @@ def validate(sidecar: Path, replay_zip: Path, config_path: Path) -> None:
     config = json.loads(config_path.read_text(encoding="utf-8"))
 
     assert manifest["schema_version"] == SCHEMA_VERSION
-    assert manifest["planner_version"] == 1
+    assert manifest["planner_version"] == 2
+    assert (
+        manifest["action_candidate_version"]
+        == PROSPECTIVE_ACTION_CANDIDATE_VERSION
+    )
     assert manifest["input_adapter_version"] == PROSPECTIVE_INPUT_ADAPTER_VERSION
     assert (
         manifest["prospective_coord_schema_version"]
@@ -350,10 +379,11 @@ def validate(sidecar: Path, replay_zip: Path, config_path: Path) -> None:
 
 
 def main() -> None:
+    test_candidate_enumeration_covers_the_legal_domain()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--sidecar",
-        default="data/bc_data/bc_smoke_2026_07_28/prospective_v1",
+        default="data/bc_data/bc_smoke_2026_07_28/prospective_v2",
     )
     parser.add_argument(
         "--zip",

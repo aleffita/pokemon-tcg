@@ -228,6 +228,23 @@ def test_policy_terms_compare_only_valid_siblings() -> None:
     )
 
 
+def test_policy_terms_exclude_equal_return_siblings() -> None:
+    scores = mx.array([[3, 1, 2, 10]], dtype=mx.float32)
+    returns = mx.array([[0, 0, -1, 1]], dtype=mx.float32)
+    parents = mx.array([[-1, -1, 0, 0]], dtype=mx.int32)
+    valid = mx.ones((1, 4), dtype=mx.bool_)
+    _, advantages, policy_valid = _prospective_sibling_policy_terms(
+        scores, returns, parents, valid
+    )
+    mx.eval(advantages, policy_valid)
+    np.testing.assert_array_equal(
+        np.asarray(policy_valid), [[False, False, True, True]]
+    )
+    np.testing.assert_allclose(
+        np.asarray(advantages), [[0, 0, -1, 1]], rtol=2e-6, atol=2e-6
+    )
+
+
 def main() -> None:
     test_context_replay_is_linear_and_uses_pre_action_subrow()
     print("PASS: linear causal replay and pre-action multi-select context")
@@ -237,6 +254,8 @@ def main() -> None:
     print("PASS: trainer uses index plus bounded physical materialization")
     test_policy_terms_compare_only_valid_siblings()
     print("PASS: group-relative objective is scoped to valid sibling sets")
+    test_policy_terms_exclude_equal_return_siblings()
+    print("PASS: equal-return sibling sets do not dilute policy supervision")
 
 
 if __name__ == "__main__":

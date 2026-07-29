@@ -22,7 +22,7 @@
     },
     "nhead": {
       "type": "integer",
-      "default": 4,
+      "default": 64,
       "description": "Number of attention heads in each Transformer layer. Must divide d_model evenly.",
       "minimum": 1,
       "maximum": 16
@@ -265,7 +265,7 @@
     },
     "prospective_sidecar_name": {
       "type": "string",
-      "default": "prospective_v1",
+      "default": "prospective_v2",
       "pattern": "^[A-Za-z0-9._-]+$",
       "description": "Dataset-relative directory containing prospective_nodes.npy and prospective_manifest.json."
     },
@@ -280,7 +280,7 @@
       "default": 4,
       "minimum": 1,
       "maximum": 192,
-      "description": "Maximum legal root branches explored per prospective group."
+      "description": "Maximum legal root branches explored per prospective group. All actions are retained within budget; larger spaces use deterministic full-domain coverage shared by builder and runtime."
     },
     "prospective_trials": {
       "type": "integer",

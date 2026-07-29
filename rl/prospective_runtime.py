@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import dataclasses
-import itertools
 import random
 from typing import Any
 
@@ -21,6 +20,7 @@ import numpy as np
 import torch
 
 from rl.encoder.encoding import MAX_OPTIONS, TokenEncoder
+from rl.prospective_actions import enumerate_prospective_actions
 from rl.prospective_input_adapter import (
     ProspectivePlannerNumpyBatch,
     aggregate_action_opt_attr,
@@ -100,27 +100,9 @@ def enumerate_legal_action_combinations(
     *,
     max_branches: int,
 ) -> tuple[tuple[int, ...], ...]:
-    """Enumerate a stable bounded prefix of legal simple/multi-select actions."""
+    """Resolve the same full-domain candidate set used by offline sidecars."""
 
-    options = select.get("option") or []
-    count = len(options)
-    if count > MAX_OPTIONS:
-        raise ValueError("decision has more options than the encoder supports")
-    min_count = max(0, int(select.get("minCount", 1) or 0))
-    max_count = min(count, max(min_count, int(select.get("maxCount", 1) or 0)))
-    if min_count > count:
-        raise ValueError("decision minCount exceeds its option count")
-    actions: list[tuple[int, ...]] = []
-    for size in range(min_count, max_count + 1):
-        for action in itertools.combinations(range(count), size):
-            actions.append(tuple(int(index) for index in action))
-            if len(actions) >= max_branches:
-                # Offline sidecars canonicalize the bounded candidate set
-                # lexicographically after enumeration (and, during training,
-                # possible behavior-action inclusion). Runtime has no behavior
-                # label, but must preserve the same ordering for the common set.
-                return tuple(sorted(set(actions)))
-    return tuple(sorted(set(actions)))
+    return enumerate_prospective_actions(select, max_branches=max_branches)
 
 
 def _sample_legal_action(
