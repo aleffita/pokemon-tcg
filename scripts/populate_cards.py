@@ -40,40 +40,62 @@ def _clean_int(value: str) -> int | None:
         return None
 
 
+def populate_cards(
+    db_or_path: ResultsDB | str | Path | None = None,
+    *,
+    csv_path: str | Path = CSV_PATH,
+    skip_existing: bool = True,
+    output=print,
+) -> int:
+    """Populate the canonical card catalog into a database or database path."""
+
+    owns_db = not isinstance(db_or_path, ResultsDB)
+    db = (
+        db_or_path
+        if isinstance(db_or_path, ResultsDB)
+        else ResultsDB(db_or_path)
+    )
+    source = Path(csv_path)
+    try:
+        count = db.conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
+        if count > 0 and skip_existing:
+            output(f"Cards table already has {count} entries. Skipping.")
+            return 0
+        if count > 0:
+            raise ValueError(
+                "cards table is not empty; refusing non-idempotent population"
+            )
+
+        # Read CSV, deduplicate by Card ID (take first row per card).
+        seen: dict[int, dict] = {}
+        with source.open(newline="", encoding="utf-8") as stream:
+            reader = csv.DictReader(stream)
+            for row in reader:
+                card_id = int(row["Card ID"])
+                if card_id not in seen:
+                    seen[card_id] = {
+                        "card_id": card_id,
+                        "name": row["Card Name"].strip(),
+                        "category": _clean(row.get("Category", "")),
+                        "stage": _clean(row.get(STAGE_COL, "")),
+                        "hp": _clean_int(row.get("HP", "")),
+                        "energy_type": _clean(row.get("Type", "")),
+                        "weakness": _clean(row.get("Weakness", "")),
+                        "rule": _clean(row.get("Rule", "")),
+                    }
+
+        for card in sorted(seen.values(), key=lambda value: value["card_id"]):
+            db.add_card(**card)
+
+        output(f"Populated {len(seen)} cards from {source.name}")
+        return len(seen)
+    finally:
+        if owns_db:
+            db.close()
+
+
 def main():
-    db = ResultsDB()
-
-    # Check if already populated
-    count = db.conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
-    if count > 0:
-        print(f"Cards table already has {count} entries. Skipping.")
-        db.close()
-        return
-
-    # Read CSV, deduplicate by Card ID (take first row per card)
-    seen: dict[int, dict] = {}
-    with open(CSV_PATH, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            card_id = int(row["Card ID"])
-            if card_id not in seen:
-                seen[card_id] = {
-                    "card_id": card_id,
-                    "name": row["Card Name"].strip(),
-                    "category": _clean(row.get("Category", "")),
-                    "stage": _clean(row.get(STAGE_COL, "")),
-                    "hp": _clean_int(row.get("HP", "")),
-                    "energy_type": _clean(row.get("Type", "")),
-                    "weakness": _clean(row.get("Weakness", "")),
-                    "rule": _clean(row.get("Rule", "")),
-                }
-
-    # Insert sorted by card_id
-    for card in sorted(seen.values(), key=lambda c: c["card_id"]):
-        db.add_card(**card)
-
-    db.close()
-    print(f"Populated {len(seen)} cards from {CSV_PATH.name}")
+    populate_cards()
 
 
 if __name__ == "__main__":

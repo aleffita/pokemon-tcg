@@ -1,130 +1,303 @@
-"""Build card/deck stats from Kaggle replay zips.
+"""Build exact deck/card statistics from Kaggle replay archives.
 
-Extracts deck choices + results from replay zips, computes card/deck Elo.
-Stores only match-level data (source='remote'), NOT full replay steps.
+Remote archives contribute match-level observations only. Replay payloads are
+not persisted. Official episode ids are retained when explicitly exposed;
+otherwise the source byte digest is the idempotency identity.
 
 Usage:
     uv run tcg-build-card-stats --date 2026-07-25
     uv run tcg-build-card-stats --range 2026-07-20 2026-07-25
 """
+from __future__ import annotations
+
 import argparse
+import hashlib
 import json
-import zipfile
 from pathlib import Path
-from collections import Counter
-from rl.results_db import ResultsDB
+from typing import Sequence
+import zipfile
+
+from rl.results_db import (
+    IdempotencyConflict,
+    MatchParticipant,
+    ResultsDB,
+    deck_fingerprint,
+)
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
-def identify_or_create_deck(db, card_ids):
-    """Find matching deck or create new one. Returns deck_id."""
-    card_set = Counter(card_ids)
-    # Try to match against known decks
-    decks = db.conn.execute("SELECT id FROM decks").fetchall()
-    for (deck_id,) in decks:
-        known = db.conn.execute("SELECT card_id, quantity FROM deck_cards WHERE deck_id = ?", (deck_id,)).fetchall()
-        known_set = Counter({cid: qty for cid, qty in known})
-        # Check overlap
-        overlap = sum((card_set & known_set).values())
-        total = max(sum(card_set.values()), sum(known_set.values()))
-        if total > 0 and overlap / total >= 0.9:
-            return deck_id
-    # Create new deck
-    name = f"replay_deck_{hash(frozenset(card_set.items())) % 100000}"
-    deck_id = db.add_deck(name, "replay", archetype=None)
-    db.add_deck_cards(deck_id, list(card_set.items()))
-    return deck_id
 
-def process_zip(db, zip_path):
-    """Process a single replay zip."""
+def identify_or_create_deck(db: ResultsDB, card_ids: list[int]) -> int:
+    """Resolve only an exactly equal deterministic deck composition."""
+
+    fingerprint = deck_fingerprint(card_ids)
+    return db.get_or_create_deck(
+        card_ids,
+        source="replay",
+        name=f"replay_deck_{fingerprint[:16]}",
+    )
+
+
+def _external_episode_id(payload: dict) -> str | None:
+    """Read only source fields whose semantics explicitly identify an episode."""
+
+    info = payload.get("info")
+    if isinstance(info, dict):
+        value = info.get("EpisodeId")
+        if value is not None and str(value).strip():
+            return str(value)
+    for key in ("external_episode_id", "episode_id"):
+        value = payload.get(key)
+        if value is not None and str(value).strip():
+            return str(value)
+    return None
+
+
+def _reported_team_names(payload: dict) -> tuple[str | None, str | None]:
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None, None
+    team_names = info.get("TeamNames")
+    if isinstance(team_names, list) and len(team_names) >= 2:
+        return (
+            str(team_names[0]) if team_names[0] else None,
+            str(team_names[1]) if team_names[1] else None,
+        )
+    agents = info.get("Agents")
+    if isinstance(agents, list) and len(agents) >= 2:
+        names = []
+        for agent in agents[:2]:
+            name = agent.get("Name") if isinstance(agent, dict) else None
+            names.append(str(name) if name else None)
+        return names[0], names[1]
+    return None, None
+
+
+def _extract_decks(steps: list) -> tuple[list[int], list[int]] | None:
+    decks: list[list[int] | None] = [None, None]
+    for step in steps:
+        if not isinstance(step, list) or len(step) < 2:
+            continue
+        for side in (0, 1):
+            if decks[side] is not None or not isinstance(step[side], dict):
+                continue
+            action = step[side].get("action")
+            if isinstance(action, list) and len(action) == 60:
+                decks[side] = [int(card_id) for card_id in action]
+    if decks[0] is None or decks[1] is None:
+        return None
+    return decks[0], decks[1]
+
+
+def _outcomes(rewards: Sequence[float]) -> tuple[int, int]:
+    if rewards[0] > rewards[1]:
+        return 1, -1
+    if rewards[0] < rewards[1]:
+        return -1, 1
+    return 0, 0
+
+
+def process_zip(
+    db: ResultsDB,
+    zip_path: str | Path,
+    *,
+    archive_date: str | None = None,
+) -> int:
+    """Idempotently ingest match-level observations from one replay archive."""
+
+    archive = Path(zip_path)
+    observed_date = archive_date or archive.stem
     processed = 0
-    with zipfile.ZipFile(zip_path) as z:
-        episodes = [n for n in z.namelist() if n.endswith('.json')]
-        for ep_name in episodes:
-            ep_id = Path(ep_name).stem
-            # Check if already processed
-            existing = db.conn.execute("SELECT id FROM matches WHERE source = 'remote' AND our_agent = ?", (ep_id,)).fetchone()
-            if existing:
+    with zipfile.ZipFile(archive) as replay_zip:
+        episodes = sorted(
+            name for name in replay_zip.namelist() if name.endswith(".json")
+        )
+        for member_name in episodes:
+            raw_payload = replay_zip.read(member_name)
+            source_digest = hashlib.sha256(raw_payload).hexdigest()
+            payload = json.loads(raw_payload)
+            if not isinstance(payload, dict):
                 continue
-            try:
-                data = json.loads(z.read(ep_name))
-                steps = data.get('steps', [])
-                rewards = data.get('rewards', [0, 0])
-                if len(steps) < 2:
-                    continue
-                # Extract deck choices (60-card action) — find the step with deck selection
-                decks = [None, None]
-                for step in steps:
-                    for side in (0, 1):
-                        if decks[side] is not None:
-                            continue
-                        action = step[side].get('action', [])
-                        if len(action) == 60:
-                            decks[side] = [int(c) for c in action]
-                if not decks[0] or not decks[1]:
-                    continue
-                # Determine result from our perspective (side 0)
-                result = 1 if rewards[0] > rewards[1] else (-1 if rewards[0] < rewards[1] else 0)
-                # Create match
-                deck0_id = identify_or_create_deck(db, decks[0])
-                deck1_id = identify_or_create_deck(db, decks[1])
-                cur = db.conn.execute(
-                    "INSERT INTO matches (source, game_index, our_agent, our_deck_id, opp_agent, opp_deck_id, our_side, result, n_steps) VALUES (?, 0, ?, ?, ?, ?, 0, ?, ?)",
-                    ('remote', ep_id, deck0_id, 'opponent', deck1_id, result, len(steps)))
-                match_id = cur.lastrowid
-                # Record card usage
-                for side, deck in enumerate(decks):
-                    for card_id, qty in Counter(deck).items():
-                        db.conn.execute(
-                            "INSERT OR IGNORE INTO match_card_usage (match_id, card_id, player_side, quantity) VALUES (?, ?, ?, ?)",
-                            (match_id, card_id, side, qty))
-                processed += 1
-            except Exception:
+            external_episode_id = _external_episode_id(payload)
+            if external_episode_id is not None:
+                existing = db.conn.execute(
+                    """
+                    SELECT id, source_observation_digest FROM matches
+                    WHERE source = 'remote' AND external_episode_id = ?
+                    """,
+                    (external_episode_id,),
+                ).fetchone()
+            else:
+                existing = db.conn.execute(
+                    """
+                    SELECT id FROM matches
+                    WHERE source = 'remote'
+                      AND source_observation_digest = ?
+                    """,
+                    (source_digest,),
+                ).fetchone()
+            if existing is not None:
+                if (
+                    external_episode_id is not None
+                    and existing["source_observation_digest"] != source_digest
+                ):
+                    raise IdempotencyConflict(
+                        "official episode id was reused for different replay bytes"
+                    )
                 continue
-    db.conn.commit()
+
+            steps = payload.get("steps")
+            rewards = payload.get("rewards")
+            if (
+                not isinstance(steps, list)
+                or len(steps) < 2
+                or not isinstance(rewards, list)
+                or len(rewards) < 2
+                or not all(
+                    isinstance(reward, (int, float))
+                    for reward in rewards[:2]
+                )
+            ):
+                continue
+            decks = _extract_decks(steps)
+            if decks is None:
+                continue
+
+            team_names = _reported_team_names(payload)
+            outcomes = _outcomes(rewards)
+            participants = []
+            for side in (0, 1):
+                deck_id = identify_or_create_deck(db, decks[side])
+                team_id = db.get_or_create_team(
+                    team_names[side],
+                    observation_key=f"{source_digest}:seat:{side}",
+                )
+                # Replays do not expose an official submission id. This is an
+                # explicitly observed identity, not a claim that every daily
+                # observation is one official Kaggle submission lineage.
+                submission_id = db.observe_submission(
+                    team_id,
+                    [deck_id],
+                    source="remote",
+                    archive_date=observed_date,
+                )
+                participants.append(
+                    MatchParticipant(
+                        seat=side,
+                        team_id=team_id,
+                        submission_id=submission_id,
+                        deck_id=deck_id,
+                        reward=float(rewards[side]),
+                        outcome=outcomes[side],
+                    )
+                )
+
+            db.record_match(
+                source="remote",
+                external_episode_id=external_episode_id,
+                source_observation_digest=source_digest,
+                archive_date=observed_date,
+                archive_member=member_name,
+                n_steps=len(steps),
+                participants=participants,
+            )
+            processed += 1
     return processed
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--date", help="Single date (YYYY-MM-DD)")
-    p.add_argument("--range", nargs=2, metavar=("START", "END"), help="Date range")
-    args = p.parse_args()
+
+def populate_replays(
+    db_or_path: ResultsDB | str | Path | None = None,
+    *,
+    zip_paths: Sequence[str | Path] | None = None,
+    replay_zip_dir: str | Path | None = None,
+    output=print,
+) -> int:
+    """Populate canonical remote replay observations into a DB or DB path."""
+
+    owns_db = not isinstance(db_or_path, ResultsDB)
+    db = (
+        db_or_path
+        if isinstance(db_or_path, ResultsDB)
+        else ResultsDB(db_or_path)
+    )
+    replay_root = (
+        Path(replay_zip_dir)
+        if replay_zip_dir is not None
+        else ROOT / "data" / "bc_replay_zip"
+    )
+    sources = (
+        sorted((Path(path) for path in zip_paths), key=lambda path: str(path))
+        if zip_paths is not None
+        else sorted(replay_root.glob("*.zip"))
+    )
+    if not sources:
+        if owns_db:
+            db.close()
+        raise FileNotFoundError(f"no replay ZIPs found under {replay_root}")
+
+    total = 0
+    try:
+        for archive in sources:
+            if not archive.is_file():
+                raise FileNotFoundError(f"replay ZIP does not exist: {archive}")
+            count = process_zip(db, archive, archive_date=archive.stem)
+            total += count
+            output(f"  {archive.stem}: {count} episodes processed")
+        output(f"\nTotal: {total} episodes processed")
+        output("Computing card Elo...")
+        db.compute_card_elo(source="remote")
+        output("Computing deck Elo...")
+        db.compute_deck_elo(source="remote")
+        return total
+    finally:
+        if owns_db:
+            db.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--date", help="Single date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--range", nargs=2, metavar=("START", "END"), help="Date range"
+    )
+    args = parser.parse_args()
 
     zip_dir = ROOT / "data" / "bc_replay_zip"
-    dates = []
     if args.date:
         dates = [args.date]
     elif args.range:
-        dates = [f"2026-{m:02d}-{d:02d}" for m in range(7, 8) for d in range(1, 32)
-                 if f"2026-{m:02d}-{d:02d}" >= args.range[0] and f"2026-{m:02d}-{d:02d}" <= args.range[1]]
+        dates = [
+            f"2026-{month:02d}-{day:02d}"
+            for month in range(7, 8)
+            for day in range(1, 32)
+            if args.range[0]
+            <= f"2026-{month:02d}-{day:02d}"
+            <= args.range[1]
+        ]
     else:
-        dates = sorted([f.stem for f in zip_dir.glob("*.zip")])
+        dates = sorted(file.stem for file in zip_dir.glob("*.zip"))
 
-    db = ResultsDB()
-    total = 0
-    for date in dates:
-        zip_path = zip_dir / f"{date}.zip"
-        if not zip_path.exists():
-            print(f"  {date}: not found, skipping")
-            continue
-        n = process_zip(db, zip_path)
-        total += n
-        print(f"  {date}: {n} episodes processed")
+    selected = []
+    for archive_date in dates:
+        zip_path = zip_dir / f"{archive_date}.zip"
+        if zip_path.exists():
+            selected.append(zip_path)
+        else:
+            print(f"  {archive_date}: not found, skipping")
+    if not selected:
+        print("No replay ZIPs selected.")
+        return
+    with ResultsDB() as db:
+        total = populate_replays(db, zip_paths=selected)
+        if total > 0:
+            print("\nTop 10 cards by Elo:")
+            for card in db.get_top_cards(10):
+                print(f"  {card['name']}: {card['elo']:.0f}")
 
-    print(f"\nTotal: {total} episodes processed")
-
-    if total > 0:
-        print("Computing card Elo...")
-        db.compute_card_elo(source='remote')
-        print("Computing deck Elo...")
-        db.compute_deck_elo(source='remote')
-
-        top = db.get_top_cards(10)
-        print("\nTop 10 cards by Elo:")
-        for c in top:
-            print(f"  {c['name']}: {c['elo']:.0f}")
-
-    db.close()
 
 if __name__ == "__main__":
     main()
