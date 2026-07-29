@@ -3,16 +3,19 @@
 The competition requires main.py and deck.csv at the root of the archive.
 This script also bundles:
   - rl/ (encoder, policy, etc. — needed by main.py)
-  - the MLX checkpoint the agent actually loads (bc_best_mlx_final.pkl)
-  - _vendor/ (MLX unpacked from wheels — the sandbox image has no mlx)
+  - the MLX checkpoint converted strictly to a PyTorch FP16 artifact
+
+The transient training JSON is deliberately excluded. Architecture, encoder
+schema, would-KO inference settings, and training provenance travel inside the
+converted model artifact.
 
 The cg/ SDK is NOT bundled — it's already in the Kaggle sandbox via kaggle_environments.
 
 This is the packaging implementation, driven by `scripts/submit.py`. Use the
 entry point rather than calling it directly:
 
-    uv run tcg-build              # -> submission.tar.gz
-    uv run tcg-build --upload     # ...and send it to Kaggle
+    uv run tcg-build --checkpoint model/checkpoint/<model>.pkl
+    uv run tcg-build --checkpoint model/checkpoint/<model>.pkl --upload
 """
 
 import argparse
@@ -21,38 +24,23 @@ import shutil
 import sys
 import tarfile
 import tempfile
-import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AGENT_DIR = os.path.join(ROOT, "agent")
 RL_DIR = os.path.join(ROOT, "rl")
-MODEL_DIR = os.path.join(ROOT, "model")
-WHEELS_DIR = os.path.join(ROOT, "vendor", "wheels")
 REQUIRED = ["main.py", "deck.csv"]
 
-# Checkpoint candidates, in the order agent/main.py searches for them. The
-# archive name must match one of those paths or the agent silently falls back
-# to a random policy.
-CHECKPOINT_CANDIDATES = [
-    (os.path.join(MODEL_DIR, "bc_model", "bc_best_mlx_final.pkl"),
-     "model/bc_model/bc_best_mlx_final.pkl"),
-    (os.path.join(MODEL_DIR, "checkpoint", "bc_best_mlx.pkl"),
-     "model/checkpoint/bc_best_mlx.pkl"),
+# Checkpoint source paths are build-time conventions only. Runtime settings are
+# embedded in the selected checkpoint, never read from train_config.json.
+SOURCE_CHECKPOINT_CANDIDATES = [
+    (os.path.join(ROOT, "model", "bc_model", "bc_best_mlx_final.pkl"),
+     "bc_best_mlx_final.pkl"),
+    (os.path.join(ROOT, "model", "checkpoint", "bc_best_mlx.pkl"),
+     "bc_best_mlx.pkl"),
 ]
-
-# MLX is absent from the Kaggle image (see kaggle_requirements.txt in
-# Kaggle/docker-python), so it ships inside the bundle. Both wheels unpack into
-# the same directory: core.cpython-311-*.so has RUNPATH $ORIGIN/lib pointing at
-# libmlx.so, which in turn has RUNPATH $ORIGIN/../../mlx_cpu.libs for BLAS.
-#
-# Python 3.11 is the sandbox interpreter, observed in a validation episode log
-# on 2026-07-27 (kaggle_environments under /usr/local/lib/python3.11/
-# dist-packages). The binding is version-specific: a cp312 wheel is simply
-# invisible to it. mlx_cpu is py3-none and works with any of them.
-VENDOR_WHEELS = [
-    "mlx-0.32.0-cp311-cp311-manylinux_2_35_x86_64.whl",
-    "mlx_cpu-0.32.0-py3-none-manylinux_2_35_x86_64.whl",
-]
+TORCH_CHECKPOINT_ARC = os.path.join(
+    "model", "bc_model", "bc_best_torch_fp16.pt"
+).replace(os.sep, "/")
 
 
 def _collect_files(base_dir: str, prefix: str) -> list[tuple[str, str]]:
@@ -70,39 +58,17 @@ def _collect_files(base_dir: str, prefix: str) -> list[tuple[str, str]]:
     return files
 
 
-def _unpack_vendor_wheels(dest: str) -> list[tuple[str, str]]:
-    """Unpack the MLX wheels into `dest` and return (abs_path, archive_name) pairs.
-
-    Both wheels extract into the same root so the RUNPATH chain
-    (core.so -> mlx/lib/libmlx.so -> mlx_cpu.libs/) resolves inside the bundle.
-    dist-info metadata is skipped: nothing imports it at runtime.
-    """
-    missing = [w for w in VENDOR_WHEELS if not os.path.exists(os.path.join(WHEELS_DIR, w))]
-    if missing:
-        raise SystemExit(
-            f"ERROR: missing vendored wheel(s) in {WHEELS_DIR}: {missing}\n"
-            "The Kaggle image has no MLX; the agent cannot import without them."
-        )
-
-    for wheel in VENDOR_WHEELS:
-        with zipfile.ZipFile(os.path.join(WHEELS_DIR, wheel)) as zf:
-            for member in zf.namelist():
-                if ".dist-info/" in member or member.endswith("/"):
-                    continue
-                zf.extract(member, dest)
-
-    files = _collect_files(dest, "_vendor")
-    # The .so files lose their executable bit through extract(); harmless for
-    # dlopen, but keep the mode tidy so the archive mirrors a real install.
-    for full, _arc in files:
-        if full.endswith(".so") or ".so." in os.path.basename(full):
-            os.chmod(full, 0o755)
-    return files
-
-
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("-o", "--out", default=os.path.join(ROOT, "submission.tar.gz"))
+    p.add_argument(
+        "--checkpoint",
+        default=None,
+        help=(
+            "Explicit MLX trainer checkpoint to convert. When omitted, use the "
+            "authoritative model/checkpoint directory candidates."
+        ),
+    )
     p.add_argument("--no-validate", action="store_true", help="Skip agent validation")
     args = p.parse_args()
 
@@ -115,20 +81,38 @@ def main() -> None:
     # 2. rl/ directory (encoder, policy, lr_schedule, etc.)
     if os.path.isdir(RL_DIR):
         for full, arc in _collect_files(RL_DIR, "rl"):
-            files.append((full, arc))
+            # Training remains MLX, but the submitted inference runtime is
+            # PyTorch-only and must not import or ship the MLX policy.
+            if arc != "rl/policy_mlx.py":
+                files.append((full, arc))
     else:
         print("WARNING: rl/ not found — submission may fail on Kaggle")
 
-    # 3. MLX checkpoint, at the path agent/main.py searches for it
-    for src, arc in CHECKPOINT_CANDIDATES:
-        if os.path.exists(src):
-            files.append((src, arc))
-            print(f"Checkpoint: {arc}")
-            break
+    # 3. Resolve the MLX trainer checkpoint that will be converted below.
+    source_checkpoint = None
+    if args.checkpoint:
+        source_checkpoint = os.path.abspath(args.checkpoint)
+        if not os.path.isfile(source_checkpoint):
+            raise SystemExit(
+                f"ERROR: explicit MLX checkpoint does not exist: {source_checkpoint}"
+            )
     else:
+        existing_candidates = []
+        for src, _name in SOURCE_CHECKPOINT_CANDIDATES:
+            if os.path.exists(src):
+                existing_candidates.append(src)
+        if len(existing_candidates) > 1:
+            raise SystemExit(
+                "ERROR: multiple checkpoint candidates exist; refusing to "
+                "guess which model to submit. Pass --checkpoint explicitly:\n  "
+                + "\n  ".join(existing_candidates)
+            )
+        if existing_candidates:
+            source_checkpoint = existing_candidates[0]
+    if source_checkpoint is None:
         raise SystemExit(
             "ERROR: no MLX checkpoint found. Looked for:\n  "
-            + "\n  ".join(src for src, _ in CHECKPOINT_CANDIDATES)
+            + "\n  ".join(src for src, _ in SOURCE_CHECKPOINT_CANDIDATES)
             + "\nWithout it the agent falls back to a random policy."
         )
 
@@ -151,12 +135,23 @@ def main() -> None:
     else:
         print("WARNING: EN_Card_Data.csv not found — agent will fail at runtime")
 
-    # 5. Vendored MLX + tarball, both inside the staging dir's lifetime
-    staging = tempfile.mkdtemp(prefix="ptcg_vendor_")
+    # 5. Convert to the portable FP16 PyTorch artifact, then build the tarball
+    # while the temporary converted file is alive.
+    staging = tempfile.mkdtemp(prefix="ptcg_torch_fp16_")
     try:
-        vendor_files = _unpack_vendor_wheels(staging)
-        files.extend(vendor_files)
-        print(f"Vendored MLX: {len(vendor_files)} files from {len(VENDOR_WHEELS)} wheels")
+        from rl.encoder.card_features import get_card_table
+        from rl.policy_infer_torch import save_torch_inference_checkpoint
+
+        converted = os.path.join(staging, "bc_best_torch_fp16.pt")
+        cfg = save_torch_inference_checkpoint(
+            source_checkpoint, converted, get_card_table()
+        )
+        files.append((converted, TORCH_CHECKPOINT_ARC))
+        print(
+            f"Checkpoint: {os.path.relpath(source_checkpoint, ROOT)} -> "
+            f"{TORCH_CHECKPOINT_ARC} (FP16, nlayers={cfg['nlayers']}, "
+            f"scratch={cfg['scratch_registers']})"
+        )
 
         with tarfile.open(args.out, "w:gz") as tar:
             for full, arc in sorted(files, key=lambda x: x[1]):
@@ -166,12 +161,9 @@ def main() -> None:
 
     size_mb = os.path.getsize(args.out) / (1024 * 1024)
     print(f"Wrote {args.out} ({size_mb:.1f} MB)")
-    n_vendor = sum(1 for _, arc in files if arc.startswith("_vendor/"))
-    print(f"Contents ({len(files)} files, {n_vendor} vendored):")
+    print(f"Contents ({len(files)} files):")
     for _, arc in sorted(files, key=lambda x: x[1]):
-        if not arc.startswith("_vendor/"):
-            print(f"  {arc}")
-    print(f"  _vendor/... ({n_vendor} files)")
+        print(f"  {arc}")
 
     if size_mb > 197.7:
         raise SystemExit(f"\nERROR: submission is {size_mb:.1f} MB (limit is 197.7 MB)")
@@ -187,9 +179,8 @@ def _validate_archive(tar_path: str) -> None:
     layout Kaggle unpacks into /kaggle_simulations/agent/, so a path bug shows
     up here instead of on the ladder.
 
-    The vendored MLX cannot be exercised locally — those wheels are linux
-    x86_64 / cp312 binaries. This checks that they are present and correctly
-    laid out; the agent itself runs against the development MLX.
+    The behavioural check loads the pre-converted PyTorch FP16 artifact from
+    the same flat layout used by the Kaggle sandbox.
     """
     import traceback
 
@@ -205,43 +196,25 @@ def _validate_archive(tar_path: str) -> None:
             "deck.csv",
             "EN_Card_Data.csv",
             "rl/encoder/encoding.py",
-            "rl/policy_mlx.py",
-            # RUNPATH chain: core.so -> mlx/lib/libmlx.so -> mlx_cpu.libs/
-            "_vendor/mlx/lib/libmlx.so",
-            "_vendor/mlx/nn/__init__.py",
+            "rl/policy.py",
+            "rl/policy_infer_torch.py",
+            TORCH_CHECKPOINT_ARC,
         ]
         for rel in expected:
             if not os.path.exists(os.path.join(staging, rel)):
                 raise SystemExit(f"  ERROR: archive is missing {rel}")
-        if not os.path.isdir(os.path.join(staging, "_vendor", "mlx_cpu.libs")):
-            raise SystemExit("  ERROR: archive is missing _vendor/mlx_cpu.libs/")
-
-        # One binding per interpreter version. Checking a single hardcoded
-        # version is what let a cp312-only bundle pass here and then fail on a
-        # Python 3.11 sandbox with ModuleNotFoundError.
-        vendor_mlx = os.path.join(staging, "_vendor", "mlx")
-        bindings = sorted(
-            f for f in os.listdir(vendor_mlx)
-            if f.startswith("core.cpython-") and f.endswith("-x86_64-linux-gnu.so")
+        forbidden = (
+            "rl/policy_mlx.py",
+            "configs/train_config.json",
+            "configs/train_config.schema.json",
+            "_vendor",
         )
-        expected_versions = {
-            w.split("-cp")[1].split("-")[0] for w in VENDOR_WHEELS if "-cp" in w
-        }
-        found_versions = {b.split("cpython-")[1].split("-")[0] for b in bindings}
-        if found_versions != expected_versions:
-            raise SystemExit(
-                f"  ERROR: vendored bindings {sorted(found_versions)} do not match "
-                f"the wheels declared in VENDOR_WHEELS {sorted(expected_versions)}")
-        print(f"  OK: {len(expected) + 1} required paths present")
-        print(f"  OK: MLX bindings for Python {', '.join(sorted(found_versions))}")
-
-        checkpoints = [
-            arc for _, arc in CHECKPOINT_CANDIDATES
-            if os.path.exists(os.path.join(staging, arc))
-        ]
-        if not checkpoints:
-            raise SystemExit("  ERROR: archive has no checkpoint at a path main.py searches")
-        print(f"  OK: checkpoint at {checkpoints[0]}")
+        for rel in forbidden:
+            if os.path.exists(os.path.join(staging, rel)):
+                raise SystemExit(f"  ERROR: PyTorch-only archive unexpectedly contains {rel}")
+        print(f"  OK: {len(expected)} required paths present")
+        print(f"  OK: checkpoint at {TORCH_CHECKPOINT_ARC}")
+        print("  OK: no MLX policy or vendored MLX runtime")
 
         # Behavioural check: import and play one decision from the extracted copy.
         old_cwd = os.getcwd()

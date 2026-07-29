@@ -51,13 +51,16 @@ def _get_config() -> dict:
         "nhead": 4,
         "nlayers": 3,
         "ff_dim": 512,
-        "n_scratch": 4,
+        "scratch_registers": 16,
         "static": True,
         "split_heads": True,
         "structured": False,
         "max_options": 192,
         "value_categorical": False,
+        "value_atoms": 51,
+        "value_vmax": 1.0,
         "has_learned_init": True,
+        "dtype": "mlx.core.float32",
     }
 
 

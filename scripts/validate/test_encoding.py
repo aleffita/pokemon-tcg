@@ -9,18 +9,37 @@ Validates:
 import json
 import sys
 import os
+import zipfile
+from pathlib import Path
 
 import numpy as np
 from rl.encoder.encoding import TokenEncoder, GameTracker, AbilityTracker, SUBMIT_ACTION, build_mask
 from rl.encoder.card_features import get_card_table
 from rl.encoder.enc_constants import N_STATE_TOKENS, MAX_OPTIONS, N_ACTIONS
 
-REPLAY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "data", "replay", "85966927.json")
+ROOT = Path(__file__).resolve().parents[2]
+REPLAY = ROOT / "data" / "replay" / "85966927.json"
+
+
+def _load_replay():
+    """Load the historical fixture or one real replay from the retained ZIPs."""
+    if REPLAY.is_file():
+        with REPLAY.open(encoding="utf-8") as handle:
+            return json.load(handle)
+    for zip_path in sorted((ROOT / "data" / "bc_replay_zip").glob("*.zip")):
+        with zipfile.ZipFile(zip_path) as archive:
+            member = next(
+                (name for name in archive.namelist() if name.endswith(".json")),
+                None,
+            )
+            if member is not None:
+                return json.loads(archive.read(member))
+    raise FileNotFoundError(
+        f"no replay fixture at {REPLAY} and no replay ZIP under data/bc_replay_zip"
+    )
 
 def main():
-    with open(REPLAY) as f:
-        ep = json.load(f)
+    ep = _load_replay()
 
     print(f"Replay: {ep['info']['Agents'][0]['Name']} vs {ep['info']['Agents'][1]['Name']}")
     print(f"  rewards={ep['rewards']}, steps={len(ep['steps'])}")

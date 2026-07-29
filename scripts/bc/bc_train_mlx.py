@@ -12,12 +12,15 @@ Usage:
 """
 
 import argparse
+import hashlib
+import json
 import os
 import queue
 import shutil
 import threading
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import mlx.core as mx
@@ -42,6 +45,411 @@ from rl.policy_mlx import build_token_net_mlx
 from rl.train_config import load_config
 
 WK_LO, WK_HI = OPT_WK, OPT_WK + 3
+
+
+def _sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _sha256_file(path: str | os.PathLike[str]) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class FP32StateMuon(optim.Muon):
+    """Muon with FP32 momentum and FP16 parameter storage."""
+
+    def init_single(self, parameter: mx.array, state: dict) -> None:
+        state["v"] = mx.zeros(parameter.shape, dtype=mx.float32)
+
+    def apply_single(
+        self, gradient: mx.array, parameter: mx.array, state: dict
+    ) -> mx.array:
+        updated = super().apply_single(
+            gradient.astype(mx.float32), parameter.astype(mx.float32), state
+        )
+        return updated.astype(parameter.dtype)
+
+
+class FP32StateAdamW(optim.AdamW):
+    """AdamW with FP32 moments and FP16 parameter storage."""
+
+    def init_single(self, parameter: mx.array, state: dict) -> None:
+        state["m"] = mx.zeros(parameter.shape, dtype=mx.float32)
+        state["v"] = mx.zeros(parameter.shape, dtype=mx.float32)
+
+    def apply_single(
+        self, gradient: mx.array, parameter: mx.array, state: dict
+    ) -> mx.array:
+        updated = super().apply_single(
+            gradient.astype(mx.float32), parameter.astype(mx.float32), state
+        )
+        return updated.astype(parameter.dtype)
+
+
+class PathSafeMultiOptimizer(optim.MultiOptimizer):
+    """MultiOptimizer merge that supports parameter trees containing lists."""
+
+    def apply_gradients(self, gradients: dict, parameters: dict):
+        merged_leaves = []
+        for optimizer, optimizer_grads in zip(
+            self.optimizers, self._split_dictionary(gradients)
+        ):
+            updated = optimizer.apply_gradients(optimizer_grads, parameters)
+            merged_leaves.extend(nn.utils.tree_flatten(updated))
+        return nn.utils.tree_unflatten(merged_leaves)
+
+
+_ADAMW_PARAMETER_PREFIXES = (
+    "card_emb.",
+    "type_emb.",
+    "sel_type_emb.",
+    "sel_ctx_emb.",
+    "opt_verb_emb.",
+    "attack_emb.",
+    "type_query.",
+    "type_bias.",
+    "opt_head.",
+    "submit_head.",
+    "value_head.",
+)
+
+
+def _use_muon_parameter(path: str, parameter: mx.array) -> bool:
+    """Route only hidden 2D projection/Transformer weights to Muon."""
+    if parameter.ndim != 2 or not path.endswith(".weight"):
+        return False
+    return not path.startswith(_ADAMW_PARAMETER_PREFIXES)
+
+
+def _optimizer_contract(cfg) -> dict:
+    """Return the serializable optimizer identity used for safe resume."""
+    return {
+        "name": cfg.optimizer,
+        "muon_momentum": float(cfg.muon_momentum),
+        "muon_weight_decay": float(cfg.muon_weight_decay),
+        "adamw_betas": [float(value) for value in cfg.adamw_betas],
+        "adamw_eps": float(cfg.adamw_eps),
+        "adamw_weight_decay": float(cfg.adamw_weight_decay),
+        "state_dtype": "float32",
+        "parameter_dtype": "float16",
+        "routing_version": 1,
+    }
+
+
+def _scheduler_contract(cfg, total_steps: int, warmup_steps: int) -> dict:
+    """Return the immutable identity of one scheduler phase."""
+    return {
+        "schedule": cfg.lr_schedule,
+        "base_lr": float(cfg.lr),
+        "warmup_steps": int(warmup_steps),
+        "min_ratio": float(cfg.lr_min_ratio),
+        "total_steps": int(total_steps),
+    }
+
+
+def _build_optimizer(cfg) -> optim.MultiOptimizer:
+    """Build the configured Muon/AdamW optimizer topology."""
+    if cfg.optimizer != "muon_adamw":
+        raise ValueError(f"unsupported optimizer contract: {cfg.optimizer!r}")
+    if len(cfg.adamw_betas) != 2:
+        raise ValueError("adamw_betas must contain exactly two values")
+    muon = FP32StateMuon(
+        learning_rate=cfg.lr,
+        momentum=cfg.muon_momentum,
+        weight_decay=cfg.muon_weight_decay,
+    )
+    adamw = FP32StateAdamW(
+        learning_rate=cfg.lr,
+        betas=[float(value) for value in cfg.adamw_betas],
+        eps=cfg.adamw_eps,
+        weight_decay=cfg.adamw_weight_decay,
+    )
+    return PathSafeMultiOptimizer([muon, adamw], filters=[_use_muon_parameter])
+
+
+def _cross_entropy_sum(logits: mx.array, labels: mx.array) -> mx.array:
+    """Return an FP32 sum so accumulation can normalize exactly once."""
+    return nn.losses.cross_entropy(
+        logits.astype(mx.float32), labels, reduction="sum"
+    ).astype(mx.float32)
+
+
+def _sequential_tbptt_loss(
+    model: nn.Module,
+    observations: dict[str, mx.array],
+    labels: mx.array,
+    memory_in: mx.array | None,
+    decision_lengths: list[int] | None = None,
+) -> tuple[mx.array, mx.array]:
+    """Unroll one temporal lane while advancing memory once per decision."""
+    if decision_lengths is None:
+        decision_lengths = [1] * int(labels.shape[0])
+    return _batched_sequential_tbptt_loss(
+        model,
+        [observations],
+        [labels],
+        [decision_lengths],
+        [memory_in],
+    )
+
+
+def _batched_sequential_tbptt_loss(
+    model: nn.Module,
+    lane_observations: list[dict[str, mx.array]],
+    lane_labels: list[mx.array],
+    lane_decision_lengths: list[list[int]],
+    lane_memory_in: list[mx.array | None],
+    *,
+    return_logits: bool = False,
+):
+    """Unroll independent lanes in parallel without sharing recurrent memory."""
+    lane_count = len(lane_observations)
+    if not (
+        lane_count
+        == len(lane_labels)
+        == len(lane_decision_lengths)
+        == len(lane_memory_in)
+    ):
+        raise ValueError("TBPTT lane inputs must have identical lengths")
+    if lane_count == 0:
+        raise ValueError("TBPTT temporal batches must contain at least one lane")
+
+    for labels, decision_lengths in zip(lane_labels, lane_decision_lengths):
+        if not decision_lengths or any(length <= 0 for length in decision_lengths):
+            raise ValueError("every TBPTT decision must contain at least one row")
+        if sum(decision_lengths) != int(labels.shape[0]):
+            raise ValueError("TBPTT decision lengths do not cover all lane rows")
+
+    loss_sum = mx.array(0.0, dtype=mx.float32)
+    lane_memories = list(lane_memory_in)
+    lane_offsets = [0] * lane_count
+    lane_logits: list[list[mx.array]] = [[] for _ in range(lane_count)]
+    max_decisions = max(len(lengths) for lengths in lane_decision_lengths)
+
+    for decision_index in range(max_decisions):
+        active_lanes = [
+            lane_index
+            for lane_index, lengths in enumerate(lane_decision_lengths)
+            if decision_index < len(lengths)
+        ]
+        decision_observations: list[dict[str, mx.array]] = []
+        decision_labels: list[mx.array] = []
+        repeated_memories: list[mx.array] = []
+        row_counts: list[int] = []
+
+        for lane_index in active_lanes:
+            row_count = lane_decision_lengths[lane_index][decision_index]
+            row_start = lane_offsets[lane_index]
+            row_stop = row_start + row_count
+            decision_observations.append(
+                {
+                    key: value[row_start:row_stop]
+                    for key, value in lane_observations[lane_index].items()
+                }
+            )
+            decision_labels.append(lane_labels[lane_index][row_start:row_stop])
+            memory = lane_memories[lane_index]
+            if memory is None:
+                memory = model.learned_init.reshape(
+                    1, model.scratch_tokens, model.d
+                )
+            repeated_memories.append(
+                mx.broadcast_to(
+                    memory,
+                    (row_count, model.scratch_tokens, model.d),
+                )
+            )
+            row_counts.append(row_count)
+            lane_offsets[lane_index] = row_stop
+
+        combined_observation = {
+            key: mx.concatenate(
+                [observation[key] for observation in decision_observations],
+                axis=0,
+            )
+            for key in decision_observations[0]
+        }
+        combined_labels = mx.concatenate(decision_labels, axis=0)
+        combined_memory = mx.concatenate(repeated_memories, axis=0)
+        logits, _, memory_out = model.logits_value(
+            combined_observation, memory_in=combined_memory
+        )
+        loss_sum = loss_sum + _cross_entropy_sum(logits, combined_labels)
+
+        row_offset = 0
+        for lane_index, row_count in zip(active_lanes, row_counts):
+            if return_logits:
+                lane_logits[lane_index].append(
+                    logits[row_offset : row_offset + row_count]
+                )
+            # Every subrow of one multi-select decision saw the same memory_in.
+            # Commit only the final subrow's output to the next decision.
+            lane_memories[lane_index] = memory_out[
+                row_offset + row_count - 1 : row_offset + row_count
+            ]
+            row_offset += row_count
+
+    if any(memory is None for memory in lane_memories):
+        raise ValueError("every TBPTT lane must advance at least one decision")
+    combined_final_memory = mx.concatenate(
+        [memory for memory in lane_memories if memory is not None],
+        axis=0,
+    )
+    if return_logits:
+        return (
+            loss_sum,
+            combined_final_memory,
+            [mx.concatenate(parts, axis=0) for parts in lane_logits],
+        )
+    return loss_sum, combined_final_memory
+
+
+@dataclass(frozen=True)
+class _TBPTTChunk:
+    """One ordered decision chunk from an episode-side trajectory."""
+
+    group_index: int
+    decisions: tuple[np.ndarray, ...]
+    is_new_group: bool
+
+    @property
+    def row_count(self) -> int:
+        return sum(len(rows) for rows in self.decisions)
+
+
+def _build_tbptt_decision_groups(
+    episode_meta: np.ndarray, train_rows: int
+) -> list[list[np.ndarray]]:
+    """Group ordered rows into decisions, preserving episode and side isolation."""
+    row_groups = _build_tbptt_groups(episode_meta, train_rows)
+    decision_groups: list[list[np.ndarray]] = []
+    step_ids = episode_meta["step_id"]
+    for rows in row_groups:
+        decisions: list[np.ndarray] = []
+        current_rows: list[int] = []
+        current_step = None
+        seen_steps: set[int] = set()
+        for row in rows:
+            step = int(step_ids[int(row)])
+            if current_step is None or step == current_step:
+                current_rows.append(int(row))
+                current_step = step
+                continue
+            if step in seen_steps:
+                raise ValueError(
+                    "episode_meta.step_id is non-contiguous within an episode-side"
+                )
+            seen_steps.add(int(current_step))
+            decisions.append(np.asarray(current_rows, dtype=np.int64))
+            current_rows = [int(row)]
+            current_step = step
+        if current_rows:
+            decisions.append(np.asarray(current_rows, dtype=np.int64))
+        decision_groups.append(decisions)
+    return decision_groups
+
+
+def _build_tbptt_plan(
+    decision_groups: list[list[np.ndarray]],
+    chunk_size: int,
+    row_budget: int,
+) -> list[list[_TBPTTChunk]]:
+    """Pack independent trajectory chunks under an exact row budget."""
+    if chunk_size <= 0:
+        raise ValueError("TBPTT chunk_size must be positive")
+    if row_budget <= 0:
+        raise ValueError("TBPTT row_budget must be positive")
+
+    # A chunk is bounded by both temporal horizon and physical row budget.
+    # Decisions remain indivisible because all autoregressive rows of one
+    # engine decision must read the same memory_in.
+    chunks_by_group: list[list[_TBPTTChunk]] = []
+    for group_index, decisions in enumerate(decision_groups):
+        group_chunks: list[_TBPTTChunk] = []
+        current: list[np.ndarray] = []
+        current_rows = 0
+        for decision in decisions:
+            decision_rows = len(decision)
+            if decision_rows > row_budget:
+                raise ValueError(
+                    "one engine decision exceeds the physical TBPTT row budget: "
+                    f"group={group_index}, rows={decision_rows}, "
+                    f"row_budget={row_budget}. Increase batch_size to at least "
+                    "the largest autoregressive decision."
+                )
+            if current and (
+                len(current) >= chunk_size
+                or current_rows + decision_rows > row_budget
+            ):
+                group_chunks.append(
+                    _TBPTTChunk(
+                        group_index=group_index,
+                        decisions=tuple(current),
+                        is_new_group=(len(group_chunks) == 0),
+                    )
+                )
+                current = []
+                current_rows = 0
+            current.append(decision)
+            current_rows += decision_rows
+        if current:
+            group_chunks.append(
+                _TBPTTChunk(
+                    group_index=group_index,
+                    decisions=tuple(current),
+                    is_new_group=(len(group_chunks) == 0),
+                )
+            )
+        chunks_by_group.append(group_chunks)
+
+    plan: list[list[_TBPTTChunk]] = []
+    max_chunks = max((len(chunks) for chunks in chunks_by_group), default=0)
+    for chunk_index in range(max_chunks):
+        temporal_batch: list[_TBPTTChunk] = []
+        batch_rows = 0
+        for group_chunks in chunks_by_group:
+            if chunk_index >= len(group_chunks):
+                continue
+            chunk = group_chunks[chunk_index]
+            if temporal_batch and batch_rows + chunk.row_count > row_budget:
+                plan.append(temporal_batch)
+                temporal_batch = []
+                batch_rows = 0
+            temporal_batch.append(chunk)
+            batch_rows += chunk.row_count
+            if batch_rows > row_budget:
+                raise AssertionError("TBPTT planner exceeded its physical row budget")
+        if temporal_batch:
+            plan.append(temporal_batch)
+    return plan
+
+
+def _to_fp32_grads(grads):
+    """Materialize gradient leaves in FP32 before accumulation."""
+    return nn.utils.tree_map(
+        lambda gradient: (
+            gradient.astype(mx.float32) if gradient is not None else gradient
+        ),
+        grads,
+    )
+
+
+def _validate_optimizer_state_dtypes(state: dict) -> None:
+    """Reject moment buffers that violate the FP32 optimizer contract."""
+    moments = [
+        value
+        for path, value in nn.utils.tree_flatten(state)
+        if path.endswith(".m") or path.endswith(".v")
+    ]
+    if not moments:
+        raise ValueError("optimizer state contains no moment buffers")
+    invalid = {str(value.dtype) for value in moments if value.dtype != mx.float32}
+    if invalid:
+        raise ValueError(f"optimizer moments must be FP32, found {sorted(invalid)}")
 
 
 def _format_compact_duration(seconds: float | None) -> str:
@@ -73,11 +481,11 @@ def _standard_microbatch_count(
 
 def _build_tbptt_groups(episode_meta: np.ndarray, train_rows: int) -> list[np.ndarray]:
     """Build the exact ordered row groups consumed by the TBPTT generator."""
-    groups: dict[tuple[int, int], list[int]] = defaultdict(list)
+    groups: dict[tuple[str, int], list[int]] = defaultdict(list)
     episode_ids = episode_meta["episode_id"][:train_rows]
     sides = episode_meta["side"][:train_rows]
     for row_index, (episode_id, side) in enumerate(zip(episode_ids, sides)):
-        groups[(int(episode_id), int(side))].append(row_index)
+        groups[(str(episode_id), int(side))].append(row_index)
     return [np.asarray(groups[key], dtype=np.int64) for key in sorted(groups)]
 
 
@@ -177,6 +585,15 @@ def main() -> None:
     p.add_argument("--lr-min-ratio", type=float, default=None)
     p.add_argument("--max-grad-norm", type=float, default=None)
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--optimizer", choices=["muon_adamw"], default=None)
+    p.add_argument("--optimizer-state", choices=["reset", "resume"], default=None)
+    p.add_argument("--scheduler-state", choices=["reset", "resume"], default=None)
+    p.add_argument("--scheduler-total-steps", type=int, default=None)
+    p.add_argument("--muon-momentum", type=float, default=None)
+    p.add_argument("--muon-weight-decay", type=float, default=None)
+    p.add_argument("--adamw-betas", type=float, nargs=2, default=None)
+    p.add_argument("--adamw-eps", type=float, default=None)
+    p.add_argument("--adamw-weight-decay", type=float, default=None)
     p.add_argument(
         "--tbptt-chunk", type=int, default=None, help="TBPTT chunk size (0=disabled)"
     )
@@ -198,15 +615,37 @@ def main() -> None:
     p.add_argument("--log-interval", type=int, default=None)
     # Data
     p.add_argument("--val-frac", type=float, default=None)
+    p.add_argument("--val-batch-size", type=int, default=None)
     p.add_argument("--slab-rows", type=int, default=None)
     p.add_argument(
         "--max-rows", type=int, default=None, help="Max training rows (0=all)"
     )
+    p.add_argument(
+        "--bc-would-ko",
+        type=_bool_arg,
+        default=None,
+        metavar="true|false",
+        help="Require or disable the dataset would-KO contract",
+    )
+    p.add_argument("--bc-wk-nvar", type=int, default=None)
     p.add_argument("--zero-wouldko", action="store_true", default=None)
     p.add_argument("--dedup", action="store_true", default=None)
     # Output
     p.add_argument("--out", default=None)
     p.add_argument("--resume", default=None)
+    p.add_argument(
+        "--phase-id",
+        default=None,
+        help="Stable orchestration phase identity stored in every checkpoint",
+    )
+    p.add_argument(
+        "--export-final",
+        default=None,
+        help=(
+            "Explicitly copy the best checkpoint to this path after the run. "
+            "No implicit model/bc_model write occurs when omitted."
+        ),
+    )
     p.add_argument(
         "--checkpoint-every-epochs",
         type=int,
@@ -237,13 +676,25 @@ def main() -> None:
         "lr_min_ratio": "lr_min_ratio",
         "max_grad_norm": "max_grad_norm",
         "seed": "seed",
+        "optimizer": "optimizer",
+        "optimizer_state": "optimizer_state",
+        "scheduler_state": "scheduler_state",
+        "scheduler_total_steps": "scheduler_total_steps",
+        "muon_momentum": "muon_momentum",
+        "muon_weight_decay": "muon_weight_decay",
+        "adamw_betas": "adamw_betas",
+        "adamw_eps": "adamw_eps",
+        "adamw_weight_decay": "adamw_weight_decay",
         "tbptt_chunk": "tbptt_chunk",
         "compile": "compile",
         "prefetch": "prefetch",
         "log_interval": "log_interval",
         "val_frac": "val_frac",
+        "val_batch_size": "val_batch_size",
         "slab_rows": "slab_rows",
         "max_rows": "max_rows",
+        "bc_would_ko": "bc_would_ko",
+        "bc_wk_nvar": "bc_wk_nvar",
         "checkpoint_every_epochs": "checkpoint_every_epochs",
     }
     cli = {}
@@ -279,11 +730,43 @@ def main() -> None:
         a.max_grad_norm if a.max_grad_norm is not None else cfg.max_grad_norm
     )
     a.seed = a.seed if a.seed is not None else cfg.seed
+    a.optimizer = a.optimizer if a.optimizer is not None else cfg.optimizer
+    a.optimizer_state = (
+        a.optimizer_state if a.optimizer_state is not None else cfg.optimizer_state
+    )
+    a.scheduler_state = (
+        a.scheduler_state if a.scheduler_state is not None else cfg.scheduler_state
+    )
+    a.scheduler_total_steps = (
+        a.scheduler_total_steps
+        if a.scheduler_total_steps is not None
+        else cfg.scheduler_total_steps
+    )
+    a.muon_momentum = (
+        a.muon_momentum if a.muon_momentum is not None else cfg.muon_momentum
+    )
+    a.muon_weight_decay = (
+        a.muon_weight_decay
+        if a.muon_weight_decay is not None
+        else cfg.muon_weight_decay
+    )
+    a.adamw_betas = (
+        a.adamw_betas if a.adamw_betas is not None else cfg.adamw_betas
+    )
+    a.adamw_eps = a.adamw_eps if a.adamw_eps is not None else cfg.adamw_eps
+    a.adamw_weight_decay = (
+        a.adamw_weight_decay
+        if a.adamw_weight_decay is not None
+        else cfg.adamw_weight_decay
+    )
     a.tbptt_chunk = a.tbptt_chunk if a.tbptt_chunk is not None else cfg.tbptt_chunk
     a.compile = a.compile if a.compile is not None else cfg.compile
     a.prefetch = a.prefetch if a.prefetch is not None else cfg.prefetch
     a.log_interval = a.log_interval if a.log_interval is not None else cfg.log_interval
     a.val_frac = a.val_frac if a.val_frac is not None else cfg.val_frac
+    a.val_batch_size = (
+        a.val_batch_size if a.val_batch_size is not None else cfg.val_batch_size
+    )
     a.slab_rows = a.slab_rows if a.slab_rows is not None else cfg.slab_rows
     a.max_rows = a.max_rows if a.max_rows is not None else cfg.max_rows
     a.checkpoint_every_epochs = (
@@ -330,6 +813,67 @@ def main() -> None:
     else:
         z = np.load(a.data)
         d = {k: z[k] for k in z.files}
+
+    dataset_manifest: dict = {}
+    manifest_path = os.path.join(a.data, "dataset_manifest.json") if mmapped else None
+    if manifest_path and os.path.isfile(manifest_path):
+        with open(manifest_path, encoding="utf-8") as handle:
+            dataset_manifest = json.load(handle)
+        if not isinstance(dataset_manifest, dict):
+            raise ValueError("dataset_manifest.json must contain an object")
+    manifest_would_ko = dataset_manifest.get("would_ko")
+    if manifest_would_ko is not None and not isinstance(manifest_would_ko, dict):
+        raise ValueError("dataset manifest would_ko contract must be an object")
+    if manifest_would_ko is not None:
+        dataset_would_ko = bool(manifest_would_ko.get("enabled", False))
+        dataset_would_ko_nvar = int(manifest_would_ko.get("n_var", 0))
+        dataset_would_ko_status = str(
+            manifest_would_ko.get("status", "missing")
+        )
+        if dataset_would_ko != bool(cfg.bc_would_ko):
+            raise ValueError(
+                "training config and dataset disagree on would-KO: "
+                f"config={bool(cfg.bc_would_ko)}, "
+                f"dataset={dataset_would_ko}. Rebuild the dataset with the "
+                "current run sheet."
+            )
+        if dataset_would_ko:
+            if dataset_would_ko_nvar != int(cfg.bc_wk_nvar):
+                raise ValueError(
+                    "training config and dataset disagree on bc_wk_nvar: "
+                    f"config={int(cfg.bc_wk_nvar)}, "
+                    f"dataset={dataset_would_ko_nvar}"
+                )
+            if dataset_would_ko_status != "computed":
+                raise ValueError(
+                    "would-KO dataset is not computation-complete: "
+                    f"status={dataset_would_ko_status!r}"
+                )
+    elif mmapped and bool(cfg.bc_would_ko):
+        raise ValueError(
+            "bc_would_ko=true requires a dataset_manifest.json with a verified "
+            "would_ko contract"
+        )
+    else:
+        # Legacy/unmanifested corpora cannot prove prospective features.
+        dataset_would_ko = False
+        dataset_would_ko_nvar = int(cfg.bc_wk_nvar)
+        dataset_would_ko_status = "unverified-disabled"
+
+    effective_would_ko = bool(dataset_would_ko and not a.zero_wouldko)
+    inference_provenance = (
+        "verified-dataset-manifest"
+        if manifest_would_ko is not None
+        else "unmanifested-corpus-would-ko-disabled"
+    )
+    if a.zero_wouldko:
+        inference_provenance = "explicit-zero-would-ko"
+    if a.zero_wouldko:
+        print(
+            "[bc-train-mlx] would-KO features explicitly zeroed for this run; "
+            "checkpoint inference will disable would-KO",
+            flush=True,
+        )
     N = int(d["__labels__"].shape[0])
 
     # Apply max_rows limit (for smoke testing)
@@ -341,11 +885,7 @@ def main() -> None:
         )
 
     labels = read_rows(d["__labels__"], 0, N)
-    keys = [
-        k
-        for k in d
-        if k not in ("__labels__", "__is_attack__", "__group__", "episode_meta")
-    ]
+    keys = [key for key in d if not key.startswith("__") and key != "episode_meta"]
     obs_np = {k: d[k] for k in keys}
     group_np = d.get("__group__")
 
@@ -368,10 +908,12 @@ def main() -> None:
     # D.4: Episode-level val split (snap to episode boundary if metadata available)
     nval = max(1, int(N * a.val_frac))
     v0 = N - nval
+    episode_meta_all: np.ndarray | None = None
     meta_path = os.path.join(a.data, "episode_meta.npy") if mmapped else None
     if meta_path and os.path.exists(meta_path):
         try:
             meta = np.load(meta_path, mmap_mode="r")
+            episode_meta_all = meta
             new_ep = meta["new_episode"]
             boundaries = np.where(new_ep)[0]
             valid_boundaries = boundaries[boundaries <= N - nval]
@@ -426,6 +968,7 @@ def main() -> None:
     model = build_token_net_mlx(ct, net_cfg)
 
     # Resume from checkpoint
+    state: dict = {}
     start_epoch = 0
     best = 0.0
     gstep = 0
@@ -438,8 +981,8 @@ def main() -> None:
         if isinstance(model_params, dict):
             model.update(model_params)
         start_epoch = int(state.get("epoch", -1)) + 1
-        best = float(state.get("val_acc", 0.0))
-        # Restore gstep for scheduler continuity
+        best = float(state.get("best_val_acc", state.get("val_acc", 0.0)))
+        # Global model-update history is provenance, not scheduler position.
         gstep = int(state.get("gstep", 0))
         # Validate arch_config if present (backward compat with old checkpoints)
         saved_cfg = state.get("arch_config")
@@ -447,13 +990,12 @@ def main() -> None:
             cur_cfg = model.get_config()
             mismatches = []
             for k, v in saved_cfg.items():
-                if k in cur_cfg and cur_cfg[k] != v:
+                if k != "dtype" and k in cur_cfg and cur_cfg[k] != v:
                     mismatches.append(f"{k}: saved={v} current={cur_cfg[k]}")
             if mismatches:
-                print(
-                    f"[bc-train-mlx] WARNING: arch_config mismatch: {', '.join(mismatches)}"
+                raise ValueError(
+                    "checkpoint architecture mismatch: " + ", ".join(mismatches)
                 )
-                print("[bc-train-mlx] proceeding anyway — results may be invalid")
             else:
                 print("[bc-train-mlx] arch_config validated OK")
         else:
@@ -466,6 +1008,17 @@ def main() -> None:
             f"val_acc={best:.4f}, gstep={gstep})"
         )
 
+    # Parameters and forward activations use FP16. Loss, reductions, gradient
+    # accumulation, and optimizer moments are promoted explicitly to FP32.
+    model.set_dtype(mx.float16)
+    mx.eval(model.parameters())
+    parameter_dtypes = {
+        str(parameter.dtype)
+        for _, parameter in nn.utils.tree_flatten(model.parameters())
+    }
+    if parameter_dtypes != {"mlx.core.float16"}:
+        raise RuntimeError(f"model parameters are not strictly FP16: {parameter_dtypes}")
+
     # ``--epochs`` is the number of epochs for THIS invocation. The checkpoint
     # epoch is an absolute history counter used only to continue numbering.
     run_epochs = int(a.epochs)
@@ -477,22 +1030,44 @@ def main() -> None:
         flush=True,
     )
 
-    # Optimizer
-    optimizer = optim.Muon(learning_rate=a.lr)
-
-    # Restore optimizer state if present in checkpoint (C.5)
-    if a.resume:
-        import pickle
-
-        with open(a.resume, "rb") as f:
-            state = pickle.load(f)
+    # Optimizer phase is explicit and independent from model-weight resume.
+    optimizer = _build_optimizer(a)
+    optimizer_contract = _optimizer_contract(a)
+    trainable_leaves = nn.utils.tree_flatten(model.trainable_parameters())
+    muon_parameter_count = sum(
+        parameter.size
+        for path, parameter in trainable_leaves
+        if _use_muon_parameter(path, parameter)
+    )
+    adamw_parameter_count = sum(
+        parameter.size
+        for path, parameter in trainable_leaves
+        if not _use_muon_parameter(path, parameter)
+    )
+    if a.resume and a.optimizer_state == "resume":
+        saved_contract = state.get("optimizer_contract")
+        if saved_contract != optimizer_contract:
+            raise ValueError(
+                "cannot resume optimizer state with a different contract: "
+                f"saved={saved_contract!r}, current={optimizer_contract!r}"
+            )
         saved_opt_state = state.get("optimizer")
-        if saved_opt_state is not None:
-            try:
-                optimizer.state.update(saved_opt_state)
-                print(f"[bc-train-mlx] restored optimizer state from checkpoint")
-            except Exception as e:
-                print(f"[bc-train-mlx] WARNING: could not restore optimizer state: {e}")
+        if saved_opt_state is None:
+            raise ValueError("checkpoint has no optimizer state to resume")
+        optimizer.state = saved_opt_state
+        print("[bc-train-mlx] optimizer phase resumed from checkpoint")
+    else:
+        optimizer.init(model.trainable_parameters())
+        print("[bc-train-mlx] optimizer phase initialized from zero")
+    optimizer.learning_rate = a.lr
+    mx.eval(optimizer.state)
+    _validate_optimizer_state_dtypes(optimizer.state)
+    print(
+        f"[bc-train-mlx] optimizer routing: Muon={muon_parameter_count:,} "
+        f"hidden-matrix params; AdamW={adamw_parameter_count:,} "
+        "embedding/head/vector params",
+        flush=True,
+    )
 
     nparams = sum(p.size for _, p in nn.utils.tree_flatten(model.parameters()))
     tag = (
@@ -511,9 +1086,6 @@ def main() -> None:
     )
 
     # --- batch generator (C.1: FP16-native numeric features) ---
-    # Keys kept in float32 despite being numeric (needed for masking comparisons):
-    _FP32_KEYS = frozenset({"action_mask"})
-
     def batches(
         arrs: dict, grp: np.ndarray | None, base: int, order: np.ndarray, bs: int
     ):
@@ -522,57 +1094,55 @@ def main() -> None:
             ob = {
                 k: mx.array(
                     np.asarray(arrs[k][b]).astype(
-                        np.int32
-                        if k in int_keys
-                        else (np.float32 if k in _FP32_KEYS else np.float16)
+                        np.int32 if k in int_keys else np.float16
                     )
                 )
                 for k in keys
             }
             if a.dedup:
                 gb = mx.array(np.asarray(grp[b]), dtype=mx.int32)
-                canon = (gb == mx.arange(gb.shape[1])[None, :]).astype(mx.float32)
+                canon = (gb == mx.arange(gb.shape[1])[None, :]).astype(mx.float16)
                 ob["action_mask"] = ob["action_mask"] * canon
             if a.zero_wouldko:
                 attr = np.asarray(ob["opt_attr"]).copy()
                 attr[..., WK_LO:WK_HI] = 0.0
-                ob["opt_attr"] = mx.array(attr)
+                ob["opt_attr"] = mx.array(attr, dtype=mx.float16)
             yield ob, mx.array(y[base + b].astype(np.int32))
 
     # --- loss + grad function ---
     grad_fn = mx.value_and_grad(
-        lambda model, ob, yb: nn.losses.cross_entropy(
+        lambda model, ob, yb: _cross_entropy_sum(
             model.logits_value(ob)[0], yb
-        ).mean(),  # logits only for loss
+        ),
         argnums=0,
     )
 
     # F.3: TBPTT loss + grad function (accepts memory, returns memory_out)
-    def _tbptt_loss_fn(model, ob, yb, memory_in):
-        logits, _, memory_out = model.logits_value(ob, memory_in=memory_in)
-        loss = nn.losses.cross_entropy(logits, yb).mean()
-        return loss, memory_out
+    def _tbptt_loss_fn(
+        model, lane_observations, lane_labels, decision_lengths, lane_memory_in
+    ):
+        return _batched_sequential_tbptt_loss(
+            model,
+            lane_observations,
+            lane_labels,
+            decision_lengths,
+            lane_memory_in,
+        )
 
     _tbptt_grad_fn = mx.value_and_grad(_tbptt_loss_fn, argnums=0)
 
-    def tbptt_loss_and_grad(model, ob, yb, memory_in):
+    def tbptt_loss_and_grad(
+        model, lane_observations, lane_labels, decision_lengths, lane_memory_in
+    ):
         """Forward with memory, cross-entropy loss, backward through model params only."""
-        (loss, memory_out), grads = _tbptt_grad_fn(model, ob, yb, memory_in)
+        (loss, memory_out), grads = _tbptt_grad_fn(
+            model,
+            lane_observations,
+            lane_labels,
+            decision_lengths,
+            lane_memory_in,
+        )
         return loss, grads, memory_out
-
-    if a.compile:
-        from functools import partial
-
-        _state = [model.state, optimizer.state]
-
-        @partial(mx.compile, inputs=_state, outputs=_state)
-        def compiled_step(ob, yb):
-            """Compiled forward + backward + update (no clipping — done outside)."""
-            loss, grads = grad_fn(model, ob, yb)
-            optimizer.update(model, grads)
-            return loss, grads
-
-        print(f"[bc-train-mlx] compiled train_step with state capture", flush=True)
 
     # --- exact work plan and optimizer-step schedule (C.4 / F.3) ---
     slab_bounds = [(s, min(s + a.slab_rows, v0)) for s in range(0, v0, a.slab_rows)]
@@ -581,12 +1151,33 @@ def main() -> None:
         a.tbptt_chunk > 0 and tbptt_meta_path and os.path.exists(tbptt_meta_path)
     )
     _tbptt_groups: list[np.ndarray] = []
+    _tbptt_decision_groups: list[list[np.ndarray]] = []
+    _tbptt_plan: list[list[_TBPTTChunk]] = []
+    _val_tbptt_plan: list[list[_TBPTTChunk]] = []
     if _use_tbptt:
         tbptt_meta = np.load(tbptt_meta_path, mmap_mode="r")
         _tbptt_groups = _build_tbptt_groups(tbptt_meta, v0)
-        microbatches_per_epoch = _tbptt_microbatch_count(_tbptt_groups, a.tbptt_chunk)
+        _tbptt_decision_groups = _build_tbptt_decision_groups(tbptt_meta, v0)
+        _tbptt_plan = _build_tbptt_plan(
+            _tbptt_decision_groups,
+            chunk_size=a.tbptt_chunk,
+            row_budget=a.batch,
+        )
+        if episode_meta_all is None:
+            raise ValueError("TBPTT validation requires episode_meta")
+        validation_meta = episode_meta_all[v0:N]
+        validation_decision_groups = _build_tbptt_decision_groups(
+            validation_meta, nval
+        )
+        _val_tbptt_plan = _build_tbptt_plan(
+            validation_decision_groups,
+            chunk_size=a.tbptt_chunk,
+            row_budget=a.val_batch_size,
+        )
+        microbatches_per_epoch = len(_tbptt_plan)
         progress_mode = (
-            f"TBPTT chunks (size<={a.tbptt_chunk}, groups={len(_tbptt_groups):,})"
+            f"TBPTT temporal batches (decisions/chunk<={a.tbptt_chunk}, "
+            f"rows/batch<={a.batch:,}, groups={len(_tbptt_groups):,})"
         )
     else:
         microbatches_per_epoch = _standard_microbatch_count(slab_bounds, a.batch)
@@ -594,13 +1185,72 @@ def main() -> None:
 
     if microbatches_per_epoch <= 0:
         raise ValueError("training split produced no microbatches")
+    compile_active = bool(a.compile and not _use_tbptt)
+    if a.compile and _use_tbptt:
+        print(
+            "[bc-train-mlx] compile disabled for variable-length sequential TBPTT",
+            flush=True,
+        )
 
     optimizer_steps_per_epoch = _ceil_div(microbatches_per_epoch, a.accum_steps)
     run_microbatches = run_epochs * microbatches_per_epoch
     run_optimizer_steps = run_epochs * optimizer_steps_per_epoch
     run_start_gstep = gstep
-    scheduler_total_steps = run_start_gstep + run_optimizer_steps
+    if not a.resume and (
+        a.optimizer_state == "resume" or a.scheduler_state == "resume"
+    ):
+        raise ValueError("phase state cannot be resumed without --resume")
+
+    optimizer_phase_step = (
+        int(state.get("optimizer_phase_step", 0))
+        if a.resume and a.optimizer_state == "resume"
+        else 0
+    )
+    if a.resume and a.scheduler_state == "resume":
+        if "scheduler_phase_step" not in state or "scheduler_total_steps" not in state:
+            raise ValueError("checkpoint has no scheduler phase to resume")
+        scheduler_phase_step = int(state["scheduler_phase_step"])
+        scheduler_total_steps = int(state["scheduler_total_steps"])
+        if (
+            a.scheduler_total_steps > 0
+            and a.scheduler_total_steps != scheduler_total_steps
+        ):
+            raise ValueError(
+                "scheduler_total_steps cannot change while resuming a phase: "
+                f"saved={scheduler_total_steps}, configured={a.scheduler_total_steps}"
+            )
+    else:
+        scheduler_phase_step = 0
+        scheduler_total_steps = (
+            int(a.scheduler_total_steps)
+            if a.scheduler_total_steps > 0
+            else run_optimizer_steps
+        )
+    if scheduler_total_steps <= 0:
+        raise ValueError("scheduler_total_steps must be positive")
+    if (
+        a.resume
+        and a.scheduler_state == "resume"
+        and scheduler_phase_step + run_optimizer_steps > scheduler_total_steps
+    ):
+        raise ValueError(
+            "resumed scheduler phase does not have enough remaining steps: "
+            f"position={scheduler_phase_step}, requested={run_optimizer_steps}, "
+            f"total={scheduler_total_steps}. Reset the scheduler or choose the "
+            "full phase horizon before the original run."
+        )
     warmup_steps = min(a.warmup_steps, max(1, scheduler_total_steps // 5))
+    scheduler_contract = _scheduler_contract(
+        a, scheduler_total_steps, warmup_steps
+    )
+    if a.resume and a.scheduler_state == "resume":
+        saved_scheduler_contract = state.get("scheduler_contract")
+        if saved_scheduler_contract != scheduler_contract:
+            raise ValueError(
+                "cannot resume scheduler phase with a different contract: "
+                f"saved={saved_scheduler_contract!r}, "
+                f"current={scheduler_contract!r}"
+            )
     run_end_epoch = start_epoch + run_epochs
     print(
         f"[bc-train-mlx] global epoch range: {start_epoch + 1}-{run_end_epoch} "
@@ -613,32 +1263,78 @@ def main() -> None:
         f"optimizer_steps/epoch={optimizer_steps_per_epoch:,}; "
         f"run_microbatches={run_microbatches:,}; "
         f"run_optimizer_steps={run_optimizer_steps:,}; "
-        f"gstep={run_start_gstep:,}->{scheduler_total_steps:,}",
+        f"global_step={run_start_gstep:,}->{run_start_gstep + run_optimizer_steps:,}; "
+        f"scheduler_phase={scheduler_phase_step:,}/"
+        f"{scheduler_total_steps:,} ({a.scheduler_state})",
         flush=True,
     )
 
     def _checkpoint_payload(epoch: int, val_acc: float) -> dict:
+        static_features = getattr(model, "_card_feat_np", None)
+        static_contract = None
+        if static_features is not None:
+            static_array = np.asarray(static_features, dtype=np.float16)
+            static_contract = {
+                "dtype": str(static_array.dtype),
+                "shape": list(static_array.shape),
+                "sha256": _sha256_bytes(static_array.tobytes(order="C")),
+                "card_csv_sha256": _sha256_file(ct.csv_path),
+            }
         return {
             "model": model.parameters(),
             "optimizer": optimizer.state,
+            "optimizer_contract": optimizer_contract,
+            "optimizer_phase_step": optimizer_phase_step,
             "arch_config": model.get_config(),
+            "static_card_features": static_features,
+            "static_feature_contract": static_contract,
+            # The JSON config is a transient run sheet. Checkpoints retain the
+            # resolved training provenance and the exact inference contract so
+            # exported agents never consult a possibly changed JSON file.
+            "run_config": {
+                **cfg.to_dict(),
+                "data_path": a.data,
+                "output_path": a.out,
+                "zero_wouldko": bool(a.zero_wouldko),
+            },
+            "inference_config": {
+                "version": 1,
+                "seed": int(a.seed),
+                "bc_would_ko": effective_would_ko,
+                "bc_wk_nvar": int(dataset_would_ko_nvar),
+                "provenance": inference_provenance,
+            },
+            "dataset_manifest": dataset_manifest,
+            "dataset_build_fingerprint": dataset_manifest.get(
+                "build_fingerprint"
+            ),
+            "phase_id": a.phase_id,
             "epoch": epoch,
             "gstep": gstep,
             "val_acc": val_acc,
+            "best_val_acc": best,
             "seed": a.seed,
             "dataset_path": a.data,
             "accum_steps": a.accum_steps,
             "microbatches_per_epoch": microbatches_per_epoch,
             "optimizer_steps_per_epoch": optimizer_steps_per_epoch,
+            "scheduler_phase_step": scheduler_phase_step,
             "scheduler_total_steps": scheduler_total_steps,
+            "scheduler_contract": scheduler_contract,
+            "scheduler_state": a.scheduler_state,
         }
 
     def _save_checkpoint(path: str, epoch: int, val_acc: float) -> None:
         import pickle
 
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "wb") as f:
+        mx.eval(model.parameters(), optimizer.state)
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "wb") as f:
             pickle.dump(_checkpoint_payload(epoch, val_acc), f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
 
     def _periodic_checkpoint_path(epoch: int) -> str:
         out_path = Path(a.out)
@@ -646,6 +1342,12 @@ def main() -> None:
             out_path.with_name(
                 f"{out_path.stem}_epoch_{epoch + 1:04d}{out_path.suffix}"
             )
+        )
+
+    def _latest_checkpoint_path() -> str:
+        out_path = Path(a.out)
+        return str(
+            out_path.with_name(f"{out_path.stem}_latest{out_path.suffix}")
         )
 
     # --- graph-safe gradient clipping (C.3) ---
@@ -663,19 +1365,21 @@ def main() -> None:
         return grads
 
     # --- train step with gradient accumulation (C.2) ---
-    def train_step_accum(
-        ob: dict, yb: mx.array, micro_step: int, accum_steps: int
-    ) -> float:
-        """Forward + backward for one microbatch. Returns loss (Python float)."""
+    def train_step_accum(ob: dict, yb: mx.array):
+        """Forward + backward for one microbatch using an FP32 loss sum."""
         loss, grads = grad_fn(model, ob, yb)
         mx.eval(loss)
         loss_val = float(loss)
-        return loss_val, grads
+        return loss_val, _to_fp32_grads(grads)
 
-    def optimizer_step(grads, accum_steps, n_examples):
+    def optimizer_step(grads, n_examples):
         """Normalize accumulated grads, clip, update optimizer, advance gstep."""
-        nonlocal gstep
+        nonlocal gstep, optimizer_phase_step, scheduler_phase_step
+        if n_examples <= 0:
+            raise ValueError("optimizer steps require at least one example")
         gstep += 1
+        optimizer_phase_step += 1
+        scheduler_phase_step += 1
         # Normalize by total examples (FP32 reduction)
         grads = nn.utils.tree_map(
             lambda g: (g / n_examples) if g is not None else g, grads
@@ -685,7 +1389,7 @@ def main() -> None:
         # LR schedule on optimizer step (C.4)
         if a.lr_schedule != "none":
             optimizer.learning_rate = lr_at(
-                gstep,
+                scheduler_phase_step,
                 scheduler_total_steps,
                 a.lr,
                 a.lr_schedule,
@@ -696,15 +1400,15 @@ def main() -> None:
         mx.eval(model.parameters())
         mx.eval(optimizer.state)
 
-    # Compiled path (no clipping — clipping uses eager which has float() calls)
-    if a.compile:
+    # Compile stable shuffled-batch forward/backward; clipping stays outside.
+    if compile_active:
         from functools import partial
 
         _state = [model.state, optimizer.state]
 
         @partial(mx.compile, inputs=_state, outputs=_state)
         def compiled_step(ob, yb):
-            """Compiled forward + backward (no clipping)."""
+            """Compiled forward + backward; clipping runs after accumulation."""
             loss, grads = grad_fn(model, ob, yb)
             return loss, grads
 
@@ -731,39 +1435,86 @@ def main() -> None:
         q.put(None)
 
     # ---- F.3: TBPTT batch generator ----
-    def _tbptt_batches(chunk_size: int):
-        """Yield the same pre-counted ordered chunks used by the work plan."""
-        for row_indices in _tbptt_groups:
-            # Process this (episode, side) group in chunks
-            # Yield (ob, yb, is_new_group) so trainer can reset memory at group boundary
-            for ci in range(0, len(row_indices), chunk_size):
-                chunk_rows = row_indices[ci : ci + chunk_size]
-                chunk_arr = np.array(chunk_rows, dtype=np.int64)
-                ob = {
-                    k: mx.array(
-                        np.asarray(obs_np[k][chunk_arr]).astype(
-                            np.int32 if k in int_keys else np.float16
+    def _load_temporal_batch(
+        temporal_batch: list[_TBPTTChunk],
+        arrays: dict,
+        *,
+        label_base: int,
+    ):
+        """Materialize one pre-planned temporal batch with lane-local row order."""
+        lane_observations: list[dict[str, mx.array]] = []
+        lane_labels: list[mx.array] = []
+        lane_decision_lengths: list[list[int]] = []
+        lane_rows: list[np.ndarray] = []
+        for chunk in temporal_batch:
+            chunk_arr = np.concatenate(chunk.decisions)
+            lane_rows.append(chunk_arr)
+            lane_observations.append(
+                {
+                    key: mx.array(
+                        np.asarray(arrays[key][chunk_arr]).astype(
+                            np.int32 if key in int_keys else np.float16
                         )
                     )
-                    for k in keys
+                    for key in keys
                 }
-                yb = mx.array(y[chunk_arr].astype(np.int32))
-                yield ob, yb, (ci == 0)  # is_new_group=True for first chunk in group
+            )
+            if a.zero_wouldko:
+                attr = np.asarray(lane_observations[-1]["opt_attr"]).copy()
+                attr[..., WK_LO:WK_HI] = 0.0
+                lane_observations[-1]["opt_attr"] = mx.array(
+                    attr, dtype=mx.float16
+                )
+            lane_labels.append(
+                mx.array(y[label_base + chunk_arr].astype(np.int32))
+            )
+            lane_decision_lengths.append(
+                [len(decision_rows) for decision_rows in chunk.decisions]
+            )
+        return (
+            lane_observations,
+            lane_labels,
+            lane_decision_lengths,
+            lane_rows,
+        )
+
+    def _tbptt_batches():
+        """Yield the exact packed temporal batches used by the work plan."""
+        for temporal_batch in _tbptt_plan:
+            lane_observations, lane_labels, lane_decision_lengths, _ = (
+                _load_temporal_batch(
+                    temporal_batch,
+                    obs_np,
+                    label_base=0,
+                )
+            )
+            yield (
+                temporal_batch,
+                lane_observations,
+                lane_labels,
+                lane_decision_lengths,
+            )
 
     # ---- training loop ----
     _running_loss: float = 0.0
     _running_n: int = 0
-    _compile_pending: bool = a.compile
+    _compile_pending: bool = compile_active
     _micro_count: int = 0
     _accum_grads = None
     _accum_examples: int = 0
     _accum_loss_sum: float = 0.0
-    _tbptt_memory = None  # F.3: persistent memory for TBPTT training
+    _tbptt_memories: dict[int, mx.array] = {}
 
-    validation_batches = _ceil_div(nval, a.batch)
+    validation_batches = (
+        len(_val_tbptt_plan)
+        if _use_tbptt
+        else _ceil_div(nval, a.val_batch_size)
+    )
     train_t0 = time.time()
 
     for ep in range(start_epoch, run_end_epoch):
+        mx.reset_peak_memory()
+        model.train()
         ep_t0: float = time.time()
         ep_step: int = 0  # optimizer steps in this epoch
         ep_micro: int = 0  # microbatches processed in this epoch
@@ -773,7 +1524,7 @@ def main() -> None:
         _accum_grads = None
         _accum_examples = 0
         _accum_loss_sum = 0.0
-        _tbptt_memory = None  # F.3: reset memory at epoch start
+        _tbptt_memories = {}  # reset every episode-side lane at epoch start
         local_epoch = ep - start_epoch + 1
         print(
             f"[bc-train-mlx] === epoch {ep + 1} (run {local_epoch}/{run_epochs}) ===",
@@ -866,27 +1617,39 @@ def main() -> None:
         if _use_tbptt:
             print(
                 f"[bc-train-mlx] F.3: TBPTT enabled "
-                f"(chunk={a.tbptt_chunk}, microbatches={microbatches_per_epoch:,}, "
+                f"(decisions/chunk={a.tbptt_chunk}, row_budget={a.batch:,}, "
+                f"microbatches={microbatches_per_epoch:,}, "
                 f"optimizer_steps={optimizer_steps_per_epoch:,})",
                 flush=True,
             )
 
-        _batch_iter = _tbptt_batches(a.tbptt_chunk) if _use_tbptt else _all_batches()
+        _batch_iter = _tbptt_batches() if _use_tbptt else _all_batches()
 
         for _batch_tuple in _batch_iter:
             optimizer_updated = False
             is_final_microbatch = ep_micro + 1 == microbatches_per_epoch
             if _use_tbptt:
-                ob, yb, is_new_group = _batch_tuple  # TBPTT path: 3-tuple
-                if is_new_group:
-                    _tbptt_memory = None  # reset memory at episode/side boundary
+                (
+                    temporal_batch,
+                    lane_observations,
+                    lane_labels,
+                    lane_decision_lengths,
+                ) = _batch_tuple
+                lane_memory_in = [
+                    (
+                        None
+                        if chunk.is_new_group
+                        else _tbptt_memories[chunk.group_index]
+                    )
+                    for chunk in temporal_batch
+                ]
+                micro_n = sum(len(labels) for labels in lane_labels)
             else:
                 ob, yb = _batch_tuple  # standard path: 2-tuple
-
-            micro_n = len(yb)
+                micro_n = len(yb)
 
             # Forward + backward this microbatch
-            if a.compile and _compile_pending:
+            if compile_active and _compile_pending:
                 print(
                     "[bc-train-mlx]   compiling (first call, may take several minutes)...",
                     end="",
@@ -898,23 +1661,32 @@ def main() -> None:
                 # F.3: TBPTT path uses memory-aware forward
                 if _use_tbptt:
                     loss, grads, mem_out = tbptt_loss_and_grad(
-                        model, ob, yb, _tbptt_memory
+                        model,
+                        lane_observations,
+                        lane_labels,
+                        lane_decision_lengths,
+                        lane_memory_in,
                     )
-                    mx.eval(loss)
+                    grads = _to_fp32_grads(grads)
+                    mx.eval(loss, grads, mem_out)
                     loss_val = float(loss)
-                    # Carry only the last row's memory (last timestep) to next chunk
-                    _tbptt_memory = mx.stop_gradient(mem_out[-1:])
-                    # Additional stop_gradient at accumulation boundary
-                    if _micro_count > 0 and _micro_count % a.accum_steps == 0:
-                        _tbptt_memory = mx.stop_gradient(_tbptt_memory)
+                    detached_memories = mx.stop_gradient(mem_out)
+                    mx.eval(detached_memories)
+                    for lane_index, chunk in enumerate(temporal_batch):
+                        _tbptt_memories[chunk.group_index] = detached_memories[
+                            lane_index : lane_index + 1
+                        ]
                 else:
-                    loss_val, grads = train_step_accum(
-                        ob, yb, _micro_count, a.accum_steps
+                    loss_val, grads = train_step_accum(ob, yb)
+                if not np.isfinite(loss_val):
+                    raise FloatingPointError(
+                        f"non-finite training loss at epoch={ep + 1}, "
+                        f"microbatch={ep_micro + 1}"
                     )
                 if _accum_grads is None:
                     _accum_grads = grads
                     _accum_examples = micro_n
-                    _accum_loss_sum = loss_val * micro_n
+                    _accum_loss_sum = loss_val
                 else:
                     _accum_grads = nn.utils.tree_map(
                         lambda a, b: (
@@ -926,12 +1698,12 @@ def main() -> None:
                         grads,
                     )
                     _accum_examples += micro_n
-                    _accum_loss_sum += loss_val * micro_n
+                    _accum_loss_sum += loss_val
                 _micro_count += 1
 
                 # Accumulate in FP32 for numerical stability
                 if _micro_count % a.accum_steps == 0 or is_final_microbatch:
-                    optimizer_step(_accum_grads, a.accum_steps, _accum_examples)
+                    optimizer_step(_accum_grads, _accum_examples)
                     ep_step += 1
                     optimizer_updated = True
                     _running_loss += _accum_loss_sum
@@ -943,25 +1715,40 @@ def main() -> None:
                 # No accumulation: single microbatch = full step
                 if _use_tbptt:
                     loss, grads, mem_out = tbptt_loss_and_grad(
-                        model, ob, yb, _tbptt_memory
+                        model,
+                        lane_observations,
+                        lane_labels,
+                        lane_decision_lengths,
+                        lane_memory_in,
                     )
-                    mx.eval(loss)
+                    grads = _to_fp32_grads(grads)
+                    mx.eval(loss, grads, mem_out)
                     loss_val = float(loss)
-                    # Carry only the last row's memory (last timestep) to next chunk
-                    _tbptt_memory = mx.stop_gradient(mem_out[-1:])
-                elif a.compile and a.max_grad_norm <= 0:
+                    detached_memories = mx.stop_gradient(mem_out)
+                    mx.eval(detached_memories)
+                    for lane_index, chunk in enumerate(temporal_batch):
+                        _tbptt_memories[chunk.group_index] = detached_memories[
+                            lane_index : lane_index + 1
+                        ]
+                elif compile_active:
                     loss, grads = compiled_step(ob, yb)
-                    mx.eval(loss)
+                    grads = _to_fp32_grads(grads)
+                    mx.eval(loss, grads)
                     loss_val = float(loss)
                 else:
                     loss, grads = grad_fn(model, ob, yb)
-                    mx.eval(loss)
+                    grads = _to_fp32_grads(grads)
+                    mx.eval(loss, grads)
                     loss_val = float(loss)
-                grads = clip_grads(grads, a.max_grad_norm)
-                optimizer_step(grads, 1, micro_n)
+                if not np.isfinite(loss_val):
+                    raise FloatingPointError(
+                        f"non-finite training loss at epoch={ep + 1}, "
+                        f"microbatch={ep_micro + 1}"
+                    )
+                optimizer_step(grads, micro_n)
                 ep_step += 1
                 optimizer_updated = True
-                _running_loss += loss_val * micro_n
+                _running_loss += loss_val
                 _running_n += micro_n
 
             ep_micro += 1
@@ -969,7 +1756,12 @@ def main() -> None:
                 print(f" done ({time.time() - _compile_t:.0f}s)", flush=True)
                 _compile_pending = False
 
-            avg = _running_loss / max(_running_n, 1)
+            # Include the current, not-yet-stepped accumulation window so the
+            # displayed loss never drops to a misleading 0.0000 between
+            # optimizer updates.
+            display_loss_sum = _running_loss + _accum_loss_sum
+            display_examples = _running_n + _accum_examples
+            avg = display_loss_sum / max(display_examples, 1)
             elapsed_s = time.time() - ep_t0
             microbatches_left = max(0, microbatches_per_epoch - ep_micro)
             train_eta_s = (elapsed_s / max(ep_micro, 1)) * microbatches_left
@@ -1018,7 +1810,8 @@ def main() -> None:
         print(
             f"[bc-train-mlx] training complete: epoch {ep + 1}, "
             f"microbatches={ep_micro:,}, optimizer_steps={ep_step:,}, "
-            f"gstep={gstep:,}; starting validation",
+            f"gstep={gstep:,}; peak_memory={mx.get_peak_memory() / (1024 ** 3):.2f} GiB; "
+            "starting validation",
             flush=True,
         )
         _progress_bar.reset(
@@ -1041,30 +1834,100 @@ def main() -> None:
         am_all: list[np.ndarray] = []
         vloss: float = 0.0
         tot: int = 0
-        for val_batch, (ob, yb) in enumerate(
-            batches(val_np, gv_np, v0, np.arange(nval), a.batch),
-            start=1,
-        ):
-            lg, _, _ = model.logits_value(ob)
-            lg_np = np.asarray(lg)
-            yb_np = np.asarray(yb)
-            # Proper cross-entropy: -(logit[label] - logsumexp(logits))
-            logsumexp = np.logaddexp.reduce(lg_np, axis=1)
-            ce = -(lg_np[np.arange(len(yb_np)), yb_np] - logsumexp)
-            vloss += float(ce.mean()) * len(yb_np)
-            tot += len(yb_np)
-            top3 = np.argsort(-lg_np, axis=1)[:, :3]
-            correct = np.argmax(lg_np, axis=1) == yb_np
-            in_top3 = np.array([yb_np[i] in top3[i] for i in range(len(yb_np))])
-            preds.append(
-                np.stack([correct.astype(float), in_top3.astype(float)], axis=1)
-            )
-            am_all.append(np.argmax(lg_np, axis=1))
-            _progress_bar.update(
-                _progress_task,
-                completed=val_batch,
-                unit=f"batch {val_batch:,}/{validation_batches:,}",
-            )
+        if _use_tbptt:
+            validation_memories: dict[int, mx.array] = {}
+            validation_rows: list[np.ndarray] = []
+            validation_logits: list[np.ndarray] = []
+            for val_batch, temporal_batch in enumerate(
+                _val_tbptt_plan, start=1
+            ):
+                (
+                    lane_observations,
+                    lane_labels,
+                    lane_decision_lengths,
+                    lane_rows,
+                ) = _load_temporal_batch(
+                    temporal_batch,
+                    val_np,
+                    label_base=v0,
+                )
+                lane_memory_in = [
+                    (
+                        None
+                        if chunk.is_new_group
+                        else validation_memories[chunk.group_index]
+                    )
+                    for chunk in temporal_batch
+                ]
+                _, memory_out, lane_logits = _batched_sequential_tbptt_loss(
+                    model,
+                    lane_observations,
+                    lane_labels,
+                    lane_decision_lengths,
+                    lane_memory_in,
+                    return_logits=True,
+                )
+                mx.eval(memory_out, lane_logits)
+                detached_memories = mx.stop_gradient(memory_out)
+                mx.eval(detached_memories)
+                for lane_index, chunk in enumerate(temporal_batch):
+                    validation_memories[chunk.group_index] = detached_memories[
+                        lane_index : lane_index + 1
+                    ]
+                    validation_rows.append(lane_rows[lane_index])
+                    validation_logits.append(
+                        np.asarray(lane_logits[lane_index], dtype=np.float32)
+                    )
+                _progress_bar.update(
+                    _progress_task,
+                    completed=val_batch,
+                    unit=f"temporal {val_batch:,}/{validation_batches:,}",
+                )
+
+            row_order = np.concatenate(validation_rows)
+            row_permutation = np.argsort(row_order)
+            if not np.array_equal(
+                row_order[row_permutation], np.arange(nval)
+            ):
+                raise RuntimeError(
+                    "temporal validation did not cover every validation row exactly once"
+                )
+            lg_np = np.concatenate(validation_logits, axis=0)[row_permutation]
+            yb_np = y[vi]
+        else:
+            logits_parts: list[np.ndarray] = []
+            for val_batch, (ob, _) in enumerate(
+                batches(
+                    val_np,
+                    gv_np,
+                    v0,
+                    np.arange(nval),
+                    a.val_batch_size,
+                ),
+                start=1,
+            ):
+                lg, _, _ = model.logits_value(ob)
+                logits_parts.append(np.asarray(lg, dtype=np.float32))
+                _progress_bar.update(
+                    _progress_task,
+                    completed=val_batch,
+                    unit=f"batch {val_batch:,}/{validation_batches:,}",
+                )
+            lg_np = np.concatenate(logits_parts, axis=0)
+            yb_np = y[vi]
+
+        # Proper cross-entropy: -(logit[label] - logsumexp(logits))
+        logsumexp = np.logaddexp.reduce(lg_np, axis=1)
+        ce = -(lg_np[np.arange(len(yb_np)), yb_np] - logsumexp)
+        vloss = float(ce.sum())
+        tot = len(yb_np)
+        top3 = np.argsort(-lg_np, axis=1)[:, :3]
+        correct = np.argmax(lg_np, axis=1) == yb_np
+        in_top3 = np.array([yb_np[i] in top3[i] for i in range(len(yb_np))])
+        preds.append(
+            np.stack([correct.astype(float), in_top3.astype(float)], axis=1)
+        )
+        am_all.append(np.argmax(lg_np, axis=1))
 
         _progress_bar.reset(
             _progress_task,
@@ -1105,13 +1968,18 @@ def main() -> None:
             lr=f"{float(optimizer.learning_rate):.2e}",
         )
         # Complete checkpoint: save model, optimizer, arch_config, scheduler, seed (C.5)
-        if acc > best:
-            _save_checkpoint(a.out, ep, acc)
+        is_best = acc > best or not os.path.exists(a.out)
         best = max(best, acc)
+        if is_best:
+            _save_checkpoint(a.out, ep, acc)
 
-        # Also retain periodic snapshots so an interrupted run can resume
-        # close to its latest epoch even when validation accuracy did not
-        # improve. The final epoch is always retained as well.
+        # The rolling latest checkpoint makes an interrupted long run
+        # resumable without creating one file per epoch.
+        latest_path = _latest_checkpoint_path()
+        _save_checkpoint(latest_path, ep, acc)
+
+        # Numbered snapshots are retained at the configured cadence. The final
+        # epoch is always retained as well.
         if local_epoch % a.checkpoint_every_epochs == 0 or ep == run_end_epoch - 1:
             periodic_path = _periodic_checkpoint_path(ep)
             _save_checkpoint(periodic_path, ep, acc)
@@ -1120,6 +1988,10 @@ def main() -> None:
                 f"(epoch {ep + 1}, val_acc={acc:.4f})",
                 flush=True,
             )
+        print(
+            f"[bc-train-mlx] rolling checkpoint: {latest_path}",
+            flush=True,
+        )
 
         ep_time: float = time.time() - ep_t0
         elapsed: float = time.time() - train_t0
@@ -1145,11 +2017,17 @@ def main() -> None:
 
         _progress_bar.stop()
 
-    # Save final best
-    if a.out and os.path.exists(a.out):
-        final_path = "model/bc_model/bc_best_mlx_final.pkl"
-        shutil.copy2(a.out, final_path)
-        print(f"[bc-train-mlx] best checkpoint copied to {final_path}", flush=True)
+    # Export is explicit so smoke runs and alternative training phases cannot
+    # overwrite the submission model as an unrelated side effect.
+    if a.export_final:
+        if not a.out or not os.path.exists(a.out):
+            raise RuntimeError("cannot export final model: best checkpoint is missing")
+        os.makedirs(os.path.dirname(a.export_final) or ".", exist_ok=True)
+        shutil.copy2(a.out, a.export_final)
+        print(
+            f"[bc-train-mlx] best checkpoint exported to {a.export_final}",
+            flush=True,
+        )
     print(
         f"[bc-train-mlx] RESULT: best_val_acc={best:.4f} params={nparams:,} gstep={gstep}",
         flush=True,

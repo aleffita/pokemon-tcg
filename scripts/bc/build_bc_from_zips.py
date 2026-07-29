@@ -18,6 +18,9 @@ and only the remaining episodes are processed.
   uv run tcg-build-bc --config configs/smoke.json OUT ZIP1 [ZIP2 ...]
 """
 import argparse
+from collections import Counter
+from datetime import datetime, timezone
+import hashlib
 import os
 from pathlib import Path
 import sys
@@ -41,6 +44,9 @@ from scripts.bc import build_bc_dataset as B   # B.rows_from_episode (off-by-one
 from rl.train_config import load_config
 sys.argv = _argv
 
+DATASET_MANIFEST_VERSION = 1
+WOULD_KO_HEURISTIC_VERSION = 2
+
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -60,20 +66,39 @@ def parse_args():
     return p.parse_args()
 
 
+def _init_worker(build_config):
+    """Apply the authoritative build config inside every spawned worker."""
+    B.configure(**build_config)
+
+
+def _worker_config_snapshot(_=None):
+    """Small probe used by functional tests to verify spawn propagation."""
+    return B.WOULD_KO, B.WK_NVAR, B.BOTH_SIDES, B.BUILD_SEED
+
+
 def _job(arg):
-    """(zip_path, member) -> (rows, labels, attack, metadata) for that episode; never raises."""
+    """Build one episode and return rows plus explicit audit metadata."""
     zp, name = arg
     try:
         with zipfile.ZipFile(zp) as z:
             ep = json.loads(z.read(name))
         ep_id = os.path.splitext(os.path.basename(name))[0]
         ep_meta = []
+        wk_meta = []
         rows, labs, atk = [], [], []
-        for r, l, ia in B.rows_from_episode(ep, episode_id=ep_id, ep_meta=ep_meta):
+        for r, l, ia in B.rows_from_episode(
+            ep,
+            episode_id=ep_id,
+            ep_meta=ep_meta,
+            would_ko_meta=wk_meta,
+        ):
             rows.append(r); labs.append(l); atk.append(ia)
-        return rows, labs, atk, ep_meta
-    except Exception:
-        return [], [], [], []
+        return rows, labs, atk, ep_meta, wk_meta, {"episode_failures": 0}
+    except Exception as exc:
+        return [], [], [], [], [], {
+            "episode_failures": 1,
+            f"episode_failure_{type(exc).__name__}": 1,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -92,45 +117,121 @@ def _shard_complete(shard_dir, idx):
 def _shard_row_count(shard_dir, idx):
     """Read the row count from a completed shard without loading large arrays."""
     lab_path = os.path.join(_shard_path(shard_dir, idx), "__labels__.npy")
+    if not os.path.exists(lab_path):
+        return 0
     lab = np.load(lab_path)
     n = len(lab)
     del lab
     return n
 
 
-def _flush_shard(shard_dir, shard_idx, rows, labels, attack, int_keys, meta=None):
+def _flush_shard(
+    shard_dir,
+    shard_idx,
+    rows,
+    labels,
+    attack,
+    int_keys,
+    meta=None,
+    would_ko_meta=None,
+    stats=None,
+):
     """Write accumulated rows to a numbered shard directory on disk.
 
     Writes all .npy files first, then a .done marker LAST as an atomic completeness signal.
     If the process crashes mid-flush, the shard lacks .done and will be reprocessed on resume.
     meta: optional list of episode metadata dicts (D.3).
     """
-    if not rows:
-        return 0
     path = _shard_path(shard_dir, shard_idx)
     # clean up any partial shard from a previous crash
     if os.path.isdir(path):
         shutil.rmtree(path)
     os.makedirs(path)
-    for k in rows[0].keys():
-        dt = np.int32 if (k in int_keys or k == "__group__") else np.float32
-        np.save(os.path.join(path, f"{k}.npy"), np.stack([r[k] for r in rows]).astype(dt))
-    np.save(os.path.join(path, "__labels__.npy"), np.array(labels, dtype=np.int64))
-    np.save(os.path.join(path, "__is_attack__.npy"), np.array(attack, dtype=np.int8))
+    if rows:
+        for k in rows[0].keys():
+            dt = np.int32 if (k in int_keys or k == "__group__") else np.float32
+            np.save(
+                os.path.join(path, f"{k}.npy"),
+                np.stack([r[k] for r in rows]).astype(dt),
+            )
+        np.save(
+            os.path.join(path, "__labels__.npy"),
+            np.array(labels, dtype=np.int64),
+        )
+        np.save(
+            os.path.join(path, "__is_attack__.npy"),
+            np.array(attack, dtype=np.int8),
+        )
     # D.3: episode metadata sidecar
     if meta:
-        EP_META = np.dtype([
-            ("episode_id", "U64"),
-            ("side", "i4"),
-            ("step_id", "i4"),
-            ("new_episode", "bool"),
-        ])
-        meta_tuples = [(m["episode_id"], m["side"], m["step_id"], m["new_episode"]) for m in meta]
-        np.save(os.path.join(path, "episode_meta.npy"), np.array(meta_tuples, dtype=EP_META),
-                allow_pickle=False)
+        np.save(
+            os.path.join(path, "episode_meta.npy"),
+            B.episode_meta_array(meta),
+            allow_pickle=False,
+        )
+        np.save(
+            os.path.join(path, "__would_ko_meta__.npy"),
+            B.would_ko_meta_array(meta, would_ko_meta or []),
+            allow_pickle=False,
+        )
+    with open(os.path.join(path, "shard_stats.json"), "w", encoding="utf-8") as fh:
+        json.dump(stats or {}, fh, indent=2, sort_keys=True)
+        fh.write("\n")
     # .done marker LAST — the shard is only valid if this file exists
     open(os.path.join(path, ".done"), "w").close()
     return len(rows)
+
+
+def _shard_stats(shard_dir, idx):
+    path = os.path.join(_shard_path(shard_dir, idx), "shard_stats.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _merge_counts(target, source):
+    for key, value in source.items():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            target[key] = target.get(key, 0) + value
+    return target
+
+
+def _would_ko_stats(decisions):
+    stats = Counter()
+    stats["eligible_decisions"] = len(decisions)
+    for decision in decisions:
+        audit = decision["audit"]
+        stats["eligible_options"] += int(audit.get("eligible_options", 0))
+        stats["requested_trials"] += int(audit.get("requested_trials", 0))
+        stats["valid_trials"] += int(audit.get("valid_trials", 0))
+        stats["failed_trials"] += int(audit.get("failed_trials", 0))
+        for option in audit.get("options", {}).values():
+            stats["computed_options"] += int(bool(option.get("computed", False)))
+            stats["zero_result_options"] += int(bool(option.get("zero_result", False)))
+            stats["failed_options"] += int(not option.get("computed", False))
+            stats["partial_options"] += int(
+                bool(option.get("computed", False)) and int(option.get("failed_trials", 0)) > 0
+            )
+        for key in (
+            "annotation_failures",
+            "search_begin_failures",
+            "simulation_failures",
+            "search_release_failures",
+            "search_end_failures",
+            "resolution_limit_failures",
+            "invalid_subselect_failures",
+            "consistent_determinizations",
+            "best_overlap_determinizations",
+            "consistent_candidates_total",
+            "opponent_synthetic_cards",
+            "self_synthetic_cards",
+            "resolved_subselects",
+            "resolved_subselect_choices",
+            "ambiguous_subselects",
+        ):
+            stats[key] += int(audit.get(key, 0))
+    return dict(stats)
 
 
 def _discover_shards(shard_dir):
@@ -151,9 +252,23 @@ def _merge_shards(shard_dir, out_path, n_shards):
     only one key's worth of shard data is in memory at any point.
     episode_meta.npy (D.3 structured dtype) is handled separately via direct concatenation.
     """
-    s0_path = _shard_path(shard_dir, 0)
-    keys = sorted(f[:-4] for f in os.listdir(s0_path)
-                  if f.endswith(".npy") and f[:-4] != "episode_meta")
+    first_nonempty = next(
+        (
+            _shard_path(shard_dir, index)
+            for index in range(n_shards)
+            if os.path.exists(
+                os.path.join(
+                    _shard_path(shard_dir, index), "__labels__.npy"
+                )
+            )
+        ),
+        None,
+    )
+    if first_nonempty is None:
+        raise RuntimeError("all completed dataset shards are empty")
+    keys = sorted(f[:-4] for f in os.listdir(first_nonempty)
+                  if f.endswith(".npy")
+                  and f[:-4] not in ("episode_meta", "__would_ko_meta__"))
 
     shard_rows = []
     for i in range(n_shards):
@@ -163,7 +278,7 @@ def _merge_shards(shard_dir, out_path, n_shards):
     os.makedirs(out_path, exist_ok=True)
 
     for ki, k in enumerate(keys):
-        sample = np.load(os.path.join(s0_path, f"{k}.npy"))
+        sample = np.load(os.path.join(first_nonempty, f"{k}.npy"))
         shape = (total,) + sample.shape[1:]
         dt = sample.dtype
         del sample
@@ -174,7 +289,10 @@ def _merge_shards(shard_dir, out_path, n_shards):
         )
         offset = 0
         for i in range(n_shards):
-            chunk = np.load(os.path.join(_shard_path(shard_dir, i), f"{k}.npy"))
+            chunk_path = os.path.join(_shard_path(shard_dir, i), f"{k}.npy")
+            if not os.path.exists(chunk_path):
+                continue
+            chunk = np.load(chunk_path)
             out_mm[offset:offset + len(chunk)] = chunk
             offset += len(chunk)
             del chunk
@@ -185,19 +303,193 @@ def _merge_shards(shard_dir, out_path, n_shards):
             print(f"[bc-zips]   merged {ki + 1}/{len(keys)} keys ...", flush=True)
 
     # D.3: merge episode metadata (structured dtype, direct concat — no memmap needed)
-    meta_path_0 = os.path.join(_shard_path(shard_dir, 0), "episode_meta.npy")
-    if os.path.exists(meta_path_0):
-        meta_parts = []
-        for i in range(n_shards):
-            p = os.path.join(_shard_path(shard_dir, i), "episode_meta.npy")
-            if os.path.exists(p):
-                meta_parts.append(np.load(p))
+    meta_parts = []
+    for i in range(n_shards):
+        p = os.path.join(_shard_path(shard_dir, i), "episode_meta.npy")
+        if os.path.exists(p):
+            meta_parts.append(np.load(p))
+    if meta_parts:
         meta_merged = np.concatenate(meta_parts, axis=0)
         os.makedirs(out_path, exist_ok=True)
         np.save(os.path.join(out_path, "episode_meta.npy"), meta_merged, allow_pickle=False)
         print(f"[bc-zips]   merged episode_meta ({len(meta_merged)} rows)", flush=True)
 
+    wk_parts = []
+    row_offset = 0
+    for i, shard_rows_count in enumerate(shard_rows):
+        p = os.path.join(_shard_path(shard_dir, i), "__would_ko_meta__.npy")
+        if os.path.exists(p):
+            part = np.load(p)
+            if len(part):
+                part = part.copy()
+                valid_row = part["row_start"] >= 0
+                part["row_start"][valid_row] += row_offset
+                wk_parts.append(part)
+        row_offset += shard_rows_count
+    wk_merged = (
+        np.concatenate(wk_parts, axis=0)
+        if wk_parts
+        else np.empty(0, dtype=B.WOULD_KO_META_DTYPE)
+    )
+    np.save(
+        os.path.join(out_path, "__would_ko_meta__.npy"),
+        wk_merged,
+        allow_pickle=False,
+    )
+    print(
+        f"[bc-zips]   merged would_ko_meta ({len(wk_merged)} attack options)",
+        flush=True,
+    )
+
     return total
+
+
+def _sha256(path, chunk_size=1024 * 1024):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while chunk := fh.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _collect_tasks(zip_paths):
+    """Collect replay members once, deduplicating identical episode IDs."""
+    tasks = []
+    seen = {}
+    duplicate_count = 0
+    sources = []
+    for zip_path in zip_paths:
+        zip_path = Path(zip_path)
+        source = {
+            "path": str(zip_path),
+            "size_bytes": zip_path.stat().st_size,
+            "sha256": _sha256(zip_path),
+            "json_members": 0,
+        }
+        with zipfile.ZipFile(zip_path) as archive:
+            for info in archive.infolist():
+                if not info.filename.endswith(".json"):
+                    continue
+                source["json_members"] += 1
+                episode_id = os.path.splitext(os.path.basename(info.filename))[0]
+                identity = (int(info.CRC), int(info.file_size))
+                previous = seen.get(episode_id)
+                if previous is None:
+                    seen[episode_id] = identity
+                    tasks.append((zip_path, info.filename))
+                elif previous == identity:
+                    duplicate_count += 1
+                else:
+                    raise ValueError(
+                        f"episode id collision with different content: {episode_id}"
+                    )
+        sources.append(source)
+    return tasks, sources, {
+        "strategy": "episode_id_with_crc_and_size_collision_guard",
+        "unique_episodes": len(tasks),
+        "identical_duplicates_removed": duplicate_count,
+    }
+
+
+def _write_json(path, payload):
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+
+def _build_contract(cfg, config_path, sources, dedup):
+    relevant_config = {
+        "bc_would_ko": bool(cfg.bc_would_ko),
+        "bc_wk_nvar": int(cfg.bc_wk_nvar),
+        "bc_both_sides": bool(cfg.bc_both_sides),
+        "seed": int(cfg.seed),
+        "max_episodes": int(cfg.max_episodes),
+        "bc_flush": int(cfg.bc_flush),
+        "self_aliases": sorted(cfg.bc_self_aliases),
+    }
+    payload = {
+        "manifest_version": DATASET_MANIFEST_VERSION,
+        "builder": "scripts/bc/build_bc_from_zips.py",
+        "would_ko_heuristic_version": WOULD_KO_HEURISTIC_VERSION,
+        "config_source": str(config_path),
+        "config": relevant_config,
+        "sources": sources,
+        "deduplication": dedup,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    payload["build_fingerprint"] = hashlib.sha256(canonical).hexdigest()
+    return payload
+
+
+def _prepare_resume_manifest(shard_dir, contract):
+    os.makedirs(shard_dir, exist_ok=True)
+    path = os.path.join(shard_dir, "build_contract.json")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            old = json.load(fh)
+        if old.get("build_fingerprint") != contract["build_fingerprint"]:
+            raise RuntimeError(
+                "existing shards were built with a different config/source contract; "
+                "refusing an unsafe resume"
+            )
+    else:
+        if _shard_complete(shard_dir, 0):
+            raise RuntimeError(
+                "existing shards have no build contract; refusing an unauditable resume"
+            )
+        _write_json(path, contract)
+
+
+def _validate_would_ko_dataset(out_dir, enabled, stats):
+    """Validate would-KO execution without treating a valid zero as a failure."""
+    if not enabled:
+        return "disabled"
+    eligible = int(stats.get("eligible_options", 0))
+    computed = int(stats.get("computed_options", 0))
+    valid_trials = int(stats.get("valid_trials", 0))
+    if eligible <= 0:
+        raise RuntimeError(
+            "bc_would_ko=true but the selected corpus produced no eligible attack options"
+        )
+    if computed <= 0 or valid_trials <= 0:
+        raise RuntimeError(
+            "bc_would_ko=true but no would-KO option was successfully computed"
+        )
+
+    wk_path = os.path.join(out_dir, "__would_ko_meta__.npy")
+    opt_path = os.path.join(out_dir, "opt_attr.npy")
+    if not os.path.exists(wk_path) or not os.path.exists(opt_path):
+        raise RuntimeError("would-KO metadata or opt_attr is missing from the built dataset")
+    wk = np.load(wk_path, mmap_mode="r")
+    opt = np.load(opt_path, mmap_mode="r")
+    if int(np.count_nonzero(wk["computed"])) != computed:
+        raise RuntimeError("would-KO manifest counters disagree with __would_ko_meta__.npy")
+
+    from rl.encoder.enc_constants import OPT_WK
+    for record in wk:
+        row_start = int(record["row_start"])
+        row_count = int(record["row_count"])
+        option_index = int(record["option_index"])
+        if row_start < 0 or row_count <= 0:
+            raise RuntimeError("would-KO record is not linked to dataset rows")
+        if option_index < 0 or option_index >= opt.shape[1]:
+            continue
+        values = np.asarray(
+            opt[row_start:row_start + row_count, option_index, OPT_WK:OPT_WK + 3],
+            dtype=np.float32,
+        )
+        if not np.isfinite(values).all():
+            raise RuntimeError("would-KO features contain NaN or infinity")
+        if (values < 0).any() or (values > 1).any():
+            raise RuntimeError("would-KO normalized features are outside [0, 1]")
+        if not bool(record["computed"]) and np.any(values != 0):
+            raise RuntimeError("failed would-KO computation contains non-zero features")
+        if bool(record["zero_result"]) and np.any(values != 0):
+            raise RuntimeError("would-KO zero-result audit disagrees with encoded features")
+    del wk, opt
+    return "computed"
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +512,6 @@ def main():
     cfg = load_config(cli_overrides=cli, config_path=args.config)
 
     # Resolve output dir and zips from config defaults
-    from datetime import datetime
     OUT = args.out or os.path.join(cfg.data_dir, f"bc_{datetime.now().strftime('%Y_%m_%d')}")
     if args.zips:
         ZIPS = [Path(z) for z in args.zips]
@@ -235,15 +526,21 @@ def main():
     CAP = cfg.max_episodes
     FLUSH = cfg.bc_flush
     TIMEOUT = float(cfg.bc_ep_timeout)
-    # Configure build_bc_dataset from config
-    B.configure(bc_would_ko=cfg.bc_would_ko, bc_wk_nvar=cfg.bc_wk_nvar, bc_both_sides=cfg.bc_both_sides)
+    # Configure the coordinator and pass the exact same authoritative values to
+    # every spawned worker through Pool(initializer=...).
+    build_config = {
+        "bc_would_ko": cfg.bc_would_ko,
+        "bc_wk_nvar": cfg.bc_wk_nvar,
+        "bc_both_sides": cfg.bc_both_sides,
+        "seed": cfg.seed,
+        "self_aliases": cfg.bc_self_aliases,
+    }
+    B.configure(**build_config)
 
-    tasks = []
-    for zp in ZIPS:
-        with zipfile.ZipFile(zp) as z:
-            tasks.extend((zp, n) for n in z.namelist() if n.endswith(".json"))
+    tasks, source_manifest, dedup_manifest = _collect_tasks(ZIPS)
     if CAP:
         tasks = tasks[:CAP]
+    dedup_manifest["selected_episodes"] = len(tasks)
 
     # Split tasks into fixed-size batches (one batch = one shard)
     n_batches = (len(tasks) + FLUSH - 1) // FLUSH
@@ -251,13 +548,23 @@ def main():
           f"workers={WORKERS}, batch_size={FLUSH}, batches={n_batches}", flush=True)
 
     int_keys = set(B.enc.int_keys)
-    shard_dir = (OUT.rstrip(".npz") if OUT.endswith(".npz") else OUT) + "_shards"
+    shard_dir = (OUT.removesuffix(".npz") if OUT.endswith(".npz") else OUT) + "_shards"
+    config_source = args.config or getattr(cfg, "_config_path", None) or "configs/train_config.json"
+    build_contract = _build_contract(
+        cfg,
+        config_source,
+        source_manifest,
+        dedup_manifest,
+    )
+    _prepare_resume_manifest(shard_dir, build_contract)
 
     # ---- RESUME: count already-completed shards ----
     resumed = 0
     resumed_rows = 0
+    aggregate_stats = {}
     while _shard_complete(shard_dir, resumed):
         resumed_rows += _shard_row_count(shard_dir, resumed)
+        _merge_counts(aggregate_stats, _shard_stats(shard_dir, resumed))
         resumed += 1
     if resumed:
         print(f"[bc-zips] RESUME: found {resumed} completed shards ({resumed_rows} rows), "
@@ -268,7 +575,7 @@ def main():
     skipped = 0
 
     # One Pool for all batches (workers stay warm — no re-import per batch)
-    with Pool(WORKERS) as pool:
+    with Pool(WORKERS, initializer=_init_worker, initargs=(build_config,)) as pool:
         for batch_idx in range(resumed, n_batches):
             batch_start = batch_idx * FLUSH
             batch_end = min(batch_start + FLUSH, len(tasks))
@@ -282,21 +589,29 @@ def main():
             # Submit ONLY this batch to the pool — bounded memory
             asyncs = [pool.apply_async(_job, (t,)) for t in batch]
 
-            buf_rows, buf_labels, buf_attack, buf_meta = [], [], [], []
+            buf_rows, buf_labels, buf_attack, buf_meta, buf_wk_meta = [], [], [], [], []
+            batch_stats = {}
             batch_skipped = 0
             for a in asyncs:
                 try:
-                    r, l, ia, m = a.get(timeout=TIMEOUT)
+                    r, l, ia, m, wk, job_stats = a.get(timeout=TIMEOUT)
                 except Exception:
-                    r, l, ia, m = [], [], [], []; batch_skipped += 1
+                    r, l, ia, m, wk = [], [], [], [], []
+                    job_stats = {"episode_failures": 1, "episode_timeout_or_worker_failures": 1}
+                    batch_skipped += 1
                 buf_rows.extend(r); buf_labels.extend(l); buf_attack.extend(ia); buf_meta.extend(m)
+                buf_wk_meta.extend(wk)
+                _merge_counts(batch_stats, job_stats)
+
+            _merge_counts(batch_stats, _would_ko_stats(buf_wk_meta))
 
             # Flush this batch to disk and free memory
             n = _flush_shard(shard_dir, batch_idx, buf_rows, buf_labels, buf_attack, int_keys,
-                             meta=buf_meta)
+                             meta=buf_meta, would_ko_meta=buf_wk_meta, stats=batch_stats)
             total_rows += n
             skipped += batch_skipped
-            del buf_rows, buf_labels, buf_attack, buf_meta
+            _merge_counts(aggregate_stats, batch_stats)
+            del buf_rows, buf_labels, buf_attack, buf_meta, buf_wk_meta
 
             print(f"[bc-zips]   batch {batch_idx + 1}/{n_batches} "
                   f"(eps {batch_start}-{batch_end - 1}) -> {n} rows "
@@ -309,6 +624,16 @@ def main():
     print(f"[bc-zips] {total_rows} rows from {len(tasks)} episodes in {n_shards} shards", flush=True)
     if total_rows == 0:
         print("[bc-zips] NO ROWS"); return
+    if cfg.bc_would_ko:
+        if int(aggregate_stats.get("eligible_options", 0)) <= 0:
+            raise RuntimeError(
+                "bc_would_ko=true but no eligible attack option was observed; "
+                "the dataset cannot prove the configured feature ran"
+            )
+        if int(aggregate_stats.get("computed_options", 0)) <= 0:
+            raise RuntimeError(
+                "bc_would_ko=true but every eligible option failed computation"
+            )
 
     # ---- merge shards into final output (memory-efficient, one key at a time) ----
     print(f"[bc-zips] merging {n_shards} shards ({total_rows} rows) -> {OUT} ...", flush=True)
@@ -352,10 +677,65 @@ def main():
         ia = np.load(os.path.join(out_dir, "__is_attack__.npy"), mmap_mode="r")
         atk_sum = int(np.sum(ia))
         del am, lab, ia
+        would_ko_status = _validate_would_ko_dataset(
+            out_dir,
+            bool(cfg.bc_would_ko),
+            aggregate_stats,
+        )
         print(f"[bc-zips] wrote {OUT}: {n} rows, masked_rate={masked:.6f} dedup_masked_rate={dmasked:.6f} "
-              f"(both MUST be 0.0); attack_rows={atk_sum} wouldko={'on' if B.WOULD_KO else 'off'}", flush=True)
+              f"(both MUST be 0.0); attack_rows={atk_sum} "
+              f"would_ko_status={would_ko_status} "
+              f"computed_options={int(aggregate_stats.get('computed_options', 0))} "
+              f"zero_result_options={int(aggregate_stats.get('zero_result_options', 0))} "
+              f"failed_options={int(aggregate_stats.get('failed_options', 0))}", flush=True)
     else:
+        would_ko_status = (
+            "computed"
+            if cfg.bc_would_ko and int(aggregate_stats.get("computed_options", 0)) > 0
+            else "disabled"
+        )
         print(f"[bc-zips] wrote {OUT}: {n} rows (.npz self-check skipped)", flush=True)
+
+    completed_manifest = {
+        **build_contract,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "output": {
+            "path": str(OUT),
+            "rows": int(n),
+            "shards": int(n_shards),
+            "dtype_policy": "builder_native_arrays",
+        },
+        "would_ko": {
+            "enabled": bool(cfg.bc_would_ko),
+            "status": would_ko_status,
+            "n_var": int(cfg.bc_wk_nvar),
+            "heuristic_version": WOULD_KO_HEURISTIC_VERSION,
+            "counters": aggregate_stats,
+            "zero_semantics": (
+                "computed=true and zero_result=true means a valid zero; "
+                "computed=false with failed_trials>0 means computation failure"
+            ),
+        },
+        "self_identity": {
+            "aliases": sorted(B.SELF_ALIASES),
+            "storage": "episode_meta.npy:is_self",
+        },
+        "hidden_replay_data": {
+            "deck_storage": (
+                "episode_meta.npy:player_deck_hash,opponent_deck_hash"
+            ),
+            "used_by_would_ko": False,
+            "reason": (
+                "live inference cannot observe the opponent's submitted deck"
+            ),
+        },
+    }
+    manifest_path = (
+        os.path.join(OUT, "dataset_manifest.json")
+        if not OUT.endswith(".npz")
+        else f"{OUT}.manifest.json"
+    )
+    _write_json(manifest_path, completed_manifest)
 
     # ---- cleanup shard temp directory ----
     shutil.rmtree(shard_dir, ignore_errors=True)

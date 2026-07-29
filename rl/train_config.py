@@ -51,7 +51,7 @@ class TrainConfig:
     static: bool = True
     split_heads: bool = True
     structured: bool = False
-    scratch_registers: int = 4
+    scratch_registers: int = 16
 
     # Trainer options
     prefetch: bool = False
@@ -68,12 +68,22 @@ class TrainConfig:
     lr_min_ratio: float = 0.1
     max_grad_norm: float = 1.0
     seed: int = 0
+    optimizer: str = "muon_adamw"
+    optimizer_state: str = "reset"
+    scheduler_state: str = "reset"
+    scheduler_total_steps: int = 0
+    muon_momentum: float = 0.95
+    muon_weight_decay: float = 0.01
+    adamw_betas: list[float] = field(default_factory=lambda: [0.9, 0.999])
+    adamw_eps: float = 1e-8
+    adamw_weight_decay: float = 0.01
 
     # Data
     data_dir: str = "data/bc_data"
     replay_zip_dir: str = "data/bc_replay_zip"
     slab_rows: int = 32768
     val_frac: float = 0.1
+    val_batch_size: int = 128
 
     # Output
     checkpoint_dir: str = "model/checkpoint"
@@ -91,6 +101,9 @@ class TrainConfig:
     bc_would_ko: bool = False
     bc_wk_nvar: int = 10
     bc_both_sides: bool = True
+    bc_self_aliases: list[str] = field(
+        default_factory=lambda: ["FitaLabs", "Alef Oliveira"]
+    )
 
     # Training constraints (0 = all)
     max_episodes: int = 0  # 0 = all episodes (for smoke testing)

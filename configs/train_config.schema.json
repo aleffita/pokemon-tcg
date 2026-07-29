@@ -58,7 +58,7 @@
     },
     "scratch_registers": {
       "type": "integer",
-      "default": 4,
+      "default": 16,
       "description": "Number of scratch/workspace tokens inserted between state and option tokens. Used as inter-decision memory when TBPTT is enabled. Inspired by 'ViTs Need Registers'.",
       "minimum": 0,
       "maximum": 16
@@ -144,6 +144,66 @@
       "default": 0,
       "description": "Random seed for reproducibility. Affects slab shuffling, batch ordering, and validation split."
     },
+    "optimizer": {
+      "type": "string",
+      "default": "muon_adamw",
+      "description": "Optimizer topology. muon_adamw routes eligible hidden 2D weights to Muon and embeddings, output heads, scalar/vector parameters, and remaining leaves to AdamW.",
+      "enum": ["muon_adamw"]
+    },
+    "optimizer_state": {
+      "type": "string",
+      "default": "reset",
+      "description": "Optimizer phase on checkpoint resume. reset preserves model weights but starts fresh Muon/AdamW buffers; resume requires a checkpoint with the identical optimizer contract.",
+      "enum": ["reset", "resume"]
+    },
+    "scheduler_state": {
+      "type": "string",
+      "default": "reset",
+      "description": "Scheduler phase on checkpoint resume. reset starts a session-local phase; resume restores scheduler_phase_step and the checkpoint horizon.",
+      "enum": ["reset", "resume"]
+    },
+    "scheduler_total_steps": {
+      "type": "integer",
+      "default": 0,
+      "description": "Explicit optimizer-step horizon for the scheduler phase. 0 uses the current run optimizer-step count when the scheduler phase resets. A resumed scheduler keeps its checkpoint horizon.",
+      "minimum": 0
+    },
+    "muon_momentum": {
+      "type": "number",
+      "default": 0.95,
+      "description": "Momentum for hidden-matrix Muon updates.",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "muon_weight_decay": {
+      "type": "number",
+      "default": 0.01,
+      "description": "Weight decay for hidden-matrix Muon updates.",
+      "minimum": 0.0
+    },
+    "adamw_betas": {
+      "type": "array",
+      "default": [0.9, 0.999],
+      "description": "AdamW first- and second-moment coefficients for embeddings, heads, and non-matrix parameters.",
+      "prefixItems": [
+        {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        {"type": "number", "minimum": 0.0, "maximum": 1.0}
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "adamw_eps": {
+      "type": "number",
+      "default": 1e-8,
+      "description": "AdamW numerical stability epsilon.",
+      "exclusiveMinimum": 0.0
+    },
+    "adamw_weight_decay": {
+      "type": "number",
+      "default": 0.01,
+      "description": "AdamW decoupled weight decay.",
+      "minimum": 0.0
+    },
     "slab_rows": {
       "type": "integer",
       "default": 32768,
@@ -157,6 +217,13 @@
       "description": "Fraction of data reserved for validation. Split falls on episode boundary when episode_meta.npy exists.",
       "minimum": 0.01,
       "maximum": 0.5
+    },
+    "val_batch_size": {
+      "type": "integer",
+      "default": 128,
+      "description": "Maximum encoded rows packed into one validation temporal batch. Validation preserves recurrent episode-side lanes and multi-select decision boundaries.",
+      "minimum": 1,
+      "maximum": 8192
     },
     "max_rows": {
       "type": "integer",
@@ -243,6 +310,16 @@
       "type": "boolean",
       "default": true,
       "description": "Encode both sides (player 0 and player 1) from each episode. Doubles the data per episode."
+    },
+    "bc_self_aliases": {
+      "type": "array",
+      "default": ["FitaLabs", "Alef Oliveira"],
+      "description": "Known names for this agent in replay metadata. Used only for corpus provenance and analysis; not a model feature or loss target.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
     },
     "value_atoms": {
       "type": "integer",

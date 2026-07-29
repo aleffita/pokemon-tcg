@@ -30,7 +30,7 @@ from rl.token_schema import (
 
 
 # --- Model constants ---
-N_SCRATCH: int = 4        # register/workspace tokens ("ViTs Need Registers")
+N_SCRATCH: int = 16       # register/workspace tokens ("ViTs Need Registers")
 
 
 # ============================================================
@@ -113,7 +113,7 @@ class TokenTransformerMLX(nn.Module):
         self.static_proj: nn.Linear | None = None
         self._card_feat_np: np.ndarray | None = None
         if card_feat is not None:
-            _f = np.zeros((vocab_size + 1, card_feat.shape[1]), dtype=np.float32)
+            _f = np.zeros((vocab_size + 1, card_feat.shape[1]), dtype=np.float16)
             _f[:card_feat.shape[0]] = card_feat
             self._card_feat_np = _f
             self.static_proj = nn.Linear(card_feat.shape[1], d_model)
@@ -165,9 +165,9 @@ class TokenTransformerMLX(nn.Module):
         self.submit_head: nn.Linear = nn.Linear(d_model, 1)
         v_in: int = d_model if split_heads else 2 * d_model
         self.value_categorical: bool = value_categorical
+        self.value_atoms: int = int(value_atoms)
+        self.value_vmax: float = float(value_vmax)
         if value_categorical:
-            self.value_atoms: int = int(value_atoms)
-            self.value_vmax: float = float(value_vmax)
             self.value_head: nn.Linear = nn.Linear(v_in, self.value_atoms)
             # Stored as numpy — invisible to optimizer, domain constant
             self._atom_support_np: np.ndarray = np.linspace(
@@ -186,9 +186,12 @@ class TokenTransformerMLX(nn.Module):
     def _static(self, ids: mx.array) -> mx.array:
         """Static card features projection. Returns zeros if disabled."""
         if self.static_proj is None or self._card_feat_np is None:
-            return mx.zeros((*ids.shape, self.d))
+            return mx.zeros((*ids.shape, self.d), dtype=self.card_emb.weight.dtype)
         # Convert from numpy at lookup time — avoids training the domain table
-        return self.static_proj(mx.array(self._card_feat_np[np.asarray(ids)]))
+        features = mx.array(self._card_feat_np[np.asarray(ids)]).astype(
+            self.static_proj.weight.dtype
+        )
+        return self.static_proj(features)
 
     def _card_emb(self, ids: mx.array) -> mx.array:
         """Embed with padding_idx=0 semantics: id=0 returns zero vector."""
@@ -257,10 +260,10 @@ class TokenTransformerMLX(nn.Module):
         batch_idx = mx.arange(B).reshape(B, 1)  # [B, 1]
         tok = state_seq[batch_idx, safe]          # [B, K, d]
         # Zero out positions where pos < 0
-        valid = (pos >= 0).astype(mx.float32)[..., None]
+        valid = (pos >= 0).astype(tok.dtype)[..., None]
         tok = tok * valid
         # Synthesize card token where pos < 0 but card > 0
-        need = ((pos < 0) & (card > 0)).astype(mx.float32)[..., None]
+        need = ((pos < 0) & (card > 0)).astype(tok.dtype)[..., None]
         synth = (
             self._card_emb(card) + self._static(card)
             + self._type(B, K, T_CARD_SYNTH)
@@ -446,11 +449,16 @@ class TokenTransformerMLX(nn.Module):
 
         # --- D.1: option bucket compaction ---
         if opt_len is None and _os.environ.get("MLX_NO_OPT_BUCKET", "0") != "1":
-            max_legal = int(mx.sum(opt_present, axis=1).max().item())
-            if max_legal > 0:
-                opt_len = max_legal
+            present_extent = mx.where(
+                opt_present,
+                mx.arange(opt_present.shape[1], dtype=mx.int32)[None, :] + 1,
+                mx.zeros((1, opt_present.shape[1]), dtype=mx.int32),
+            )
+            max_present_index = int(present_extent.max().item())
+            if max_present_index > 0:
+                opt_len = max_present_index
                 for bucket in self._OPT_BUCKETS:
-                    if bucket >= max_legal:
+                    if bucket >= max_present_index:
                         opt_len = bucket
                         break
 
@@ -482,14 +490,20 @@ class TokenTransformerMLX(nn.Module):
         ], axis=1)
 
         # --- run Transformer ---
-        # Additive mask: 0 = attend, -1e9 = ignore (matches MLX MHA contract)
-        attn_mask = mx.where(pad[:, None, None, :], -1e9, 0.0)  # [B, 1, 1, S_kv]
+        # Additive FP16 mask: 0 = attend, minimum finite FP16 = ignore.
+        attn_mask = mx.where(
+            pad[:, None, None, :],
+            mx.array(-65504.0, dtype=seq.dtype),
+            mx.array(0.0, dtype=seq.dtype),
+        )  # [B, 1, 1, S_kv]
         enc = self.encoder(seq, mask=attn_mask)
 
         cls_out = enc[:, 0]                    # [B, d]
         opt_out = enc[:, -n_opt:]              # [B, n_opt, d]
-        present = (~pad).astype(mx.float32)[..., None]
-        denom = mx.maximum(present.sum(axis=1), 1.0)
+        present = (~pad).astype(enc.dtype)[..., None]
+        denom = mx.maximum(
+            present.sum(axis=1), mx.array(1.0, dtype=enc.dtype)
+        )
         pooled = (enc * present).sum(axis=1) / denom
         extra = (enc[:, 1], enc[:, 2]) if self.split_heads else None
 
@@ -520,7 +534,10 @@ class TokenTransformerMLX(nn.Module):
             "structured": self.structured,
             "max_options": 192,
             "value_categorical": self.value_categorical,
+            "value_atoms": self.value_atoms,
+            "value_vmax": self.value_vmax,
             "has_learned_init": True,  # F.1: memory API present
+            "dtype": str(self.card_emb.weight.dtype),
         }
 
     def logits_value(
@@ -560,7 +577,11 @@ class TokenTransformerMLX(nn.Module):
         # Pad to full action dim if truncated
         if n < MAX_OPTIONS:
             pad_size = MAX_OPTIONS - n
-            opt_logits = mx.pad(opt_logits, [(0, 0), (0, pad_size)], constant_values=-1e9)
+            opt_logits = mx.pad(
+                opt_logits,
+                [(0, 0), (0, pad_size)],
+                constant_values=mx.array(-65504.0, dtype=opt_logits.dtype),
+            )
 
         # Submit logit
         submit_src = extra[1] if self.split_heads else cls_out
@@ -574,7 +595,8 @@ class TokenTransformerMLX(nn.Module):
         if self.value_categorical:
             atom_logits = self.value_head(v_in)  # [B, n_atoms]
             probs = mx.softmax(atom_logits, axis=-1)
-            value = (probs * mx.array(self._atom_support_np)).sum(axis=-1)  # [B]
+            support = mx.array(self._atom_support_np).astype(atom_logits.dtype)
+            value = (probs * support).sum(axis=-1)  # [B]
         else:
             value = self.value_head(v_in).squeeze(-1)  # [B]
 
@@ -583,7 +605,11 @@ class TokenTransformerMLX(nn.Module):
 
         # Mask illegal options
         action_mask = o["action_mask"]
-        logits = mx.where(action_mask < 0.5, -1e9, logits)
+        logits = mx.where(
+            action_mask < 0.5,
+            mx.array(-65504.0, dtype=logits.dtype),
+            logits,
+        )
 
         return logits, value, scr_out
 
@@ -600,7 +626,8 @@ class TokenTransformerMLX(nn.Module):
         if self.value_categorical:
             atom_logits = self.value_head(v_in)
             probs = mx.softmax(atom_logits, axis=-1)
-            return (probs * mx.array(self._atom_support_np)).sum(axis=-1)
+            support = mx.array(self._atom_support_np).astype(atom_logits.dtype)
+            return (probs * support).sum(axis=-1)
         return self.value_head(v_in).squeeze(-1)
 
     def get_action_and_value(
@@ -639,13 +666,14 @@ def build_token_net_mlx(card_table: CardTable, net_config: dict | None = None) -
     cfg.pop("ff_dim", None)  # always computed as 4 * d_model
     # Pop arch_config keys that aren't constructor args
     for _k in ("arch_version", "token_schema_version", "max_options",
-               "has_learned_init", "value_categorical"):
+               "has_learned_init", "dtype"):
         cfg.pop(_k, None)
     use_static: bool = cfg.pop("static", False)
     use_structured: bool = cfg.pop("structured", False)
     use_split: bool = cfg.pop("split_heads", False)
     cfg.pop("would_ko", None)
     n_scratch: int = cfg.pop("scratch_registers", N_SCRATCH)
+    value_categorical: bool = bool(cfg.pop("value_categorical", False))
     value_atoms: int = cfg.pop("value_atoms", 51)
     value_vmax: float = cfg.pop("value_vmax", 1.0)
     opt_struct: int = cfg.pop("opt_struct", OPT_STRUCT + effect_data.N_ATTACK_FX)
@@ -661,6 +689,7 @@ def build_token_net_mlx(card_table: CardTable, net_config: dict | None = None) -
     return TokenTransformerMLX(
         card_table.vocab_size, card_feat=feat, structured=use_structured,
         split_heads=use_split, n_scratch=n_scratch,
+        value_categorical=value_categorical,
         value_atoms=value_atoms, value_vmax=value_vmax,
         opt_struct=opt_struct, **cfg,
     )

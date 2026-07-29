@@ -37,7 +37,7 @@ _sample_deck = _load_sample_deck()
 if _sample_deck:
     _CANDIDATES.append(_sample_deck)
 try:    # generated archetypes -> match the --decks all+gen training pool (absent in the submission bundle, which stays at the 5 meta decks)
-    from deck.decks_generated import GENERATED
+    from rl.deck.decks_generated import GENERATED
     _CANDIDATES.extend(list(d) for d in GENERATED.values())
 except Exception:
     pass
@@ -70,12 +70,15 @@ def _observed(pl, stadium, owner, with_hand):
     return cnt
 
 
-def _fit(cards, n, full, rng):
-    """Trim/pad a card list to exactly n (pad by sampling the full deck)."""
+def _fit(cards, n, full, rng, audit=None, audit_key=None):
+    """Trim/pad a card list to exactly n and report synthetic fills when requested."""
     cards = list(cards)
     rng.shuffle(cards)
     if len(cards) > n:
         return cards[:n]
+    missing = max(0, n - len(cards))
+    if audit is not None and audit_key is not None:
+        audit[audit_key] = audit.get(audit_key, 0) + missing
     while len(cards) < n and full:
         cards.append(rng.choice(full))
     return cards
@@ -90,7 +93,7 @@ def _basic_pokemon(ids, enc):
     return None
 
 
-def _determinize(obs, deck, rng, enc):
+def _determinize(obs, deck, rng, enc, audit=None):
     """Observation-conditioned PIMC. The opponent's visible cards (discard, board,
     attachments, their stadium) are hard constraints; we infer which known decklist
     is consistent with them and fill the hidden zones from `inferred_deck - observed`.
@@ -105,6 +108,13 @@ def _determinize(obs, deck, rng, enc):
     consistent = [c for c in cands if all(seen[k] <= c[k] for k in seen)]
     if not consistent:                       # off-meta opponent: best-overlap match
         consistent = [max(cands, key=lambda c: sum(min(seen[k], c[k]) for k in seen))]
+        if audit is not None:
+            audit["best_overlap_determinizations"] = audit.get("best_overlap_determinizations", 0) + 1
+    elif audit is not None:
+        audit["consistent_determinizations"] = audit.get("consistent_determinizations", 0) + 1
+        audit["consistent_candidates_total"] = (
+            audit.get("consistent_candidates_total", 0) + len(consistent)
+        )
     D = rng.choice(consistent)               # ensemble across determinizations
     full_opp = list(D.elements())
     rem = []
@@ -114,7 +124,14 @@ def _determinize(obs, deck, rng, enc):
 
     dC = op["deckCount"]; pC = len(op.get("prize") or []); hC = op.get("handCount", 0)
     face = bool(op.get("active") and op["active"][0] is None)
-    rem = _fit(rem, dC + pC + hC + (1 if face else 0), full_opp, rng)
+    rem = _fit(
+        rem,
+        dC + pC + hC + (1 if face else 0),
+        full_opp,
+        rng,
+        audit=audit,
+        audit_key="opponent_synthetic_cards",
+    )
     i = 0
     opp_deck = rem[i:i + dC]; i += dC
     opp_prize = rem[i:i + pC]; i += pC
@@ -131,7 +148,14 @@ def _determinize(obs, deck, rng, enc):
         rem_me += [cid] * max(0, ct - seen_me[cid])
     rng.shuffle(rem_me)
     mdC = mp["deckCount"]; mpC = len(mp.get("prize") or [])
-    rem_me = _fit(rem_me, mdC + mpC, list(deck), rng)
+    rem_me = _fit(
+        rem_me,
+        mdC + mpC,
+        list(deck),
+        rng,
+        audit=audit,
+        audit_key="self_synthetic_cards",
+    )
 
     return dict(
         your_deck=rem_me[:mdC],
@@ -183,7 +207,7 @@ except Exception:
     _WK_ATTACKS = {}
 
 WK_NDET_VAR = 10    # determinizations for a VARIABLE-damage attack (coin/conditional) -> KO probability +
-                    # expected-prizes + win estimates; fixed-damage attacks are deterministic -> 1 sim is exact.
+                    # expected-prizes + win estimates; fixed-damage attacks currently use one sampled hidden state.
 
 
 def _tens(enc, enc_obs):
@@ -295,56 +319,108 @@ def _my_prizes(obs, me) -> int:
     return len(pls[me].get("prize") or []) if 0 <= me < len(pls) else 6
 
 
-def _advance_resolve(api, sid, obs, me):
-    """Net-free: step (first-legal) through our remaining sub-selects until the attack resolves
-    (turn passes to opp / terminal). Used by the would_KO sim -- no net needed, so it runs in
-    env workers during collection."""
+def _advance_resolve(api, sid, obs, me, rng=None, audit=None, max_steps=64):
+    """Resolve post-attack sub-selects with seeded sampling and bounded execution.
+
+    The old implementation always selected the first ``maxCount`` options. That made
+    option ordering an undocumented heuristic. We now choose exactly the required
+    ``minCount`` options, sample them reproducibly when alternatives exist, and expose
+    every such resolution through audit counters.
+    """
+    rng = rng or random.Random()
+    steps = 0
     while obs["current"]["result"] < 0 and obs["current"]["yourIndex"] == me:
+        steps += 1
+        if steps > max_steps:
+            if audit is not None:
+                audit["resolution_limit_failures"] = audit.get("resolution_limit_failures", 0) + 1
+            raise RuntimeError(f"would_ko post-attack resolution exceeded {max_steps} steps")
         sel = obs.get("select") or {}
         opts = sel.get("option") or []
-        k = sel.get("maxCount", 1) or 1
-        pick = list(range(min(k, len(opts)))) if opts else []
+        min_count = int(sel.get("minCount", 1) or 0)
+        max_count = int(sel.get("maxCount", 1) or 0)
+        if min_count < 0 or max_count < min_count or max_count > len(opts):
+            if audit is not None:
+                audit["invalid_subselect_failures"] = audit.get("invalid_subselect_failures", 0) + 1
+            raise ValueError(
+                f"invalid post-attack select bounds min={min_count} max={max_count} options={len(opts)}"
+            )
+        pick = sorted(rng.sample(range(len(opts)), min_count)) if min_count else []
+        if audit is not None:
+            audit["resolved_subselects"] = audit.get("resolved_subselects", 0) + 1
+            audit["resolved_subselect_choices"] = (
+                audit.get("resolved_subselect_choices", 0) + len(pick)
+            )
+            if len(opts) > min_count:
+                audit["ambiguous_subselects"] = audit.get("ambiguous_subselects", 0) + 1
         st = api.search_step(sid, pick)
         sid = st.searchId; obs = dataclasses.asdict(st.observation)
     return sid, obs
 
 
-def would_ko_flags(obs, deck, enc, n_var=WK_NDET_VAR, rng=None, early_stop=False) -> dict:
+def would_ko_flags_with_audit(
+    obs,
+    deck,
+    enc,
+    n_var=WK_NDET_VAR,
+    rng=None,
+    early_stop=False,
+) -> tuple[dict, dict]:
     """Engine-accurate would-KO per ATTACK option: simulate the attack 1 ply on the SDK sim and
     report the KO RATE (we take a prize / win). Net-free + minimal -> usable as a TRAINING FEATURE
     per attack-option (abilities/stadium/weakness/variable all resolved by the real engine).
-    VARIABLE-aware: a fixed-damage attack is deterministic given the visible board -> 1 sim (exact);
+    VARIABLE-aware: a fixed-damage attack currently uses one sampled hidden-state rollout;
     a VARIABLE (coin/conditional) attack is sampled `n_var` times -> KO probability (the engine
     re-rolls each determinization; manual_coin=False auto-flips off the persistent agent_ptr RNG).
     Returns {option_index: (ko_rate, exp_prizes_taken, win_rate)}; {} if no attack options / not a
     MAIN select. exp_prizes_taken (0..6) grades the prize VALUE of the KO (ex=2, mega-ex=3); win_rate
     = P(this move ENDS the game in my favour: I take the last prize OR the opp can't promote)."""
     sel = obs.get("select")
+    audit = {
+        "eligible_options": 0,
+        "requested_trials": 0,
+        "valid_trials": 0,
+        "failed_trials": 0,
+        "options": {},
+    }
     if sel is None or sel.get("type") != 0:
-        return {}
+        return {}, audit
     opts = sel.get("option") or []
     atk = [i for i, o in enumerate(opts) if o.get("attackId") is not None]
     if not atk:
-        return {}
+        return {}, audit
     from cg import api
     me = obs["current"]["yourIndex"]
     p0 = _my_prizes(obs, me)
     rng = rng or random.Random()
     out = {}
+    audit["eligible_options"] = len(atk)
     for a in atk:
         av = _WK_ATTACKS.get(opts[a].get("attackId"))
-        ndet = max(1, n_var) if (av and av[1]) else 1     # variable -> sample prob; fixed -> 1 exact
+        ndet = max(1, n_var) if (av and av[1]) else 1     # variable -> sample rate; fixed -> one rollout
         kos = wins = trials = 0
+        failures = 0
         prize_sum = 0.0
         seen = set()                                       # distinct per-sim (ko,prizes,won) -> early-stop when unanimous
+        audit["requested_trials"] += ndet
         for _ in range(ndet):
             try:
-                ss = api.search_begin(api.to_observation_class(obs), **_determinize(obs, deck, rng, enc))
+                det = _determinize(obs, deck, rng, enc, audit=audit)
+                ss = api.search_begin(api.to_observation_class(obs), **det)
             except Exception:
+                failures += 1
+                audit["search_begin_failures"] = audit.get("search_begin_failures", 0) + 1
                 continue
             try:
                 st = api.search_step(ss.searchId, [a])
-                _, o2 = _advance_resolve(api, st.searchId, dataclasses.asdict(st.observation), me)
+                _, o2 = _advance_resolve(
+                    api,
+                    st.searchId,
+                    dataclasses.asdict(st.observation),
+                    me,
+                    rng=rng,
+                    audit=audit,
+                )
                 trials += 1
                 cur = o2["current"]
                 won = (cur["result"] == me)                # this move ENDS the game in my favour
@@ -355,10 +431,12 @@ def would_ko_flags(obs, deck, enc, n_var=WK_NDET_VAR, rng=None, early_stop=False
                 wins += int(won)
                 if early_stop: seen.add((ko_bit, took, int(won)))
             except Exception:
-                pass
+                failures += 1
+                audit["simulation_failures"] = audit.get("simulation_failures", 0) + 1
             finally:
                 try: api.search_release(ss.searchId)
-                except Exception: pass
+                except Exception:
+                    audit["search_release_failures"] = audit.get("search_release_failures", 0) + 1
             # EARLY-STOP: a determinization-invariant attack (all sims identical) is settled after 3
             # confirmations -> skip the remaining n_var sims (97% of variable attacks are deterministic;
             # the ~3% genuine coin-flips disagree early and run the full n_var, so the rate is unbiased there).
@@ -366,9 +444,40 @@ def would_ko_flags(obs, deck, enc, n_var=WK_NDET_VAR, rng=None, early_stop=False
                 break
         if trials:
             out[a] = (kos / trials, prize_sum / trials, wins / trials)
-    try: api.search_end()
-    except Exception: pass
-    return out
+        audit["valid_trials"] += trials
+        audit["failed_trials"] += failures
+        audit["options"][a] = {
+            "requested_trials": ndet,
+            "valid_trials": trials,
+            "failed_trials": failures,
+            "computed": bool(trials),
+            "zero_result": bool(trials and kos == 0 and prize_sum == 0 and wins == 0),
+        }
+    try:
+        api.search_end()
+    except Exception:
+        audit["search_end_failures"] = audit.get("search_end_failures", 0) + 1
+    return out, audit
+
+
+def would_ko_flags(
+    obs,
+    deck,
+    enc,
+    n_var=WK_NDET_VAR,
+    rng=None,
+    early_stop=False,
+) -> dict:
+    """Compatibility API returning only the three would-KO features per option."""
+    flags, _ = would_ko_flags_with_audit(
+        obs,
+        deck,
+        enc,
+        n_var=n_var,
+        rng=rng,
+        early_stop=early_stop,
+    )
+    return flags
 
 
 def write_would_ko(obs, flags) -> None:
@@ -385,13 +494,48 @@ def write_would_ko(obs, flags) -> None:
             opts[i]["would_ko_win"] = float(win)
 
 
-def annotate_would_ko(obs, deck, enc, n_var=WK_NDET_VAR, rng=None, early_stop=False) -> dict:
+def annotate_would_ko(
+    obs,
+    deck,
+    enc,
+    n_var=WK_NDET_VAR,
+    rng=None,
+    early_stop=False,
+) -> dict:
     """Compute would_ko_flags AND write them onto the attack options (the per-option TRAINING
     feature). Call ONCE per real (root) decision -- in the env at collection AND in the inference
     agent when net_config['would_ko'] -> train==test (both use the default n_var). Returns flags."""
-    flags = would_ko_flags(obs, deck, enc, n_var=n_var, rng=rng, early_stop=early_stop)
+    flags = would_ko_flags(
+        obs,
+        deck,
+        enc,
+        n_var=n_var,
+        rng=rng,
+        early_stop=early_stop,
+    )
     write_would_ko(obs, flags)
     return flags
+
+
+def annotate_would_ko_with_audit(
+    obs,
+    deck,
+    enc,
+    n_var=WK_NDET_VAR,
+    rng=None,
+    early_stop=False,
+) -> tuple[dict, dict]:
+    """Annotate options and return explicit validity/trial/failure metadata."""
+    flags, audit = would_ko_flags_with_audit(
+        obs,
+        deck,
+        enc,
+        n_var=n_var,
+        rng=rng,
+        early_stop=early_stop,
+    )
+    write_would_ko(obs, flags)
+    return flags, audit
 
 
 def mcts_select(obs, net, enc, deck, tracker=None, ability=None,

@@ -1,0 +1,30 @@
+{
+  "train_config": "configs/train_config.json",
+  "replay_zip_dir": "data/bc_replay_zip",
+  "encoded_root": "data/bc_data",
+  "checkpoint": "model/checkpoint/bc_temporal_v2_mlx.pkl",
+  "state_file": "model/checkpoint/train_sequence_state.json",
+  "fresh_start": true,
+  "initial_checkpoint": null,
+  "download_missing": true,
+  "rebuild_encoded": false,
+  "delete_encoded_after_success": true,
+  "min_free_gib": 8,
+  "optimizer_state": "reset",
+  "scheduler_state": "reset",
+  "build": {
+    "workers": 8,
+    "flush": 200,
+    "ep_timeout": 60
+  },
+  "datasets": [
+    {
+      "date": "2026-07-27",
+      "epochs": 10
+    },
+    {
+      "date": "2026-07-28",
+      "epochs": 10
+    }
+  ]
+}

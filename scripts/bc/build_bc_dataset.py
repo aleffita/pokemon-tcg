@@ -12,9 +12,12 @@ maxCount. Deck step (select is None, action == 60 ids) resets the trackers and s
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
+import random
 import sys
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -31,22 +34,171 @@ MAX_EPS = int(sys.argv[3]) if len(sys.argv) > 3 else 0
 WOULD_KO = False
 WK_NVAR = 10
 BOTH_SIDES = True
+BUILD_SEED = 0
+SELF_ALIASES = frozenset({"FitaLabs", "Alef Oliveira"})
 
 ct = get_card_table()
 enc = TokenEncoder(ct)
 
+EPISODE_META_DTYPE = np.dtype([
+    ("episode_id", "U64"),
+    ("side", "i4"),
+    ("step_id", "i4"),
+    ("new_episode", "bool"),
+    ("player_name", "U128"),
+    ("opponent_name", "U128"),
+    ("outcome", "i1"),
+    ("is_self", "bool"),
+    ("player_deck_hash", "U64"),
+    ("opponent_deck_hash", "U64"),
+])
 
-def configure(bc_would_ko=None, bc_wk_nvar=None, bc_both_sides=None):
+WOULD_KO_META_DTYPE = np.dtype([
+    ("episode_id", "U64"),
+    ("side", "i4"),
+    ("step_id", "i4"),
+    ("row_start", "i8"),
+    ("row_count", "i4"),
+    ("option_index", "i4"),
+    ("requested_trials", "i4"),
+    ("valid_trials", "i4"),
+    ("failed_trials", "i4"),
+    ("computed", "bool"),
+    ("zero_result", "bool"),
+    ("consistent_determinizations", "i4"),
+    ("best_overlap_determinizations", "i4"),
+    ("opponent_synthetic_cards", "i4"),
+    ("self_synthetic_cards", "i4"),
+    ("resolved_subselects", "i4"),
+    ("ambiguous_subselects", "i4"),
+    ("error_type", "U64"),
+])
+
+
+def configure(
+    bc_would_ko=None,
+    bc_wk_nvar=None,
+    bc_both_sides=None,
+    seed=None,
+    self_aliases=None,
+):
     """Update module-level config. Called by build_bc_from_zips after loading config."""
-    global WOULD_KO, WK_NVAR, BOTH_SIDES, SA
+    global WOULD_KO, WK_NVAR, BOTH_SIDES, BUILD_SEED, SELF_ALIASES, SA
     if bc_would_ko is not None:
         WOULD_KO = bc_would_ko
     if bc_wk_nvar is not None:
         WK_NVAR = bc_wk_nvar
     if bc_both_sides is not None:
         BOTH_SIDES = bc_both_sides
+    if seed is not None:
+        BUILD_SEED = int(seed)
+    if self_aliases is not None:
+        SELF_ALIASES = frozenset(str(alias) for alias in self_aliases if str(alias))
     if WOULD_KO:
         from rl import search_agent as SA
+
+
+def _decision_seed(episode_id, side, step):
+    """Stable per-decision seed, independent of worker count and scheduling."""
+    material = f"{BUILD_SEED}:{episode_id}:{side}:{step}".encode("utf-8")
+    return int.from_bytes(hashlib.blake2b(material, digest_size=8).digest(), "little")
+
+
+def _player_names(ep):
+    """Return stable side-aligned player names from Kaggle replay metadata."""
+    info = ep.get("info") or {}
+    team_names = info.get("TeamNames")
+    if isinstance(team_names, list) and len(team_names) >= 2:
+        return str(team_names[0] or ""), str(team_names[1] or "")
+    agents = info.get("Agents") or []
+    names = []
+    for side in range(2):
+        agent = agents[side] if side < len(agents) and isinstance(agents[side], dict) else {}
+        names.append(str(agent.get("Name") or agent.get("name") or ""))
+    return names[0], names[1]
+
+
+def _replay_decks(ep):
+    """Extract each side's submitted 60-card deck from the replay when present."""
+    decks = [None, None]
+    for side in range(2):
+        for step in ep.get("steps") or []:
+            if len(step) <= side:
+                continue
+            action = step[side].get("action")
+            if isinstance(action, list) and len(action) == 60:
+                decks[side] = [int(card) for card in action]
+                break
+    return decks
+
+
+def _deck_hash(deck):
+    """Hash a deck multiset for provenance without feeding hidden cards to features."""
+    if not deck:
+        return ""
+    payload = ",".join(str(card) for card in sorted(int(card) for card in deck))
+    return hashlib.sha256(payload.encode("ascii")).hexdigest()
+
+
+def episode_meta_array(meta_list):
+    """Encode row-aligned episode metadata without Python objects."""
+    return np.array([
+        (
+            m["episode_id"],
+            m["side"],
+            m["step_id"],
+            m["new_episode"],
+            m["player_name"],
+            m["opponent_name"],
+            m["outcome"],
+            m["is_self"],
+            m["player_deck_hash"],
+            m["opponent_deck_hash"],
+        )
+        for m in meta_list
+    ], dtype=EPISODE_META_DTYPE)
+
+
+def would_ko_meta_array(meta_list, would_ko_meta):
+    """Encode compact per-attack-option audit records linked to dataset row ranges."""
+    row_ranges = {}
+    for row_index, meta in enumerate(meta_list):
+        key = (str(meta["episode_id"]), int(meta["side"]), int(meta["step_id"]))
+        if key not in row_ranges:
+            row_ranges[key] = [row_index, 0]
+        row_ranges[key][1] += 1
+
+    records = []
+    for decision in would_ko_meta:
+        key = (
+            str(decision["episode_id"]),
+            int(decision["side"]),
+            int(decision["step_id"]),
+        )
+        row_start, row_count = row_ranges.get(key, (-1, 0))
+        audit = decision["audit"]
+        for option_index, option in sorted(audit.get("options", {}).items()):
+            records.append((
+                key[0],
+                key[1],
+                key[2],
+                row_start,
+                row_count,
+                int(option_index),
+                int(option.get("requested_trials", 0)),
+                int(option.get("valid_trials", 0)),
+                int(option.get("failed_trials", 0)),
+                bool(option.get("computed", False)),
+                bool(option.get("zero_result", False)),
+                int(audit.get("consistent_determinizations", 0)),
+                int(audit.get("best_overlap_determinizations", 0)),
+                int(audit.get("opponent_synthetic_cards", 0)),
+                int(audit.get("self_synthetic_cards", 0)),
+                int(audit.get("resolved_subselects", 0)),
+                int(audit.get("ambiguous_subselects", 0)),
+                str(audit.get("error_type", ""))[:64],
+            ))
+    return np.array(records, dtype=WOULD_KO_META_DTYPE)
 
 
 def _dedup_group(sel, s, me, deck_list, action_mask, n):
@@ -70,7 +222,7 @@ def _dedup_group(sel, s, me, deck_list, action_mask, n):
 # BOTH_SIDES default set above, overridden by configure()
 
 
-def rows_from_episode(ep, episode_id=None, ep_meta=None):
+def rows_from_episode(ep, episode_id=None, ep_meta=None, would_ko_meta=None):
     """Yield (encoded_obs_dict, label, is_attack) for each cloned side's decisions.
 
     BOTH_SIDES by default: each side gets its OWN trackers fed only that side's
@@ -89,11 +241,40 @@ def rows_from_episode(ep, episode_id=None, ep_meta=None):
         return                                   # draw / malformed -> skip
     win = 0 if rewards[0] > rewards[1] else 1
     ep_id = episode_id if episode_id is not None else "unknown"
+    names = _player_names(ep)
+    replay_decks = _replay_decks(ep)
     for _side in ((0, 1) if BOTH_SIDES else (win,)):
-        yield from _side_rows(ep, _side, ep_id, _side, ep_meta)
+        outcome = 1 if rewards[_side] > rewards[1 - _side] else (
+            -1 if rewards[_side] < rewards[1 - _side] else 0
+        )
+        yield from _side_rows(
+            ep,
+            _side,
+            ep_id,
+            _side,
+            ep_meta,
+            would_ko_meta,
+            names[_side],
+            names[1 - _side],
+            outcome,
+            _deck_hash(replay_decks[_side]),
+            _deck_hash(replay_decks[1 - _side]),
+        )
 
 
-def _side_rows(ep, win, ep_id, side, ep_meta):
+def _side_rows(
+    ep,
+    win,
+    ep_id,
+    side,
+    ep_meta,
+    would_ko_meta,
+    player_name,
+    opponent_name,
+    outcome,
+    player_deck_hash,
+    opponent_deck_hash,
+):
     went = [st[win] for st in (ep.get("steps") or []) if len(st) > win]   # this side's entries, in order
     tr, ab = GameTracker(), AbilityTracker()
     deck = None
@@ -127,11 +308,60 @@ def _side_rows(ep, win, ep_id, side, ep_meta):
             # ATTACK decision? = MAIN select (type 0) with >=1 attack option -> the subset where the
             # would_ko feature can bite. Flagged per row so the trainer can break out subset accuracy.
             is_atk = 1 if (sel.get("type") == 0 and any(o.get("attackId") is not None for o in opts)) else 0
-            if WOULD_KO:                          # populate opt_attr's would_ko trio in-place (ONCE per decision)
+            wk_audit = None
+            if WOULD_KO and is_atk:               # populate opt_attr's would_ko trio in-place (ONCE per decision)
                 try:
-                    SA.annotate_would_ko(obs, deck, enc, n_var=WK_NVAR)
-                except Exception:
-                    pass                          # bad/incomplete replay state -> leave trio at 0 (graceful)
+                    _, wk_audit = SA.annotate_would_ko_with_audit(
+                        obs,
+                        deck,
+                        enc,
+                        n_var=WK_NVAR,
+                        rng=random.Random(_decision_seed(ep_id, side, step)),
+                    )
+                except Exception as exc:
+                    # Preserve a failed-computation record instead of conflating it with
+                    # a valid all-zero would-KO result.
+                    atk_indices = [
+                        j for j, option in enumerate(opts)
+                        if option.get("attackId") is not None
+                    ]
+                    wk_audit = {
+                        "eligible_options": len(atk_indices),
+                        "requested_trials": 0,
+                        "valid_trials": 0,
+                        "failed_trials": len(atk_indices),
+                        "annotation_failures": 1,
+                        "error_type": type(exc).__name__,
+                        "options": {
+                            j: {
+                                "requested_trials": 0,
+                                "valid_trials": 0,
+                                "failed_trials": 1,
+                                "computed": False,
+                                "zero_result": False,
+                            }
+                            for j in atk_indices
+                        },
+                    }
+            if would_ko_meta is not None and is_atk:
+                if wk_audit is None:
+                    # Feature disabled is explicit and distinct from a failed computation.
+                    wk_audit = {
+                        "eligible_options": sum(
+                            option.get("attackId") is not None for option in opts
+                        ),
+                        "requested_trials": 0,
+                        "valid_trials": 0,
+                        "failed_trials": 0,
+                        "disabled": 1,
+                        "options": {},
+                    }
+                would_ko_meta.append({
+                    "episode_id": ep_id,
+                    "side": int(side),
+                    "step_id": step,
+                    "audit": wk_audit,
+                })
             me = (obs.get("current") or {}).get("yourIndex")
             deck_list = sel.get("deck") if isinstance(sel.get("deck"), list) else None
             cur = obs.get("current") or {}
@@ -157,6 +387,12 @@ def _side_rows(ep, win, ep_id, side, ep_meta):
                         "side": int(side),
                         "step_id": step,
                         "new_episode": new_ep,
+                        "player_name": player_name,
+                        "opponent_name": opponent_name,
+                        "outcome": int(outcome),
+                        "is_self": player_name in SELF_ALIASES,
+                        "player_deck_hash": player_deck_hash,
+                        "opponent_deck_hash": opponent_deck_hash,
                     })
                     new_ep = False
             step += 1
@@ -166,11 +402,19 @@ def _side_rows(ep, win, ep_id, side, ep_meta):
 
 
 def main():
+    cfg = load_config()
+    configure(
+        bc_would_ko=cfg.bc_would_ko,
+        bc_wk_nvar=cfg.bc_wk_nvar,
+        bc_both_sides=cfg.bc_both_sides,
+        seed=cfg.seed,
+        self_aliases=cfg.bc_self_aliases,
+    )
     eps = sorted(glob.glob(os.path.join(EP_DIR, "*.json")))
     if MAX_EPS:
         eps = eps[:MAX_EPS]
     print(f"[bc] {len(eps)} episodes from {EP_DIR}", flush=True)
-    rows, labels, attack, meta_list = [], [], [], []
+    rows, labels, attack, meta_list, wk_meta_list = [], [], [], [], []
     used = 0
     for i, f in enumerate(eps):
         try:
@@ -179,7 +423,12 @@ def main():
             continue
         ep_id = os.path.splitext(os.path.basename(f))[0]
         got = 0
-        for row, lab, ia in rows_from_episode(ep, episode_id=ep_id, ep_meta=meta_list):
+        for row, lab, ia in rows_from_episode(
+            ep,
+            episode_id=ep_id,
+            ep_meta=meta_list,
+            would_ko_meta=wk_meta_list,
+        ):
             rows.append(row); labels.append(lab); attack.append(ia); got += 1
         used += 1 if got else 0
         if (i + 1) % 25 == 0:
@@ -187,6 +436,36 @@ def main():
     print(f"[bc] {len(rows)} rows from {used} winning sides", flush=True)
     if not rows:
         print("[bc] NO ROWS — check episode format"); return
+    wk_stats = {
+        "eligible_decisions": len(wk_meta_list),
+        "eligible_options": sum(
+            int(item["audit"].get("eligible_options", 0)) for item in wk_meta_list
+        ),
+        "computed_options": sum(
+            int(bool(option.get("computed", False)))
+            for item in wk_meta_list
+            for option in item["audit"].get("options", {}).values()
+        ),
+        "zero_result_options": sum(
+            int(bool(option.get("zero_result", False)))
+            for item in wk_meta_list
+            for option in item["audit"].get("options", {}).values()
+        ),
+        "valid_trials": sum(
+            int(item["audit"].get("valid_trials", 0)) for item in wk_meta_list
+        ),
+        "failed_trials": sum(
+            int(item["audit"].get("failed_trials", 0)) for item in wk_meta_list
+        ),
+    }
+    if WOULD_KO and (
+        wk_stats["eligible_options"] <= 0
+        or wk_stats["computed_options"] <= 0
+        or wk_stats["valid_trials"] <= 0
+    ):
+        raise RuntimeError(
+            "bc_would_ko=true but the dataset did not produce a successful would-KO computation"
+        )
     int_keys = set(enc.int_keys)
     keys = list(rows[0].keys())
     out = {}
@@ -199,22 +478,67 @@ def main():
     np.savez_compressed(OUT, **out)
     # D.3: emit episode metadata sidecar
     if meta_list:
-        EP_META = np.dtype([
-            ("episode_id", "U64"),
-            ("side", "i4"),
-            ("step_id", "i4"),
-            ("new_episode", "bool"),
-        ])
-        meta_tuples = [(m["episode_id"], m["side"], m["step_id"], m["new_episode"]) for m in meta_list]
-        meta_arr = np.array(meta_tuples, dtype=EP_META)
+        meta_arr = episode_meta_array(meta_list)
         meta_out = os.path.splitext(OUT)[0] + "_episode_meta.npy"
         np.save(meta_out, meta_arr, allow_pickle=False)
         print(f"[bc] episode_meta saved: {meta_out} ({len(meta_arr)} rows)", flush=True)
+        wk_meta_arr = would_ko_meta_array(meta_list, wk_meta_list)
+        wk_meta_out = os.path.splitext(OUT)[0] + "_would_ko_meta.npy"
+        np.save(wk_meta_out, wk_meta_arr, allow_pickle=False)
+        print(
+            f"[bc] would_ko_meta saved: {wk_meta_out} ({len(wk_meta_arr)} attack options)",
+            flush=True,
+        )
+    source_signature = hashlib.sha256()
+    total_source_bytes = 0
+    for path in eps:
+        stat = os.stat(path)
+        total_source_bytes += stat.st_size
+        source_signature.update(
+            f"{os.path.basename(path)}:{stat.st_size}".encode("utf-8")
+        )
+    manifest = {
+        "manifest_version": 1,
+        "builder": "scripts/bc/build_bc_dataset.py",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source": {
+            "episode_dir": EP_DIR,
+            "episode_files": len(eps),
+            "total_bytes": total_source_bytes,
+            "filename_size_sha256": source_signature.hexdigest(),
+        },
+        "config": {
+            "bc_would_ko": WOULD_KO,
+            "bc_wk_nvar": WK_NVAR,
+            "bc_both_sides": BOTH_SIDES,
+            "seed": BUILD_SEED,
+            "self_aliases": sorted(SELF_ALIASES),
+        },
+        "output": {"path": OUT, "rows": len(labels)},
+        "would_ko": {
+            "status": "computed" if WOULD_KO else "disabled",
+            "heuristic_version": 2,
+            "counters": wk_stats,
+        },
+        "hidden_replay_data": {
+            "deck_storage": (
+                "episode sidecar:player_deck_hash,opponent_deck_hash"
+            ),
+            "used_by_would_ko": False,
+        },
+    }
+    with open(f"{OUT}.manifest.json", "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2, sort_keys=True)
+        fh.write("\n")
     import collections
     lc = collections.Counter(labels)
     print(f"[bc] saved {OUT}: {len(labels)} rows, {len(keys)} keys; "
           f"SUBMIT={lc.get(SUBMIT_ACTION,0)}, n_distinct_labels={len(lc)}, "
-          f"attack_rows={int(np.sum(attack))} wouldko={'on' if WOULD_KO else 'off'}", flush=True)
+          f"attack_rows={int(np.sum(attack))} "
+          f"would_ko_status={'computed' if WOULD_KO else 'disabled'} "
+          f"computed_options={wk_stats['computed_options']} "
+          f"zero_result_options={wk_stats['zero_result_options']} "
+          f"failed_trials={wk_stats['failed_trials']}", flush=True)
 
 
 if __name__ == "__main__":

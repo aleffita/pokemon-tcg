@@ -2,13 +2,13 @@
 optionally upload it to Kaggle.
 
 Packaging is delegated to scripts/build_submission.py — the single place that
-knows how to bundle the agent (vendored MLX, checkpoint paths, archive layout)
+knows how to bundle the agent (self-describing PyTorch FP16 checkpoint and archive layout)
 and validate the result. This module only adds the upload step.
 
 Usage:
-    uv run tcg-build                          # build + validate submission.tar.gz
-    uv run tcg-build --upload                 # ...and upload (asks to confirm)
-    uv run tcg-build --upload -m "v4"         # custom submission message
+    uv run tcg-build --checkpoint model/checkpoint/<model>.pkl
+    uv run tcg-build --checkpoint model/checkpoint/<model>.pkl --upload
+    uv run tcg-build --checkpoint model/checkpoint/<model>.pkl --upload -m "v4"
     uv run tcg-build --help
 
 Building never uploads. Sending is opt-in through --upload.
@@ -56,10 +56,10 @@ def _get_api():
     return api
 
 
-def build_submission(out_path: str) -> bool:
+def build_submission(out_path: str, checkpoint: str | None = None) -> bool:
     """Build and validate the bundle via build_submission.py. True on success.
 
-    That module owns packaging: vendored MLX, checkpoint archive paths, the
+    That module owns packaging: PyTorch conversion, checkpoint paths, the
     size ceiling, and an extract-and-run validation. Duplicating any of it here
     is how this script previously drifted into shipping an unusable bundle.
     """
@@ -67,6 +67,8 @@ def build_submission(out_path: str) -> bool:
 
     argv = sys.argv
     sys.argv = ["build_submission.py", "-o", out_path]
+    if checkpoint is not None:
+        sys.argv.extend(["--checkpoint", checkpoint])
     try:
         build_main()
     except SystemExit as exc:
@@ -95,7 +97,10 @@ def _describe_bundle(out_path: str) -> None:
 
     with tarfile.open(out_path, "r:gz") as tar:
         names = tar.getnames()
-    checkpoint = next((n for n in names if n.endswith(".pkl")), "none")
+    checkpoint = next(
+        (name for name in names if name.endswith((".pt", ".pkl"))),
+        "none",
+    )
 
     console.print("\n[bold]Bundle[/]")
     console.print(f"  archive     {out_path}")
@@ -103,7 +108,8 @@ def _describe_bundle(out_path: str) -> None:
     console.print(f"  sha256      {digest}…")
     console.print(f"  checkpoint  {checkpoint}")
     console.print(f"  deck        {len(deck_cards)} cards from agent/deck.csv")
-    console.print(f"  vendored    {sum(1 for n in names if n.startswith('_vendor/'))} files")
+    backend = "PyTorch FP16" if checkpoint.endswith(".pt") else "unknown"
+    console.print(f"  backend     {backend}")
 
 
 def main():
@@ -121,6 +127,11 @@ def main():
         "--out",
         default=str(_ROOT / "submission.tar.gz"),
         help="Output path for submission archive (default: submission.tar.gz)",
+    )
+    p.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Explicit MLX trainer checkpoint to convert into the PyTorch FP16 bundle",
     )
     p.add_argument(
         "--upload",
@@ -141,7 +152,7 @@ def main():
 
     # 1. Build submission
     console.print("\n[bold cyan]Building submission...[/]")
-    if not build_submission(args.out):
+    if not build_submission(args.out, checkpoint=args.checkpoint):
         sys.exit(1)
 
     _describe_bundle(args.out)
@@ -151,7 +162,7 @@ def main():
         console.print(f"  https://www.kaggle.com/competitions/{args.competition}/submissions")
         sys.exit(0)
 
-    message = args.message or f"MLX agent {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    message = args.message or f"PyTorch FP16 agent {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
     # 2. Confirm. Uploading is public, irreversible, and spends one of the
     # competition's daily submission slots.

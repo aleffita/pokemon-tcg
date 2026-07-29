@@ -6,6 +6,7 @@ inference contract; no training JSON is needed at runtime.
 """
 from __future__ import annotations
 
+import hashlib
 import pickle
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,43 @@ from rl.encoder.card_features import CardTable
 from rl.encoder.encoding import MAX_OPTIONS, OPT_PICKED
 from rl.policy import TokenTransformer, build_token_net
 from rl.token_schema import ARCH_VERSION, TOKEN_SCHEMA_VERSION
+
+TORCH_INFERENCE_FORMAT = "ptcg-torch-fp16-v1"
+
+
+def _sha256_file(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _checkpoint_static_features(
+    state: dict[str, Any],
+    card_table: CardTable,
+) -> tuple[np.ndarray | None, dict[str, Any] | None]:
+    features = state.get("static_card_features")
+    contract = state.get("static_feature_contract")
+    if features is None and contract is None:
+        return None, None
+    if features is None or not isinstance(contract, dict):
+        raise ValueError("checkpoint static feature payload is incomplete")
+    array = np.asarray(features, dtype=np.float16)
+    expected_shape = tuple(int(value) for value in contract.get("shape", ()))
+    if tuple(array.shape) != expected_shape:
+        raise ValueError(
+            f"static feature shape {tuple(array.shape)} != {expected_shape}"
+        )
+    digest = hashlib.sha256(array.tobytes(order="C")).hexdigest()
+    if digest != contract.get("sha256"):
+        raise ValueError("checkpoint static feature table hash mismatch")
+    csv_digest = _sha256_file(card_table.csv_path)
+    if csv_digest != contract.get("card_csv_sha256"):
+        raise ValueError(
+            "runtime card table does not match the checkpoint's encoder contract"
+        )
+    return array, dict(contract)
 
 
 def _flatten_checkpoint(tree: Any, prefix: str = "") -> dict[str, np.ndarray]:
@@ -56,10 +94,53 @@ def checkpoint_arch_config(state: dict[str, Any]) -> dict[str, Any]:
     return dict(cfg)
 
 
+def checkpoint_inference_config(state: dict[str, Any]) -> dict[str, Any]:
+    """Read the runtime contract embedded in a trainer/export checkpoint.
+
+    Older checkpoints predate this contract. They are treated as models that
+    were trained without prospective would-KO features; this is the only safe
+    legacy default because enabling a new input feature at inference would
+    create train/inference drift.
+    """
+    cfg = state.get("inference_config")
+    if cfg is None:
+        return {
+            "version": 1,
+            "seed": int(state.get("seed", 0)),
+            "bc_would_ko": False,
+            "bc_wk_nvar": 10,
+            "provenance": "legacy-checkpoint-default",
+        }
+    if not isinstance(cfg, dict):
+        raise ValueError("checkpoint inference_config must be an object")
+    required = ("version", "seed", "bc_would_ko", "bc_wk_nvar")
+    missing = [key for key in required if key not in cfg]
+    if missing:
+        raise ValueError(f"checkpoint inference_config is missing {missing}")
+    if int(cfg["version"]) != 1:
+        raise ValueError(
+            f"unsupported inference_config version {cfg['version']!r}"
+        )
+    if int(cfg["bc_wk_nvar"]) <= 0:
+        raise ValueError("checkpoint bc_wk_nvar must be positive")
+    return {
+        "version": 1,
+        "seed": int(cfg["seed"]),
+        "bc_would_ko": bool(cfg["bc_would_ko"]),
+        "bc_wk_nvar": int(cfg["bc_wk_nvar"]),
+        "provenance": str(cfg.get("provenance", "trainer-checkpoint")),
+    }
+
+
 class TokenTransformerTorchInference(TokenTransformer):
     """Dynamic-scratch, memory-aware PyTorch mirror of ``TokenTransformerMLX``."""
 
-    def __init__(self, card_table: CardTable, cfg: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        card_table: CardTable,
+        cfg: dict[str, Any],
+        static_card_features: np.ndarray | None = None,
+    ) -> None:
         d_model = int(cfg["d_model"])
         ff_dim = int(cfg.get("ff_dim", 4 * d_model))
         if ff_dim != 4 * d_model:
@@ -101,6 +182,20 @@ class TokenTransformerTorchInference(TokenTransformer):
         self.scratch_tokens = n_scratch
         self.scratch = torch.nn.Parameter(torch.zeros(n_scratch, self.d))
         self.learned_init = torch.nn.Parameter(torch.zeros(n_scratch, self.d))
+        if static_card_features is not None:
+            static_tensor = torch.as_tensor(
+                static_card_features, dtype=torch.float16
+            )
+            if self.card_feat is None:
+                raise ValueError(
+                    "checkpoint contains static features for a non-static model"
+                )
+            if tuple(static_tensor.shape) != tuple(self.card_feat.shape):
+                raise ValueError(
+                    f"static feature shape {tuple(static_tensor.shape)} != "
+                    f"model {tuple(self.card_feat.shape)}"
+                )
+            self.card_feat = static_tensor
         self._card_table = card_table
 
     def _card_emb(self, ids: torch.Tensor) -> torch.Tensor:
@@ -249,11 +344,23 @@ def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.
     """Load an MLX checkpoint into a strict FP16 PyTorch inference model."""
     with open(path, "rb") as fh:
         state = pickle.load(fh)
-    cfg = checkpoint_arch_config(state)
-    model = TokenTransformerTorchInference(card_table, cfg)
+    arch_cfg = checkpoint_arch_config(state)
+    static_features, static_contract = _checkpoint_static_features(
+        state, card_table
+    )
+    metadata = {
+        **arch_cfg,
+        "inference_config": checkpoint_inference_config(state),
+        "training_config": dict(state.get("run_config", {})),
+        "static_feature_contract": static_contract,
+    }
+    model = TokenTransformerTorchInference(
+        card_table, arch_cfg, static_features
+    )
     target = model.state_dict()
     source = _flatten_checkpoint(state["model"])
     converted: dict[str, torch.Tensor] = {}
+    used_source: set[str] = set()
     for key, expected in target.items():
         if key == "card_feat":
             continue
@@ -276,13 +383,26 @@ def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.
             }
             if tail in ("self_attn.in_proj_weight", "self_attn.in_proj_bias"):
                 proj = "weight" if tail.endswith("weight") else "bias"
-                vals = [source[f"{layer}.attn.{p}_proj.{proj}"] for p in ("query", "key", "value")]
+                source_keys = [
+                    f"{layer}.attn.{p}_proj.{proj}"
+                    for p in ("query", "key", "value")
+                ]
+                vals = [source[source_key] for source_key in source_keys]
+                used_source.update(source_keys)
                 tensor = torch.from_numpy(np.concatenate(vals, axis=0))
             else:
                 mlx_key = trans[tail]
+                used_source.add(mlx_key)
                 tensor = torch.from_numpy(source[mlx_key])
         else:
-            tensor = torch.from_numpy(source.get(mlx_key, source.get(key))) if (mlx_key in source or key in source) else None
+            source_key = mlx_key if mlx_key in source else key
+            tensor = (
+                torch.from_numpy(source[source_key])
+                if source_key in source
+                else None
+            )
+            if tensor is not None:
+                used_source.add(source_key)
         if tensor is None:
             raise ValueError(f"checkpoint missing parameter for {key}")
         if tuple(tensor.shape) != tuple(expected.shape):
@@ -291,16 +411,129 @@ def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.
     missing_model = set(target) - set(converted)
     if missing_model:
         raise ValueError(f"checkpoint conversion omitted model parameters: {sorted(missing_model)}")
+    unexpected_source = set(source) - used_source
+    if unexpected_source:
+        raise ValueError(
+            "MLX checkpoint contains unmapped parameters: "
+            f"{sorted(unexpected_source)}"
+        )
     model.load_state_dict(converted, strict=True)
     model = model.to(dtype=dtype)
     model.eval()
-    return model, cfg
+    return model, metadata
+
+
+def save_torch_inference_checkpoint(
+    mlx_path: str | Path,
+    torch_path: str | Path,
+    card_table: CardTable,
+) -> dict[str, Any]:
+    """Strictly convert an MLX trainer checkpoint to portable PyTorch FP16."""
+    model, metadata = load_mlx_checkpoint(
+        mlx_path, card_table, dtype=torch.float16
+    )
+    state_dict = model.state_dict()
+    bad_dtype = {
+        key: str(value.dtype)
+        for key, value in state_dict.items()
+        if value.is_floating_point() and value.dtype != torch.float16
+    }
+    if bad_dtype:
+        raise ValueError(f"FP16 conversion left non-FP16 tensors: {bad_dtype}")
+    payload = {
+        "format": TORCH_INFERENCE_FORMAT,
+        "arch_config": {
+            key: value
+            for key, value in metadata.items()
+            if key not in ("inference_config", "training_config")
+        },
+        "inference_config": metadata["inference_config"],
+        "training_config": metadata["training_config"],
+        "static_card_features": (
+            model.card_feat.detach().to(torch.float16)
+            if metadata["static_feature_contract"] is not None
+            else None
+        ),
+        "static_feature_contract": metadata["static_feature_contract"],
+        "state_dict": state_dict,
+    }
+    torch.save(payload, torch_path)
+    return metadata
+
+
+def load_torch_inference_checkpoint(
+    path: str | Path,
+    card_table: CardTable,
+) -> tuple[TokenTransformerTorchInference, dict[str, Any]]:
+    """Load a pre-converted PyTorch checkpoint with exact keys, shapes and FP16."""
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(payload, dict) or payload.get("format") != TORCH_INFERENCE_FORMAT:
+        raise ValueError(
+            f"unsupported PyTorch inference checkpoint format "
+            f"{payload.get('format') if isinstance(payload, dict) else type(payload).__name__!r}"
+        )
+    arch_cfg = checkpoint_arch_config(
+        {"arch_config": payload.get("arch_config")}
+    )
+    static_features, static_contract = _checkpoint_static_features(
+        payload, card_table
+    )
+    metadata = {
+        **arch_cfg,
+        "inference_config": checkpoint_inference_config(payload),
+        "training_config": dict(payload.get("training_config", {})),
+        "static_feature_contract": static_contract,
+    }
+    state_dict = payload.get("state_dict")
+    if not isinstance(state_dict, dict):
+        raise ValueError("PyTorch inference checkpoint has no state_dict")
+
+    model = TokenTransformerTorchInference(
+        card_table, arch_cfg, static_features
+    ).to(dtype=torch.float16)
+    expected = model.state_dict()
+    missing = set(expected) - set(state_dict)
+    unexpected = set(state_dict) - set(expected)
+    if missing or unexpected:
+        raise ValueError(
+            f"PyTorch inference state mismatch: missing={sorted(missing)}, "
+            f"unexpected={sorted(unexpected)}"
+        )
+    for key, tensor in state_dict.items():
+        if not isinstance(tensor, torch.Tensor):
+            raise ValueError(f"state_dict[{key!r}] is not a tensor")
+        if tuple(tensor.shape) != tuple(expected[key].shape):
+            raise ValueError(
+                f"shape mismatch for {key}: checkpoint {tuple(tensor.shape)} "
+                f"!= model {tuple(expected[key].shape)}"
+            )
+        if tensor.is_floating_point() and tensor.dtype != torch.float16:
+            raise ValueError(f"state_dict[{key!r}] is {tensor.dtype}, expected torch.float16")
+    model.load_state_dict(state_dict, strict=True)
+    model.eval()
+    return model, metadata
+
+
+def load_inference_checkpoint(
+    path: str | Path,
+    card_table: CardTable,
+) -> tuple[TokenTransformerTorchInference, dict[str, Any]]:
+    """Load either the submission FP16 artifact or a local MLX trainer pickle."""
+    path = Path(path)
+    if path.suffix == ".pt":
+        return load_torch_inference_checkpoint(path, card_table)
+    return load_mlx_checkpoint(path, card_table, dtype=torch.float16)
 
 
 __all__ = [
     "TokenTransformerTorchInference",
+    "TORCH_INFERENCE_FORMAT",
     "checkpoint_arch_config",
+    "checkpoint_inference_config",
+    "load_inference_checkpoint",
     "load_mlx_checkpoint",
+    "load_torch_inference_checkpoint",
+    "save_torch_inference_checkpoint",
 ]
 
 

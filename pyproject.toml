@@ -40,6 +40,7 @@ tcg-data        = "scripts.data_manager:main"
 tcg-dashboard   = "scripts.dashboard:main"
 tcg-build-card-stats = "scripts.build_card_stats:main"
 tcg-daily         = "scripts.daily_pipeline:main"
+tcg-train-sequence = "scripts.train_sequence:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rl", "scripts", "agent", "cg"]

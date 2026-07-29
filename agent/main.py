@@ -1,7 +1,7 @@
 """BC agent for the PTCG AI Battle Challenge.
 
-MLX-only inference with autoregressive multi-select.
-Loads a trained TokenTransformerMLX checkpoint and uses it to select actions.
+PyTorch-only inference with autoregressive multi-select.
+Loads a strict FP16 PyTorch mirror of the MLX training checkpoint.
 Keeps per-side GameTracker + AbilityTracker for stateful encoding.
 
 Usage:
@@ -9,14 +9,26 @@ Usage:
   The engine calls agent(obs) once per decision point.
 """
 import os
+import random
 import sys
+from types import SimpleNamespace
 from typing import Any
 
 
 # ---- path setup (Kaggle-safe: __file__ is not defined when exec'd) ----
 def _find_dir(filename: str = "deck.csv") -> str:
     """Find the directory containing `filename`, searching sys.path + common locations."""
-    candidates = list(sys.path) + ["/kaggle_simulations/agent", os.getcwd()]
+    local_agent_dir = (
+        os.path.dirname(os.path.abspath(__file__))
+        if "__file__" in globals()
+        else None
+    )
+    candidates = [
+        local_agent_dir,
+        "/kaggle_simulations/agent",
+        *sys.path,
+        os.getcwd(),
+    ]
     for d in candidates:
         if d and os.path.exists(os.path.join(d, filename)):
             return d
@@ -35,48 +47,26 @@ else:
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-# The Kaggle sandbox image ships no MLX, so the submission bundle carries its
-# own unpacked wheels. Append (not insert): a locally installed MLX wins, which
-# keeps development on the Metal backend. Must run before `import mlx`.
-_VENDOR_DIR = os.path.join(_AGENT_DIR, "_vendor")
-if os.path.isdir(_VENDOR_DIR) and _VENDOR_DIR not in sys.path:
-    sys.path.append(_VENDOR_DIR)
-
 import numpy as np
-
-# PyTorch is the default inference backend for local tournaments and
-# submissions. Set PTCG_INFERENCE_BACKEND=mlx to run the legacy MLX path for
-# comparison; keeping the import conditional makes the backend choice explicit
-# rather than silently mixing runtimes.
-_INFERENCE_BACKEND = os.environ.get("PTCG_INFERENCE_BACKEND", "torch").strip().lower()
-if _INFERENCE_BACKEND not in {"mlx", "torch"}:
-    raise ValueError(
-        f"PTCG_INFERENCE_BACKEND must be 'mlx' or 'torch', got {_INFERENCE_BACKEND!r}"
-    )
-if _INFERENCE_BACKEND == "mlx":
-    import mlx.core as mx
-    import mlx.nn as nn
-    from rl.policy_mlx import build_token_net_mlx
-else:
-    import torch
-    from rl.policy_infer_torch import load_mlx_checkpoint
+import torch
+from rl.policy_infer_torch import load_inference_checkpoint
 
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import TokenEncoder, GameTracker, AbilityTracker, SUBMIT_ACTION
-from rl.encoder.enc_constants import MAX_OPTIONS
-from rl.train_config import TrainConfig
 
 _DECK_PATH = os.path.join(_AGENT_DIR, "deck.csv")
 
-# ---- model checkpoint search (MLX only) ----
-# Use config dirs for search paths, with known fallbacks
-_cfg_default = TrainConfig()
+# ---- model checkpoint search ----
+# Prefer the pre-converted FP16 artifact in submissions. Local development can
+# still load the MLX trainer checkpoint through the strict converter.
 _MODEL_PATH = None
 for candidate in [
-    os.path.join(_PROJECT_ROOT, _cfg_default.model_dir, "bc_best_mlx_final.pkl"),
-    os.path.join(_PROJECT_ROOT, _cfg_default.checkpoint_dir, "bc_best_mlx.pkl"),
-    os.path.join(_PROJECT_ROOT, _cfg_default.model_dir, "bc_best_final.pkl"),
-    os.path.join(_PROJECT_ROOT, _cfg_default.checkpoint_dir, "bc_best.pkl"),
+    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_torch_fp16.pt"),
+    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_torch_fp16.pt"),
+    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_mlx_final.pkl"),
+    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_mlx.pkl"),
+    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_final.pkl"),
+    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best.pkl"),
 ]:
     if os.path.exists(candidate):
         _MODEL_PATH = candidate
@@ -88,82 +78,31 @@ if _MODEL_PATH is None:
 _CARD_TABLE = get_card_table()
 _ENCODER = TokenEncoder(_CARD_TABLE)
 
-# Build default architecture config from TrainConfig defaults
-_DEFAULT_CFG: dict[str, Any] = {
-    "d_model": TrainConfig.d_model,
-    "nhead": TrainConfig.nhead,
-    "nlayers": TrainConfig.nlayers,
-    "static": TrainConfig.static,
-    "split_heads": TrainConfig.split_heads,
-    "structured": TrainConfig.structured,
-    "scratch_registers": TrainConfig.scratch_registers,
-    "value_atoms": TrainConfig.value_atoms,
-    "value_vmax": TrainConfig.value_vmax,
-}
-
-
-def _load_model_mlx():
-    """Load the BC model from an MLX checkpoint (default backend)."""
-    import pickle
-    with open(_MODEL_PATH, "rb") as f:
-        state = pickle.load(f)
-
-    # Merge config: checkpoint arch_config (if present) overrides defaults
-    ckpt_cfg = state.get("arch_config", state.get("config", state.get("net_config", {})))
-    cfg = dict(_DEFAULT_CFG)
-    # Override all architecture keys from checkpoint
-    _ARCH_KEYS = ("d_model", "nhead", "nlayers", "ff_dim", "static", "split_heads",
-                  "structured", "scratch_registers", "value_atoms", "value_vmax")
-    for key in _ARCH_KEYS:
-        if key in ckpt_cfg:
-            cfg[key] = ckpt_cfg[key]
-    # Map ff_dim → ff for build_token_net_mlx
-    if "ff_dim" in ckpt_cfg:
-        cfg["ff"] = ckpt_cfg["ff_dim"]
-
-    net = build_token_net_mlx(_CARD_TABLE, cfg)
-    model_state = state.get("model")
-    if model_state is not None:
-        # Flatten nested parameter dict (from model.parameters()) to key-value pairs
-        if isinstance(model_state, dict):
-            flat = nn.utils.tree_flatten(model_state)
-        else:
-            flat = model_state
-        # Filter to only parameters the model actually has (skip numpy-backed like card_feat)
-        model_param_keys = {k for k, _ in nn.utils.tree_flatten(net.parameters())}
-        flat_filtered = [(k, v) for k, v in flat if k in model_param_keys]
-        # Convert numpy arrays to MLX arrays
-        flat_mlx = [(k, mx.array(v)) for k, v in flat_filtered]
-        tree = nn.utils.tree_unflatten(flat_mlx)
-        net.update(tree)
-    net.eval()
-    acc = state.get("val_acc", "?")
-    print(f"[bc-agent] loaded MLX model {_MODEL_PATH} (val_acc={acc})")
-    return net
-
-
-def _load_model_torch():
-    """Load the same checkpoint into the strict PyTorch inference mirror.
+def _load_model():
+    """Load a strict FP16 PyTorch inference model.
 
     Loading is strict: a shape/parameter mismatch raises rather than falling
     back to a partial model, so a broken checkpoint is loud, not silent.
     """
-    net, cfg = load_mlx_checkpoint(_MODEL_PATH, _CARD_TABLE)
-    print(f"[bc-agent] loaded PyTorch mirror {_MODEL_PATH} "
-          f"(nlayers={cfg['nlayers']}, scratch={cfg['scratch_registers']})")
-    return net
-
-
-def _load_model():
-    """Load the BC model for the selected backend."""
     if _MODEL_PATH is None:
-        return None
-    if _INFERENCE_BACKEND == "mlx":
-        return _load_model_mlx()
-    return _load_model_torch()
+        return None, {}, {
+            "version": 1,
+            "seed": 0,
+            "bc_would_ko": False,
+            "bc_wk_nvar": 10,
+            "provenance": "no-checkpoint",
+        }
+    net, metadata = load_inference_checkpoint(_MODEL_PATH, _CARD_TABLE)
+    runtime_cfg = metadata["inference_config"]
+    print(f"[bc-agent] loaded PyTorch FP16 model {_MODEL_PATH} "
+          f"(nlayers={metadata['nlayers']}, "
+          f"scratch={metadata['scratch_registers']}, "
+          f"would_ko={runtime_cfg['bc_would_ko']})")
+    return net, metadata, runtime_cfg
 
 
-_LOADED_MODEL = _load_model()
+_LOADED_MODEL, _MODEL_METADATA, _RUNTIME_DATA = _load_model()
+_RUNTIME_CFG = SimpleNamespace(**_RUNTIME_DATA)
 
 # ---- deck ----
 def load_deck(path: str = _DECK_PATH) -> list[int]:
@@ -195,6 +134,7 @@ def _get_tracker(side: int):
             "ability": AbilityTracker(),
             "deck": None,
             "memory": None,  # F.1: persistent scratch register state
+            "would_ko_rng": None,
             "stale": True,   # needs a reset before its first decision
         }
     st = _TRACKERS[side]
@@ -203,44 +143,31 @@ def _get_tracker(side: int):
         st["ability"].reset()
         st["deck"] = list(DECK)
         st["memory"] = None  # F.1: clean memory at match start
+        st["would_ko_rng"] = random.Random(int(_RUNTIME_CFG.seed) + int(side))
         st["stale"] = False
     return st
 
 
 def _build_tensors(encoded: dict, int_keys: set) -> dict:
-    """Convert encoded numpy arrays to backend tensors with FP16 numerics (E.4).
-
-    IDs stay integer; every numeric feature is FP16 in both backends, matching
-    the project's FP16 inference contract.
-    """
+    """Convert encoded arrays to PyTorch tensors with FP16 numeric features."""
     ob = {}
-    if _INFERENCE_BACKEND == "mlx":
-        for k, v in encoded.items():
-            arr = np.asarray(v)
-            if k in int_keys:
-                ob[k] = mx.array(arr.astype(np.int32)).reshape(1, *arr.shape)
-            else:
-                ob[k] = mx.array(arr.astype(np.float16)).reshape(1, *arr.shape)
-    else:
-        for k, v in encoded.items():
-            arr = np.asarray(v)
-            if k in int_keys:
-                ob[k] = torch.as_tensor(arr.astype(np.int64)).reshape(1, *arr.shape)
-            else:
-                ob[k] = torch.as_tensor(arr.astype(np.float16)).reshape(1, *arr.shape)
+    for k, v in encoded.items():
+        arr = np.asarray(v)
+        if k in int_keys:
+            ob[k] = torch.as_tensor(arr.astype(np.int64)).reshape(1, *arr.shape)
+        else:
+            ob[k] = torch.as_tensor(arr.astype(np.float16)).reshape(1, *arr.shape)
     return ob
 
 
 def _logits_to_numpy(logits) -> np.ndarray:
-    """Flatten backend logits to a 1-D numpy vector for masking/argmax."""
-    if _INFERENCE_BACKEND == "mlx":
-        return np.asarray(logits).flatten()
+    """Flatten PyTorch logits to a float32 NumPy vector."""
     return logits.detach().to(torch.float32).numpy().flatten()
 
 
 def _autoregressive_select(
     model,
-    encoded: dict,
+    encode_step,
     int_keys: set,
     options: list,
     min_count: int,
@@ -269,19 +196,19 @@ def _autoregressive_select(
 
     picked_set: set[int] = set()
     results: list[int] = []
-    current_memory = memory_in
+    memory_out = memory_in
 
     for _substep in range(max_count):
-        # Build backend tensors (FP16 for numerics)
+        # Re-encode the same decision with the actual buffered picks. This
+        # updates action_mask, OPT_PICKED and SUBMIT exactly like BC rows.
+        encoded = encode_step(set(picked_set))
         ob = _build_tensors(encoded, int_keys)
 
-        # Forward pass with memory
-        if _INFERENCE_BACKEND == "torch":
-            with torch.inference_mode():
-                logits, _, memory_out = model.logits_value(ob, memory_in=current_memory)
-        else:
-            logits, _, memory_out = model.logits_value(ob, memory_in=current_memory)
-        current_memory = memory_out
+        # Every substep belongs to one engine decision. They all read the same
+        # incoming recurrent state; only the final substep's state is committed
+        # to the next decision.
+        with torch.inference_mode():
+            logits, _, memory_out = model.logits_value(ob, memory_in=memory_in)
         logits_np = _logits_to_numpy(logits)
 
         # Mask illegal options
@@ -326,7 +253,7 @@ def _autoregressive_select(
                 picked_set.add(i)
                 results.append(i)
 
-    return results, current_memory
+    return results, memory_out
 
 
 def choose(select: dict[str, Any], current: dict | None, logs: list | None = None) -> list[int]:
@@ -365,18 +292,31 @@ def choose(select: dict[str, Any], current: dict | None, logs: list | None = Non
     except Exception:
         pass
 
-    # Encode observation
-    try:
-        encoded = _ENCODER.encode(
+    # The same prospective feature used by dataset construction is computed
+    # once per real decision, before all autoregressive substeps.
+    if _RUNTIME_CFG.bc_would_ko:
+        try:
+            from rl.search_agent import annotate_would_ko
+            annotate_would_ko(
+                obs_for_encode,
+                deck,
+                _ENCODER,
+                n_var=int(_RUNTIME_CFG.bc_wk_nvar),
+                rng=st["would_ko_rng"],
+            )
+        except Exception:
+            # Inference remains legal if the engine cannot simulate an
+            # incomplete observation; the encoder then emits the neutral trio.
+            pass
+
+    def encode_step(picked: set[int]) -> dict:
+        return _ENCODER.encode(
             obs_for_encode,
-            picked=set(),
+            picked=picked,
             self_deck=deck,
             tracker=tracker,
             ability_slots=ability.slots,
         )
-    except Exception:
-        count = max(min_count, min(max_count, n))
-        return list(range(count))
 
     int_keys = _ENCODER.int_keys
 
@@ -384,7 +324,7 @@ def choose(select: dict[str, Any], current: dict | None, logs: list | None = Non
     memory_in = st["memory"]
     try:
         results, memory_out = _autoregressive_select(
-            _LOADED_MODEL, encoded, int_keys, options, min_count, max_count,
+            _LOADED_MODEL, encode_step, int_keys, options, min_count, max_count,
             memory_in=memory_in,
         )
         st["memory"] = memory_out  # F.1: persist memory for next decision
@@ -396,6 +336,7 @@ def choose(select: dict[str, Any], current: dict | None, logs: list | None = Non
     if len(results) < min_count:
         results = list(range(max(min_count, min(max_count, n))))
 
+    ability.record(select, results)
     return results
 
 

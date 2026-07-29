@@ -91,7 +91,8 @@ def _parse_int(s: str) -> int:
 
 
 def _build(csv_path: str):
-    rows = list(csv.DictReader(open(csv_path, encoding="utf-8")))
+    with open(csv_path, encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     # Group rows by card id (Pokemon may have several attack rows).
     by_id: dict[int, list[dict]] = {}
     for r in rows:
