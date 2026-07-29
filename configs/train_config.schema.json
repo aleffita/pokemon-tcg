@@ -61,7 +61,7 @@
       "default": 16,
       "description": "Number of scratch/workspace tokens inserted between state and option tokens. Used as inter-decision memory when TBPTT is enabled. Inspired by 'ViTs Need Registers'.",
       "minimum": 0,
-      "maximum": 16
+      "maximum": 64
     },
     "prefetch": {
       "type": "boolean",
@@ -148,19 +148,27 @@
       "type": "string",
       "default": "muon_adamw",
       "description": "Optimizer topology. muon_adamw routes eligible hidden 2D weights to Muon and embeddings, output heads, scalar/vector parameters, and remaining leaves to AdamW.",
-      "enum": ["muon_adamw"]
+      "enum": [
+        "muon_adamw"
+      ]
     },
     "optimizer_state": {
       "type": "string",
       "default": "reset",
       "description": "Optimizer phase on checkpoint resume. reset preserves model weights but starts fresh Muon/AdamW buffers; resume requires a checkpoint with the identical optimizer contract.",
-      "enum": ["reset", "resume"]
+      "enum": [
+        "reset",
+        "resume"
+      ]
     },
     "scheduler_state": {
       "type": "string",
       "default": "reset",
       "description": "Scheduler phase on checkpoint resume. reset starts a session-local phase; resume restores scheduler_phase_step and the checkpoint horizon.",
-      "enum": ["reset", "resume"]
+      "enum": [
+        "reset",
+        "resume"
+      ]
     },
     "scheduler_total_steps": {
       "type": "integer",
@@ -183,11 +191,22 @@
     },
     "adamw_betas": {
       "type": "array",
-      "default": [0.9, 0.999],
+      "default": [
+        0.9,
+        0.999
+      ],
       "description": "AdamW first- and second-moment coefficients for embeddings, heads, and non-matrix parameters.",
       "prefixItems": [
-        {"type": "number", "minimum": 0.0, "maximum": 1.0},
-        {"type": "number", "minimum": 0.0, "maximum": 1.0}
+        {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
       ],
       "minItems": 2,
       "maxItems": 2
@@ -450,7 +469,10 @@
     },
     "bc_self_aliases": {
       "type": "array",
-      "default": ["FitaLabs", "Alef Oliveira"],
+      "default": [
+        "FitaLabs",
+        "Alef Oliveira"
+      ],
       "description": "Known names for this agent in replay metadata. Used only for corpus provenance and analysis; not a model feature or loss target.",
       "items": {
         "type": "string",
