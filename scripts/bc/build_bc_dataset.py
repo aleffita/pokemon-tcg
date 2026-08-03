@@ -327,12 +327,19 @@ def _compute_aux_targets(states, outcome):
                 break
             end = d2
         end_state = states[end]
-        opp_delta = s["opp_prize"] - end_state["opp_prize"]   # opp prizes taken from here to end-of-turn (>=0)
-        my_delta = s["my_prize"] - end_state["my_prize"]      # my prizes lost from here to end-of-turn (>=0)
+        # In the engine, ``players[side]["prize"]`` is the list of prize
+        # cards a side still has. It DECREMENTS when that side KOs an
+        # opponent Pokemon (the side takes one of its OWN prize cards).
+        # So:
+        #   my_prize - end_state.my_prize == prizes I took (>=0)
+        #   opp_prize - end_state.opp_prize == prizes opp took (>=0)
+        prizes_i_took = s["my_prize"] - end_state["my_prize"]
+        prizes_opp_took = s["opp_prize"] - end_state["opp_prize"]
         is_terminal = (d == n - 1)
         aux[s["i"]] = {
-            "aux_ko": 1 if (opp_delta != 0 or my_delta != 0) else 0,
-            "aux_prize_delta": float(opp_delta - my_delta),
+            "aux_ko": 1 if (prizes_i_took != 0 or prizes_opp_took != 0) else 0,
+            # Positive = I did well this turn (took more prizes than I gave up).
+            "aux_prize_delta": float(prizes_i_took - prizes_opp_took),
             "aux_terminal": int(is_terminal),
             "aux_valid": 1,
         }
@@ -347,11 +354,17 @@ def _compute_aux_targets(states, outcome):
             terminal_bonus = 1.0 if outcome > 0 else (-1.0 if outcome < 0 else 0.0)
         if pos + 1 < len(valid_idx):
             nxt = states[valid_idx[pos + 1]]
-            opp_step = s["opp_prize"] - nxt["opp_prize"]
-            my_step = s["my_prize"] - nxt["my_prize"]
+            # Same semantics as above: prizes are decremented from the taking
+            # side's stack, so my_step = prizes I took, opp_step = prizes opp
+            # took. Reward is positive when I do well.
+            prizes_i_took_step = s["my_prize"] - nxt["my_prize"]
+            prizes_opp_took_step = s["opp_prize"] - nxt["opp_prize"]
         else:
-            opp_step = my_step = 0
-        reward_by_i[s["i"]] = float(opp_step - my_step) / 6.0 + terminal_bonus
+            prizes_i_took_step = prizes_opp_took_step = 0
+        reward_by_i[s["i"]] = (
+            float(prizes_i_took_step - prizes_opp_took_step) / 6.0
+            + terminal_bonus
+        )
 
     running = 0.0
     for d in reversed(valid_idx):

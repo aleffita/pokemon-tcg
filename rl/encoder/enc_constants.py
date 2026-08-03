@@ -84,9 +84,10 @@ for _name, _sz in TOKEN_LAYOUT:
 N_STATE_TOKENS = _pos          # number of non-option tokens (option positions index into these)
 
 # ---- meta-game features (passive; see rl/encoder/meta_lookup.py) -----------
-# Neutral/default until a meta-loop pipeline populates model/results.db + threads
-# day/opponent identity through obs -- see CLAUDE.md "meta features" handoff.
-N_META_BUCKETS = 10             # elo deciles 0..9 (0 == top decile / strongest)
-N_AGENT_BUCKETS = N_META_BUCKETS
-N_DECK_BUCKETS = N_META_BUCKETS + 1   # +1 for "unknown deck" (MetaLookup's -1 -> N_DECK_BUCKETS-1 == 10)
+# 11 slots: elo deciles 0..9 (0 == top decile / strongest) + slot 10
+# (UNKNOWN_BUCKET in meta_lookup.py) for domain-legit "not observed on this
+# day yet" cases -- newly released cards, first-game opponents, etc.
+# Cards/agents/decks all share this schema; every meta embedding is
+# nn.Embedding(N_META_BUCKETS, d_model).
+N_META_BUCKETS = 11
 MAX_COMPETITION_DAYS = 60       # ~30-day knowledge track, generous headroom

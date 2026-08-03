@@ -82,7 +82,7 @@ from .enc_constants import (        # noqa: F401,E402
     N_ENERGY_BINS, UNIT_ATTR, N_PREEVO, N_TOOLS, N_ENERGY_CARDS,
     DECK_SIZE, N_PRIZE, MAX_DISCARD, N_STADIUM, G,
     TOKEN_LAYOUT, OFF, N_STATE_TOKENS,
-    N_META_BUCKETS, N_AGENT_BUCKETS, N_DECK_BUCKETS, MAX_COMPETITION_DAYS,
+    N_META_BUCKETS, MAX_COMPETITION_DAYS,
 )
 from . import effect_data           # frozen attack/ability/trainer effect-category multi-hots (part of the encoding)
 
@@ -919,6 +919,33 @@ class TokenEncoder:
 
             # legal-action mask over [0..MAX_OPTIONS] (last == submit)
             "action_mask": (N_ACTIONS,),
+
+            # ---- meta features (day + opponent + per-card decile buckets) ----
+            # See rl/encoder/meta_lookup.py. Every entry here has a matching
+            # emission at the bottom of ``encode()``; the shapes must stay in
+            # sync so the parquet writer (build_bc_from_zips.py) picks the
+            # right dtype/length per column.
+            "day_index_norm": (1,),
+            "opponent_agent_bucket": (1,),
+            "opponent_deck_bucket": (1,),
+            "self_deck_meta_bucket": (DECK_SIZE,),
+            "opp_deck_meta_bucket": (DECK_SIZE,),
+            "self_hand_meta_bucket": (MAX_HAND,),
+            "opp_hand_meta_bucket": (MAX_HAND,),
+            "self_discard_meta_bucket": (MAX_DISCARD,),
+            "opp_discard_meta_bucket": (MAX_DISCARD,),
+            "stadium_meta_bucket": (N_STADIUM,),
+            "self_prize_meta_bucket": (N_PRIZE,),
+            "opp_prize_meta_bucket": (N_PRIZE,),
+            "effect_meta_bucket": (2,),
+            "self_unit_top_meta_bucket": (1 + N_BENCH,),
+            "self_unit_preevo_meta_bucket": (1 + N_BENCH, N_PREEVO),
+            "self_unit_tool_meta_bucket": (1 + N_BENCH, N_TOOLS),
+            "self_unit_energy_meta_bucket": (1 + N_BENCH, N_ENERGY_CARDS),
+            "opp_unit_top_meta_bucket": (1 + N_BENCH,),
+            "opp_unit_preevo_meta_bucket": (1 + N_BENCH, N_PREEVO),
+            "opp_unit_tool_meta_bucket": (1 + N_BENCH, N_TOOLS),
+            "opp_unit_energy_meta_bucket": (1 + N_BENCH, N_ENERGY_CARDS),
         }
 
     @property
@@ -1368,11 +1395,12 @@ class TokenEncoder:
             [_meta.agent_bucket(_current.get("opponent_agent_id"), _day_id)],
             dtype=np.int64,
         )
-        _deck_bucket = _meta.deck_bucket(_current.get("opponent_deck_id"), _day_id)
-        # Map "unknown deck" (-1) → 10 so the model sees a non-negative bucket index.
-        if _deck_bucket < 0:
-            _deck_bucket = N_META_BUCKETS  # 10 = unknown slot
-        out["opponent_deck_bucket"] = np.array([_deck_bucket], dtype=np.int64)
+        # meta_lookup returns UNKNOWN_BUCKET (== 10) for both no-info cases
+        # and unknown deck ids, so the bucket is always in [0, N_META_BUCKETS).
+        out["opponent_deck_bucket"] = np.array(
+            [_meta.deck_bucket(_current.get("opponent_deck_id"), _day_id)],
+            dtype=np.int64,
+        )
 
         for _stream in (
             "self_deck", "opp_deck", "self_hand", "opp_hand",

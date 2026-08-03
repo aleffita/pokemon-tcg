@@ -1833,6 +1833,21 @@ class ResultsDB:
                 _snapshot(current_day_id)
         return ratings
 
+    def refresh_competition_days(self) -> None:
+        """Assign a monotonic 1-indexed ``competition_day`` to every registered
+        day, ordered by calendar date. Idempotent -- resetting the whole column
+        each call keeps the assignment consistent when new days are inserted
+        out of chronological order (e.g. late remote backfill).
+        """
+        with self.transaction():
+            rows = self.conn.execute(
+                "SELECT id FROM days ORDER BY date"
+            ).fetchall()
+            self.conn.executemany(
+                "UPDATE days SET competition_day = ? WHERE id = ?",
+                [(rank, int(r["id"])) for rank, r in enumerate(rows, start=1)],
+            )
+
     def compute_daily_elos(self, source: str) -> None:
         """Recompute every ``*_elo_daily`` table for ``source`` in one pass.
 

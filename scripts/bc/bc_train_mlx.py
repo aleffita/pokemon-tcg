@@ -796,6 +796,300 @@ def _materialize_columns(
     }
 
 
+def _scan_tbptt_locations(
+    dataset,
+    row_filter,
+    shapes: dict[str, tuple],
+    int_keys: set[str],
+    *,
+    batch_size: int = _IO_BATCH_ROWS,
+) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray, np.ndarray, list[str]]:
+    """Pass 1 of the TBPTT streaming loader: read ONLY the metadata columns
+    needed to build the TBPTT plan (episode_id/side/step_id and optional dedup
+    label group), and record every kept row's physical location so pass 2 can
+    fetch data columns without re-scanning.
+
+    Returns
+    -------
+    episode_meta:
+        dict[str, np.ndarray] with the same shape as the old materialized
+        ``train_meta`` -- keys ``episode_id``, ``side``, ``step_id``.
+    file_indices, row_group_indices, offsets:
+        Parallel int32 arrays, one entry per kept row, giving the origin
+        ``(fragment_index, row_group_index, offset_within_row_group)``. Pass 2
+        uses these to load only the row_groups it needs.
+    file_paths:
+        Ordered fragment paths; ``file_indices[i]`` indexes into this list.
+
+    Memory: ``episode_meta`` is 3 int arrays over the whole split (~24 bytes
+    per row -> 330MB for 13.7M rows, the largest expected corpus). Locations
+    add another 12 bytes/row -> 165MB. Combined ~500MB, vs ~5+GB for a full
+    materialization.
+    """
+    columns = ["episode_id", "side", "step_id"]
+    fragments = list(dataset.get_fragments())
+    file_paths = [str(getattr(fr, "path", "?")) for fr in fragments]
+
+    ep_parts: list[np.ndarray] = []
+    side_parts: list[np.ndarray] = []
+    step_parts: list[np.ndarray] = []
+    file_parts: list[np.ndarray] = []
+    rg_parts: list[np.ndarray] = []
+    off_parts: list[np.ndarray] = []
+
+    for file_idx, fragment in enumerate(fragments):
+        pq_file = fragment.metadata
+        n_row_groups = pq_file.num_row_groups
+        for rg_idx in range(n_row_groups):
+            # Load this row_group's metadata columns only, applying the split filter.
+            rg_fragment = fragment.subset(row_group_ids=[rg_idx])
+            for io_batch in rg_fragment.to_batches(
+                columns=columns, filter=row_filter, batch_size=batch_size
+            ):
+                if io_batch.num_rows == 0:
+                    continue
+                # NOTE: to_batches with a filter drops non-matching rows, so
+                # we CANNOT infer the intra-row-group offset from the batch's
+                # position alone. Re-scan the same row_group without a filter
+                # to recover ordinal positions of kept rows.
+                pass
+            # Simpler and cheaper: load the row_group WITHOUT a filter and
+            # test the filter against a compiled predicate over episode_id.
+            # Fragment.subset(row_group_ids=[k]).to_batches(columns=[...]) reads
+            # the whole rg once, and the eid filter is a fast np.isin.
+            eids_rg = None
+            sides_rg = None
+            steps_rg = None
+            for io_batch in fragment.subset(
+                row_group_ids=[rg_idx]
+            ).to_batches(columns=columns, batch_size=batch_size):
+                eb = io_batch.column("episode_id").to_numpy(zero_copy_only=False)
+                sb = io_batch.column("side").to_numpy(zero_copy_only=False)
+                tb = io_batch.column("step_id").to_numpy(zero_copy_only=False)
+                eids_rg = eb if eids_rg is None else np.concatenate([eids_rg, eb])
+                sides_rg = sb if sides_rg is None else np.concatenate([sides_rg, sb])
+                steps_rg = tb if steps_rg is None else np.concatenate([steps_rg, tb])
+            if eids_rg is None or len(eids_rg) == 0:
+                continue
+            # Apply the pyarrow filter as a compiled boolean over ``eids_rg``.
+            # pyarrow filters can be arbitrary expressions, but for TBPTT the
+            # only two we build are ``episode_id.isin([...])`` (train/val
+            # split). Evaluate that at the numpy layer to avoid a second
+            # parquet read pass.
+            mask = _apply_episode_filter(row_filter, eids_rg)
+            if not mask.any():
+                continue
+            offsets_in_rg = np.nonzero(mask)[0].astype(np.int32)
+            n_kept = len(offsets_in_rg)
+            ep_parts.append(eids_rg[mask].astype(np.int64))
+            side_parts.append(sides_rg[mask].astype(np.int32))
+            step_parts.append(steps_rg[mask].astype(np.int32))
+            file_parts.append(np.full(n_kept, file_idx, dtype=np.int32))
+            rg_parts.append(np.full(n_kept, rg_idx, dtype=np.int32))
+            off_parts.append(offsets_in_rg)
+
+    if not ep_parts:
+        empty_meta = {
+            "episode_id": np.empty(0, dtype=np.int64),
+            "side": np.empty(0, dtype=np.int32),
+            "step_id": np.empty(0, dtype=np.int32),
+        }
+        return (
+            empty_meta,
+            np.empty(0, dtype=np.int32),
+            np.empty(0, dtype=np.int32),
+            np.empty(0, dtype=np.int32),
+            file_paths,
+        )
+
+    episode_meta = {
+        "episode_id": np.concatenate(ep_parts),
+        "side": np.concatenate(side_parts),
+        "step_id": np.concatenate(step_parts),
+    }
+    return (
+        episode_meta,
+        np.concatenate(file_parts),
+        np.concatenate(rg_parts),
+        np.concatenate(off_parts),
+        file_paths,
+    )
+
+
+_TBPTT_FILTER_CACHE: dict[int, np.ndarray] = {}
+
+
+def _apply_episode_filter(row_filter, episode_ids: np.ndarray) -> np.ndarray:
+    """Evaluate the TBPTT split filter against a numpy array of episode_ids.
+
+    The split filter built by the trainer is always ``episode_id.isin([...])``
+    (train_filter / val_filter -- see the ``pads.field("episode_id").isin(...)``
+    calls in ``main``). Extract the id set once from the expression's repr
+    and evaluate ``np.isin`` at the numpy layer so pass 1 avoids a second
+    parquet read. Any other filter shape is a contract violation and raises
+    (no silent fallback).
+    """
+    key = id(row_filter)
+    cached_ids = _TBPTT_FILTER_CACHE.get(key)
+    if cached_ids is None:
+        raise RuntimeError(
+            "TBPTT episode filter was not registered before use. "
+            "Call sites must populate _TBPTT_FILTER_CACHE[id(filter)] "
+            "with the exact episode_id numpy array used to build the "
+            "pyarrow is_in expression -- pyarrow does not expose its "
+            "value_set as a public property, and its repr abbreviates "
+            "long lists, so re-parsing the repr is unreliable."
+        )
+    return np.isin(episode_ids, cached_ids)
+
+
+class _ParquetRowGroupCache:
+    """LRU cache of decoded parquet row_groups. Pass 2 of the TBPTT streaming
+    loader reads from here so each row_group is decoded at most once per
+    residency.
+
+    Keyed by ``(file_idx, row_group_idx)``. Each value is a dict of
+    ``column_name -> np.ndarray`` already reshaped by ``_read_batch_column``.
+    """
+
+    def __init__(
+        self,
+        file_paths: list[str],
+        columns: list[str],
+        shapes: dict[str, tuple],
+        int_keys: set[str],
+        capacity: int = 3,
+    ) -> None:
+        if capacity <= 0:
+            raise ValueError("row_group cache capacity must be positive")
+        import pyarrow.parquet as pq  # local to avoid startup cost when unused
+        self._pq = pq
+        self._file_paths = file_paths
+        self._pq_files: dict[int, "pq.ParquetFile"] = {}
+        self._columns = list(columns)
+        self._shapes = shapes
+        self._int_keys = int_keys
+        self._capacity = capacity
+        # OrderedDict preserves insertion order for LRU eviction.
+        from collections import OrderedDict
+        self._cache: OrderedDict[
+            tuple[int, int], dict[str, np.ndarray]
+        ] = OrderedDict()
+
+    def _open(self, file_idx: int):
+        pf = self._pq_files.get(file_idx)
+        if pf is None:
+            pf = self._pq.ParquetFile(self._file_paths[file_idx])
+            self._pq_files[file_idx] = pf
+        return pf
+
+    def _load_rg(
+        self, file_idx: int, row_group_idx: int
+    ) -> dict[str, np.ndarray]:
+        pf = self._open(file_idx)
+        table = pf.read_row_group(row_group_idx, columns=self._columns)
+        # read_row_group returns a Table with one batch per column-chunk. Turn
+        # each column into its final numpy layout via the shared helper.
+        rg_dict: dict[str, np.ndarray] = {}
+        # Combine chunks so _read_batch_column can operate on a single
+        # RecordBatch (its interface expects a batch, not a table).
+        record_batch = table.combine_chunks().to_batches()
+        if not record_batch:
+            for c in self._columns:
+                dtype = (
+                    np.int32
+                    if c in self._int_keys
+                    or c == "opt_group"
+                    else _META_COLUMN_DTYPES.get(c, np.float32)
+                )
+                rg_dict[c] = np.zeros(
+                    (0,) + self._shapes.get(c, ()),
+                    dtype=dtype,
+                )
+            return rg_dict
+        rb = record_batch[0]
+        for c in self._columns:
+            rg_dict[c] = _read_batch_column(rb, c, self._shapes, self._int_keys)
+        return rg_dict
+
+    def _touch(self, key: tuple[int, int]) -> dict[str, np.ndarray]:
+        rg = self._cache.get(key)
+        if rg is None:
+            rg = self._load_rg(*key)
+            self._cache[key] = rg
+            while len(self._cache) > self._capacity:
+                self._cache.popitem(last=False)
+        else:
+            self._cache.move_to_end(key)
+        return rg
+
+    def read_rows(
+        self,
+        row_indices: np.ndarray,
+        file_indices: np.ndarray,
+        row_group_indices: np.ndarray,
+        offsets: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Fetch every column at the given ``row_indices``.
+
+        ``row_indices`` are the split-local row ids that pass 1 wrote into
+        ``episode_meta``. ``file_indices``, ``row_group_indices``, ``offsets``
+        are the parallel location arrays returned by pass 1: this method reads
+        those parallel arrays at ``row_indices`` to know which row_group and
+        offset each output row comes from.
+        """
+        sel_files = file_indices[row_indices]
+        sel_rgs = row_group_indices[row_indices]
+        sel_offs = offsets[row_indices]
+
+        n = len(row_indices)
+        # Group requested rows by (file, row_group). np.lexsort keeps ordering
+        # stable so an argsort round-trip lets us gather then scatter into the
+        # caller's requested order.
+        order = np.lexsort((sel_offs, sel_rgs, sel_files))
+        inv_order = np.empty_like(order)
+        inv_order[order] = np.arange(n)
+
+        gathered: dict[str, np.ndarray | None] = {c: None for c in self._columns}
+        i = 0
+        while i < n:
+            j = i
+            f = int(sel_files[order[i]])
+            g = int(sel_rgs[order[i]])
+            while (
+                j < n
+                and int(sel_files[order[j]]) == f
+                and int(sel_rgs[order[j]]) == g
+            ):
+                j += 1
+            rg_dict = self._touch((f, g))
+            block = order[i:j]
+            row_ids_in_rg = sel_offs[block]
+            for c in self._columns:
+                arr = rg_dict[c][row_ids_in_rg]
+                if gathered[c] is None:
+                    gathered[c] = np.empty(
+                        (n,) + arr.shape[1:], dtype=arr.dtype
+                    )
+                gathered[c][block] = arr  # writes into sorted-order slots
+            i = j
+
+        # Rewind sorted-order slots back to caller-requested order.
+        out: dict[str, np.ndarray] = {}
+        for c in self._columns:
+            data = gathered[c]
+            if data is None:
+                data = np.zeros(
+                    (0,) + self._shapes.get(c, ()),
+                    dtype=np.int32
+                    if c in self._int_keys
+                    or c == "opt_group"
+                    else _META_COLUMN_DTYPES.get(c, np.float32),
+                )
+            out[c] = data[inv_order]
+        return out
+
+
 def _apply_dedup_relabel(chunk: dict[str, np.ndarray]) -> None:
     """Remap chunk["y"] to its canonical dedup-group label, in place.
 
@@ -1431,6 +1725,12 @@ def main() -> None:
     train_episode_ids = shuffled_eids[n_val_eps:]
     val_filter = pads.field("episode_id").isin(val_episode_ids.tolist())
     train_filter = pads.field("episode_id").isin(train_episode_ids.tolist())
+    _TBPTT_FILTER_CACHE[id(val_filter)] = np.asarray(
+        val_episode_ids, dtype=np.int64
+    )
+    _TBPTT_FILTER_CACHE[id(train_filter)] = np.asarray(
+        train_episode_ids, dtype=np.int64
+    )
     print(
         f"[bc-train-mlx] episode split: {len(train_episode_ids):,} train / "
         f"{len(val_episode_ids):,} val episodes (val_frac={a.val_frac}, "
@@ -1468,9 +1768,13 @@ def main() -> None:
     vi_ko = (oa_v[..., WK_LO] >= 0.5).any(axis=1)
     val_meta = {k: val_all[k] for k in val_meta_columns}
 
-    # ---- training split: streamed unless TBPTT needs full in-RAM chunking
-    # (TBPTT replays whole episode-side trajectories, which a row-by-row
-    # Parquet stream can't give cheap random access to) ----
+    # ---- training split ------------------------------------------------------
+    # TBPTT path is streamed row_group-by-row_group via a two-pass loader:
+    #  1. _scan_tbptt_locations reads ONLY (episode_id/side/step_id) plus each
+    #     row's physical (file_idx, row_group_idx, offset) location.
+    #  2. _ParquetRowGroupCache serves data columns on demand from a bounded
+    #     LRU of decoded row_groups (peak ~2-3 row_groups resident at a time).
+    # Non-TBPTT path is already streamed by pyarrow's batch iterator.
     train_columns = list(keys) + ["y"]
     if a.dedup:
         train_columns.append("opt_group")
@@ -1478,26 +1782,37 @@ def main() -> None:
         train_columns.extend(_AUX_COLUMNS)
     counts_by_eid = dict(zip(unique_eids.tolist(), counts.tolist()))
     if _use_tbptt:
-        train_meta_columns = ["episode_id", "side", "step_id"]
-        train_all = _materialize_columns(
-            pa_dataset,
-            train_columns + train_meta_columns,
-            train_filter,
-            enc_shapes,
-            int_keys,
+        (
+            train_meta,
+            _tbptt_row_file_idx,
+            _tbptt_row_group_idx,
+            _tbptt_row_offset,
+            _tbptt_file_paths,
+        ) = _scan_tbptt_locations(
+            pa_dataset, train_filter, enc_shapes, int_keys
         )
-        _apply_dedup_relabel(train_all)
-        n_train = len(train_all["y"])
-        train_np = {k: train_all[k] for k in keys}
-        y_train = train_all["y"]
-        train_meta = {k: train_all[k] for k in train_meta_columns}
-        aux_train_np = {c: train_all[c] for c in _AUX_COLUMNS} if aux_active else None
+        n_train = int(len(train_meta["episode_id"]))
+        _tbptt_row_group_cache = _ParquetRowGroupCache(
+            file_paths=_tbptt_file_paths,
+            columns=train_columns,
+            shapes=enc_shapes,
+            int_keys=int_keys,
+        )
+        # train_np / y_train / aux_train_np are no longer materialized up
+        # front; _load_temporal_batch pulls each chunk's rows on demand.
+        train_np = None
+        y_train = None
+        aux_train_np = None
     else:
         n_train = int(sum(counts_by_eid[e] for e in train_episode_ids.tolist()))
         train_np = None  # streamed per epoch; never fully materialized
         y_train = None
         train_meta = None
         aux_train_np = None
+        _tbptt_row_group_cache = None
+        _tbptt_row_file_idx = None
+        _tbptt_row_group_idx = None
+        _tbptt_row_offset = None
     if n_train == 0:
         raise RuntimeError(
             "training split produced no rows; adjust --val-frac or the "
@@ -2038,34 +2353,81 @@ def main() -> None:
     # ---- F.3: TBPTT batch generator ----
     def _load_temporal_batch(
         temporal_batch: list[_TBPTTChunk],
-        arrays: dict,
-        labels: np.ndarray,
+        arrays: dict | None,
+        labels: np.ndarray | None,
         *,
         label_base: int = 0,
         aux_arrays: dict[str, np.ndarray] | None = None,
+        source: str = "materialized",
     ):
         """Materialize one pre-planned temporal batch with lane-local row order.
 
-        ``arrays``/``labels`` are self-contained 0-indexed materializations
-        (train_np/y_train or val_np/y_val) -- not slices of one bigger
-        combined array -- so ``label_base`` stays 0 in this rewrite and is
-        kept only so the signature still documents the offset semantics.
+        Two backing modes are supported:
 
-        ``aux_arrays`` (aux_train_np or aux_val_np), when given, is sliced
-        the same way as ``arrays`` and returned as a 5th element: one
-        aux-target dict per lane, row-aligned with that lane's labels.
-        ``None`` when ``aux_arrays`` is not given.
+        * ``source="materialized"`` (validation split, and the non-TBPTT train
+          path via the shared ``_stream_train_microbatches``): ``arrays``,
+          ``labels`` and ``aux_arrays`` are in-RAM dict/ndarray inputs, sliced
+          with the chunk's row indices.
+        * ``source="tbptt-cache"`` (TBPTT train path): ``arrays`` / ``labels``
+          / ``aux_arrays`` are ignored; each chunk's rows are fetched on
+          demand from ``_tbptt_row_group_cache`` and correlated with the
+          location arrays ``_tbptt_row_file_idx`` / ``_tbptt_row_group_idx``
+          / ``_tbptt_row_offset``.
+
+        Returned tuple is always five elements: ``(lane_observations,
+        lane_labels, lane_decision_lengths, lane_rows, lane_aux_targets)``.
         """
         lane_observations: list[dict[str, mx.array]] = []
         lane_labels: list[mx.array] = []
         lane_decision_lengths: list[list[int]] = []
         lane_rows: list[np.ndarray] = []
         lane_aux_targets: list[dict[str, mx.array]] | None = (
-            [] if aux_arrays is not None else None
+            []
+            if aux_arrays is not None or source == "tbptt-cache" and aux_active
+            else None
         )
         for chunk in temporal_batch:
             chunk_arr = np.concatenate(chunk.decisions)
             lane_rows.append(chunk_arr)
+            if source == "tbptt-cache":
+                fetched = _tbptt_row_group_cache.read_rows(
+                    chunk_arr,
+                    _tbptt_row_file_idx,
+                    _tbptt_row_group_idx,
+                    _tbptt_row_offset,
+                )
+                # dedup label relabel is per-chunk (same as the .npy loader);
+                # this is exact because the remap is row-local.
+                _apply_dedup_relabel(fetched)
+                lane_observations.append(
+                    {
+                        key: mx.array(
+                            fetched[key].astype(
+                                np.int32 if key in int_keys else np.float16
+                            )
+                        )
+                        for key in keys
+                    }
+                )
+                if a.zero_wouldko:
+                    attr = np.asarray(lane_observations[-1]["opt_attr"]).copy()
+                    attr[..., WK_LO:WK_HI] = 0.0
+                    lane_observations[-1]["opt_attr"] = mx.array(
+                        attr, dtype=mx.float16
+                    )
+                lane_labels.append(mx.array(fetched["y"].astype(np.int32)))
+                if aux_active:
+                    lane_aux_targets.append(
+                        {
+                            c: mx.array(fetched[c].astype(np.float32))
+                            for c in _AUX_COLUMNS
+                        }
+                    )
+                lane_decision_lengths.append(
+                    [len(decision_rows) for decision_rows in chunk.decisions]
+                )
+                continue
+            # materialized path
             lane_observations.append(
                 {
                     key: mx.array(
@@ -2111,9 +2473,10 @@ def main() -> None:
             lane_observations, lane_labels, lane_decision_lengths, _, lane_aux_targets = (
                 _load_temporal_batch(
                     temporal_batch,
-                    train_np,
-                    y_train,
-                    aux_arrays=aux_train_np if aux_active else None,
+                    arrays=None,
+                    labels=None,
+                    aux_arrays=None,
+                    source="tbptt-cache",
                 )
             )
             yield (

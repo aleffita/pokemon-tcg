@@ -79,32 +79,41 @@ class ComputeAuxTargetsTests(unittest.TestCase):
         return out
 
     def test_ko_shared_across_a_turn_is_not_double_counted_in_return(self):
-        # Turn 0 has 3 decisions; the opponent loses one prize (6 -> 5) by the END of turn 0.
-        # The turn-window aux_prize_delta must repeat (+1) across all 3 decisions (spec-literal
-        # lookahead feature), but the return must only ever "spend" that +1/6 once.
+        # Turn 0 has 3 decisions. Between decision 1 and decision 2 the OPPONENT
+        # takes a prize (opp goes 6 -> 5 means opp KO'd one of MY Pokemon and
+        # took a prize card off their own prize stack). That's BAD for me, so
+        # aux_prize_delta must be NEGATIVE (+prizes_i_took - prizes_opp_took).
+        # The turn-window aux_prize_delta must repeat (-1) across all 3
+        # decisions (spec-literal lookahead feature), but the return must only
+        # ever "spend" that -1/6 once.
         states = self._states([
             (0, 6, 6),  # decision 0: turn0, my=6 opp=6
             (0, 6, 6),  # decision 1: turn0, my=6 opp=6 (no change yet)
-            (0, 6, 5),  # decision 2: turn0, my=6 opp=5 (opponent already lost a prize here)
+            (0, 6, 5),  # decision 2: turn0, my=6 opp=5 (opp already took a prize here)
         ])
         aux = B._compute_aux_targets(states, outcome=1)
-        # aux_prize_delta: "now vs end of this turn" -- end-of-turn state is decision 2 itself
-        # (my=6, opp=5) for all three decisions since they share turn 0.
-        self.assertAlmostEqual(aux[0]["aux_prize_delta"], 1.0)   # 6-5 - (6-6)
-        self.assertAlmostEqual(aux[1]["aux_prize_delta"], 1.0)
-        self.assertAlmostEqual(aux[2]["aux_prize_delta"], 0.0)   # decision 2 IS the end of turn
+        # aux_prize_delta: "now vs end of this turn" -- end-of-turn state is
+        # decision 2 itself (my=6, opp=5) for all three decisions since they
+        # share turn 0. prizes_i_took=0-0=0, prizes_opp_took=6-5=1 -> -1.
+        self.assertAlmostEqual(aux[0]["aux_prize_delta"], -1.0)
+        self.assertAlmostEqual(aux[1]["aux_prize_delta"], -1.0)
+        self.assertAlmostEqual(aux[2]["aux_prize_delta"], 0.0)  # decision 2 IS end-of-turn
         self.assertEqual(aux[0]["aux_ko"], 1)
         self.assertEqual(aux[1]["aux_ko"], 1)
         self.assertEqual(aux[2]["aux_ko"], 0)
-        # reward/aux_return: the true transition happens between decision 1 and 2 only.
+        # reward/aux_return: the true transition happens between decision 1
+        # and 2 only. Opp took a prize between them -> reward on decision 1 is
+        # -1/6 (bad for me).
         self.assertAlmostEqual(aux[0]["reward"], 0.0)
-        self.assertAlmostEqual(aux[1]["reward"], 1.0 / 6.0)
-        # decision 2 is terminal (outcome=1) -> +1 bonus, no further prize transition known.
+        self.assertAlmostEqual(aux[1]["reward"], -1.0 / 6.0)
+        # decision 2 is terminal (outcome=1 = I won) -> +1 bonus, no further
+        # prize transition known.
         self.assertAlmostEqual(aux[2]["reward"], 1.0)
-        # gamma=1.0 suffix sum must equal exactly one prize-swing contribution + the terminal bonus,
-        # not one contribution PER decision inside the turn (that would be the double-counting bug).
-        self.assertAlmostEqual(aux[0]["aux_return"], 1.0 / 6.0 + 1.0)
-        self.assertAlmostEqual(aux[1]["aux_return"], 1.0 / 6.0 + 1.0)
+        # gamma=1.0 suffix sum: exactly one prize-swing contribution + terminal.
+        # (This scenario is inherently inconsistent -- outcome=1 with opp taking
+        # a prize -- but the point is that -1/6 only appears once in the sum.)
+        self.assertAlmostEqual(aux[0]["aux_return"], -1.0 / 6.0 + 1.0)
+        self.assertAlmostEqual(aux[1]["aux_return"], -1.0 / 6.0 + 1.0)
         self.assertAlmostEqual(aux[2]["aux_return"], 1.0)
 
     def test_terminal_bonus_sign_matches_outcome(self):

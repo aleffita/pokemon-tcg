@@ -309,6 +309,18 @@ def rebuild_results_database(
             database,
             zip_paths=list(replay_sources),
         )
+        # Elo snapshots and meta features are part of the canonical rebuild.
+        # A DB without them is not usable by the trainer / encoder even though
+        # matches are populated -- do it here so the rebuild is self-contained.
+        # source="remote" is the only source the meta catalog reads today
+        # (see rl/encoder/meta_lookup.py); local tournament rebuilds keep
+        # their own local elo computation via scripts/tournament.py.
+        print("[rebuild] assigning competition_day ordinals...")
+        database.refresh_competition_days()
+        print("[rebuild] computing rolling-forward daily elos (source=remote)...")
+        database.compute_daily_elos(source="remote")
+        print("[rebuild] refreshing meta features (source=remote)...")
+        database.refresh_meta_features(source="remote")
         counts, integrity, fingerprint = validate_rebuilt_database(
             database.conn,
             expected_replays=replays_populated,

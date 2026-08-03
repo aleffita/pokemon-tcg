@@ -19,7 +19,7 @@ from rl import (
     MAX_OPTIONS, N_ACTIONS, OPT_STRUCT, OPT_PICKED, N_OPT_TYPES,
     MAX_ATTACK, N_SELECT_TYPES, N_SELECT_CTX, UNIT_ATTR, G,
 )
-from rl.encoder.enc_constants import N_META_BUCKETS, N_AGENT_BUCKETS, N_DECK_BUCKETS
+from rl.encoder.enc_constants import N_META_BUCKETS
 from rl.token_schema import (
     ARCH_VERSION, TOKEN_SCHEMA_VERSION,
     T_CLS, T_SELF_DECK, T_OPP_DECK, T_SELF_PRIZE, T_OPP_PRIZE,
@@ -163,8 +163,8 @@ class TokenTransformerMLX(nn.Module):
         # absorbed into a dedicated META_CTX token (see T_META_CTX) rather than
         # widening G (which would break existing checkpoints' scalar_proj shape).
         self.meta_bucket_emb: nn.Embedding = nn.Embedding(N_META_BUCKETS, d_model)
-        self.agent_bucket_emb: nn.Embedding = nn.Embedding(N_AGENT_BUCKETS, d_model)
-        self.deck_bucket_emb: nn.Embedding = nn.Embedding(N_DECK_BUCKETS, d_model)
+        self.agent_bucket_emb: nn.Embedding = nn.Embedding(N_META_BUCKETS, d_model)
+        self.deck_bucket_emb: nn.Embedding = nn.Embedding(N_META_BUCKETS, d_model)
         self.day_proj: nn.Linear = nn.Linear(1, d_model)
         self.meta_ctx_base: mx.array = mx.zeros(d_model)
 
@@ -394,19 +394,14 @@ class TokenTransformerMLX(nn.Module):
         pads.append(mx.zeros((B, 1), dtype=mx.bool_))
 
         # --- meta-context token (day + opponent identity; never padded) ---
-        # Tolerant: parquets built before Fase 5a don't carry meta features yet.
-        # When absent, seed with neutral defaults (day=0.5, agent bucket=4 [mid
-        # decile], deck bucket=10 [unknown]) so the model still gets one token
-        # but effectively no signal until the dataset is rebuilt with meta.
-        _day = o.get("day_index_norm")
-        if _day is None:
-            _day = mx.full((B, 1), 0.5, dtype=mx.float16)
-        _opp_agent = o.get("opponent_agent_bucket")
-        if _opp_agent is None:
-            _opp_agent = mx.full((B, 1), 4, dtype=mx.int32)
-        _opp_deck = o.get("opponent_deck_bucket")
-        if _opp_deck is None:
-            _opp_deck = mx.full((B, 1), 10, dtype=mx.int32)
+        # Mandatory: the encoder (rl/encoder/encoding.py) always emits these
+        # keys (meta_lookup returns UNKNOWN_BUCKET==10 for domain-legit
+        # missing data). A missing key here means the batch came from a
+        # stale/incompatible encoder -- fail loudly (KeyError) instead of
+        # substituting a silent default.
+        _day = o["day_index_norm"]
+        _opp_agent = o["opponent_agent_bucket"]
+        _opp_deck = o["opponent_deck_bucket"]
         meta_ctx_tok = (
             mx.broadcast_to(self.meta_ctx_base.reshape(1, 1, self.d), (B, 1, self.d))
             + self.day_proj(_day.reshape(B, 1, 1).astype(self.day_proj.weight.dtype))
@@ -427,13 +422,10 @@ class TokenTransformerMLX(nn.Module):
             ("effect", T_EFFECT),
         ]
         for name, t in _CARD_STREAMS:
-            bucket_key = f"{name}_meta_bucket"
-            bucket = o.get(bucket_key)
-            if bucket is None:
-                # Tolerant: legacy dataset without meta buckets -> use neutral 4.
-                _ids_shape = o[f"{name}_id"].shape
-                bucket = mx.full(_ids_shape, 4, dtype=mx.int32)
-            tok = self._card_stream(o[f"{name}_id"], t, bucket)
+            # Mandatory meta bucket per card stream; encoder guarantees it.
+            tok = self._card_stream(
+                o[f"{name}_id"], t, o[f"{name}_meta_bucket"]
+            )
             # Add special markers (deck flags, hand certainty)
             if name == "self_deck":
                 tok = tok + o["self_deck_flag"][..., None] * self.drawable_emb
@@ -447,20 +439,15 @@ class TokenTransformerMLX(nn.Module):
         # --- unit streams (active + bench, both sides) ---
         for side, (at, bt) in [("self", (T_SELF_ACTIVE, T_SELF_BENCH)),
                                ("opp", (T_OPP_ACTIVE, T_OPP_BENCH))]:
-            _sub_buckets = {}
-            for _sub in ("top", "preevo", "tool", "energy"):
-                _bk = f"{side}_unit_{_sub}_meta_bucket"
-                _sub_buckets[_sub] = o.get(_bk)
-                if _sub_buckets[_sub] is None:
-                    _sub_buckets[_sub] = mx.full(
-                        o[f"{side}_unit_{_sub}_id"].shape, 4, dtype=mx.int32
-                    )
+            # Mandatory meta buckets per unit sub-stream; encoder guarantees them.
             tok = self._unit_stream(
                 o[f"{side}_unit_top_id"], o[f"{side}_unit_preevo_id"],
                 o[f"{side}_unit_tool_id"], o[f"{side}_unit_energy_id"],
                 o[f"{side}_unit_attr"], at, bt,
-                _sub_buckets["top"], _sub_buckets["preevo"],
-                _sub_buckets["tool"], _sub_buckets["energy"],
+                o[f"{side}_unit_top_meta_bucket"],
+                o[f"{side}_unit_preevo_meta_bucket"],
+                o[f"{side}_unit_tool_meta_bucket"],
+                o[f"{side}_unit_energy_meta_bucket"],
             )
             toks.append(tok)
             pads.append(o[f"{side}_unit_mask"] < 0.5)

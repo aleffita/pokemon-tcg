@@ -17,54 +17,17 @@ import torch
 from rl.encoder import effect_data
 from rl.encoder.card_features import CardTable
 from rl.encoder.encoding import MAX_OPTIONS, OPT_PICKED
-from rl.encoder.enc_constants import N_META_BUCKETS, N_AGENT_BUCKETS, N_DECK_BUCKETS
+from rl.encoder.enc_constants import N_META_BUCKETS
 from rl.policy import TokenTransformer, build_token_net
 from rl.token_schema import ARCH_VERSION, TOKEN_SCHEMA_VERSION, T_META_CTX, N_TTYPES
 
 TORCH_INFERENCE_FORMAT = "ptcg-torch-fp16-v1"
 
-# Auxiliary scalar heads (ko/prize/terminal/return) are training-only additions
-# on top of the frozen inference contract. A checkpoint saved before they
-# existed is still a valid inference artifact — the arena path never calls
-# aux_predictions() — so their absence is tolerated (with a loud warning),
-# unlike any other missing parameter.
-_AUX_HEAD_PREFIXES: tuple[str, ...] = (
-    "ko_head_aux.", "prize_head_aux.", "terminal_head_aux.", "return_head_aux.",
-)
-
-# Meta-feature consumption (day/opponent globals + per-card meta buckets) is a
-# passive addition on top of the frozen inference contract, same status as the
-# aux heads above: a checkpoint saved before these params existed still loads,
-# with the new embeddings left at their random init (loud warning, not silent).
-_META_HEAD_PREFIXES: tuple[str, ...] = (
-    "meta_bucket_emb.", "agent_bucket_emb.", "deck_bucket_emb.", "day_proj.",
-    "meta_ctx_base",
-)
-
-_TOLERATED_MISSING_PREFIXES: tuple[str, ...] = _AUX_HEAD_PREFIXES + _META_HEAD_PREFIXES
-
-
-def _load_type_emb_with_new_rows(
-    checkpoint_tensor: torch.Tensor, current_weight: torch.Tensor
-) -> torch.Tensor:
-    """Old checkpoints have fewer ``type_emb`` rows than the live model (e.g.
-    before T_META_CTX was added, growing token_schema.N_TTYPES). Copy the
-    checkpoint's known rows into the current (random-init) table in place;
-    trailing new rows keep their random init rather than raising a hard
-    shape-mismatch error."""
-    if tuple(checkpoint_tensor.shape) == tuple(current_weight.shape):
-        return checkpoint_tensor
-    if (
-        checkpoint_tensor.shape[1:] == current_weight.shape[1:]
-        and checkpoint_tensor.shape[0] < current_weight.shape[0]
-    ):
-        padded = current_weight.clone()
-        padded[: checkpoint_tensor.shape[0]] = checkpoint_tensor.to(padded.dtype)
-        return padded
-    raise ValueError(
-        f"type_emb.weight shape {tuple(checkpoint_tensor.shape)} is incompatible "
-        f"with model {tuple(current_weight.shape)}"
-    )
+# Checkpoint loading is STRICT: every key in the current model must appear in
+# the checkpoint with the exact expected shape. Legacy checkpoints (predating
+# aux heads, meta embeddings, or T_META_CTX rows in type_emb) fail loudly --
+# they should be trained from scratch, not silently patched in with random
+# init that would confuse the training signal.
 
 
 def _sha256_file(path: str | Path) -> str:
@@ -241,8 +204,8 @@ class TokenTransformerTorchInference(TokenTransformer):
         # global day/opponent features are absorbed into a dedicated META_CTX
         # token rather than widening G (which would break scalar_proj's shape).
         self.meta_bucket_emb = torch.nn.Embedding(N_META_BUCKETS, self.d).to(torch.float16)
-        self.agent_bucket_emb = torch.nn.Embedding(N_AGENT_BUCKETS, self.d).to(torch.float16)
-        self.deck_bucket_emb = torch.nn.Embedding(N_DECK_BUCKETS, self.d).to(torch.float16)
+        self.agent_bucket_emb = torch.nn.Embedding(N_META_BUCKETS, self.d).to(torch.float16)
+        self.deck_bucket_emb = torch.nn.Embedding(N_META_BUCKETS, self.d).to(torch.float16)
         self.day_proj = torch.nn.Linear(1, self.d).to(torch.float16)
         self.meta_ctx_base = torch.nn.Parameter(torch.zeros(self.d, dtype=torch.float16))
 
@@ -327,21 +290,13 @@ class TokenTransformerTorchInference(TokenTransformer):
         toks.append(self.sel_ctx_emb(o["select_context"].squeeze(-1)).unsqueeze(1) + self._type(b, 1, 17, dev)); nopad()
 
         # --- meta-context token (day + opponent identity; never padded, mandatory) ---
-        try:
-            _day = o["day_index_norm"]
-            _opp_agent = o["opponent_agent_bucket"]
-            _opp_deck = o["opponent_deck_bucket"]
-        except KeyError as exc:
-            raise KeyError(
-                "obs is missing required meta feature "
-                f"{exc.args[0]!r}; the encoder must always emit day_index_norm/"
-                "opponent_agent_bucket/opponent_deck_bucket (see rl/encoder/meta_lookup.py)"
-            ) from exc
+        # A missing key here means the batch came from a stale/incompatible
+        # encoder -- the natural KeyError is loud enough, do not wrap or default.
         toks.append(
             self.meta_ctx_base.expand(b, 1, self.d)
-            + self.day_proj(_day.reshape(b, 1, 1))
-            + self.agent_bucket_emb(_opp_agent.reshape(b, 1))
-            + self.deck_bucket_emb(_opp_deck.reshape(b, 1))
+            + self.day_proj(o["day_index_norm"].reshape(b, 1, 1))
+            + self.agent_bucket_emb(o["opponent_agent_bucket"].reshape(b, 1))
+            + self.deck_bucket_emb(o["opponent_deck_bucket"].reshape(b, 1))
             + self._type(b, 1, T_META_CTX, dev)
         ); nopad()
 
@@ -349,25 +304,12 @@ class TokenTransformerTorchInference(TokenTransformer):
                    ("self_hand", 5), ("opp_hand", 6), ("self_discard", 7), ("opp_discard", 8),
                    ("stadium", 9), ("effect", 15))
         for name, typ in streams:
-            bucket_key = f"{name}_meta_bucket"
-            if bucket_key not in o:
-                raise KeyError(
-                    f"obs is missing required meta bucket feature {bucket_key!r} "
-                    "(the encoder must always emit a *_meta_bucket array per card stream)"
-                )
-            tok = self._card_stream(o[f"{name}_id"], typ, dev, o[bucket_key])
+            tok = self._card_stream(o[f"{name}_id"], typ, dev, o[f"{name}_meta_bucket"])
             if name == "self_deck": tok = tok + o["self_deck_flag"].unsqueeze(-1) * self.drawable_emb
             if name == "opp_deck": tok = tok + o["opp_deck_flag"].unsqueeze(-1) * self.opp_drawable_emb
             if name == "opp_hand": tok = tok + o["opp_hand_flag"].unsqueeze(-1) * self.hand_certain_emb
             toks.append(tok); pads.append(o[f"{name}_mask"] < 0.5)
         for side, active, bench in (("self", 10, 11), ("opp", 12, 13)):
-            for sub in ("top", "preevo", "tool", "energy"):
-                bk = f"{side}_unit_{sub}_meta_bucket"
-                if bk not in o:
-                    raise KeyError(
-                        f"obs is missing required meta bucket feature {bk!r} "
-                        "(the encoder must always emit a *_meta_bucket array per unit sub-stream)"
-                    )
             toks.append(self._unit_stream(o[f"{side}_unit_top_id"], o[f"{side}_unit_preevo_id"],
                                           o[f"{side}_unit_tool_id"], o[f"{side}_unit_energy_id"],
                                           o[f"{side}_unit_attr"], active, bench, dev,
@@ -491,8 +433,6 @@ def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.
     source = _flatten_checkpoint(state["model"])
     converted: dict[str, torch.Tensor] = {}
     used_source: set[str] = set()
-    tolerated_missing: set[str] = set()
-    tolerated_resized: set[str] = set()
     for key, expected in target.items():
         if key == "card_feat":
             continue
@@ -536,34 +476,30 @@ def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.
             if tensor is not None:
                 used_source.add(source_key)
         if tensor is None:
-            if key.startswith(_TOLERATED_MISSING_PREFIXES):
-                tolerated_missing.add(key)
-                continue
-            raise ValueError(f"checkpoint missing parameter for {key}")
+            raise ValueError(
+                f"checkpoint missing parameter for {key!r} -- the checkpoint "
+                "was saved by a model with a different architecture; retrain "
+                "from scratch (do not attempt to silently reinitialize)"
+            )
         if tuple(tensor.shape) != tuple(expected.shape):
-            if key == "type_emb.weight":
-                tensor = _load_type_emb_with_new_rows(tensor, target[key])
-                tolerated_resized.add(key)
-            else:
-                raise ValueError(f"shape mismatch for {key}: checkpoint {tuple(tensor.shape)} != model {tuple(expected.shape)}")
+            raise ValueError(
+                f"shape mismatch for {key!r}: checkpoint "
+                f"{tuple(tensor.shape)} != model {tuple(expected.shape)}"
+            )
         converted[key] = tensor.to(dtype=dtype)
-    missing_model = set(target) - set(converted) - tolerated_missing
+    missing_model = set(target) - set(converted)
     if missing_model:
-        raise ValueError(f"checkpoint conversion omitted model parameters: {sorted(missing_model)}")
+        raise ValueError(
+            f"checkpoint conversion omitted model parameters: "
+            f"{sorted(missing_model)!r} -- retrain from scratch"
+        )
     unexpected_source = set(source) - used_source
     if unexpected_source:
         raise ValueError(
             "MLX checkpoint contains unmapped parameters: "
             f"{sorted(unexpected_source)}"
         )
-    if tolerated_missing or tolerated_resized:
-        print(
-            "WARNING: MLX checkpoint predates some parameters (auxiliary heads "
-            "and/or meta-feature embeddings); reinitializing with random weights, "
-            f"untrained: {sorted(tolerated_missing)}; "
-            f"resized (new rows random-init): {sorted(tolerated_resized)}"
-        )
-    model.load_state_dict(converted, strict=False)
+    model.load_state_dict(converted, strict=True)
     model = model.to(dtype=dtype)
     model.eval()
     return model, metadata
@@ -644,58 +580,30 @@ def load_torch_inference_checkpoint(
     ).to(dtype=torch.float16)
     expected = model.state_dict()
 
-    # Old checkpoints have a smaller type_emb (fewer token types, e.g. before
-    # T_META_CTX). Pad in place before the missing/unexpected/shape checks so
-    # this reads as a normal (if resized) present key, not a hard mismatch.
-    if "type_emb.weight" in state_dict and "type_emb.weight" in expected:
-        ckpt_type_emb = state_dict["type_emb.weight"]
-        cur_type_emb = expected["type_emb.weight"]
-        if tuple(ckpt_type_emb.shape) != tuple(cur_type_emb.shape):
-            state_dict["type_emb.weight"] = _load_type_emb_with_new_rows(ckpt_type_emb, cur_type_emb)
-            print(
-                f"WARNING: checkpoint type_emb has {ckpt_type_emb.shape[0]} rows, "
-                f"model expects {cur_type_emb.shape[0]} (new token types, e.g. "
-                "T_META_CTX); padding new rows with random init"
-            )
-
+    # STRICT load: any key mismatch (missing, unexpected, or shape) is a hard
+    # error. A legacy checkpoint that doesn't fit the current architecture
+    # should be retrained from scratch, not silently patched with random init.
     missing = set(expected) - set(state_dict)
     unexpected = set(state_dict) - set(expected)
-    if unexpected:
+    if missing or unexpected:
         raise ValueError(
-            f"PyTorch inference state mismatch: missing={sorted(missing)}, "
-            f"unexpected={sorted(unexpected)}"
-        )
-    non_tolerated_missing = {key for key in missing if not key.startswith(_TOLERATED_MISSING_PREFIXES)}
-    if non_tolerated_missing:
-        raise ValueError(
-            f"PyTorch inference state mismatch: missing={sorted(missing)}, "
-            f"unexpected={sorted(unexpected)}"
-        )
-    if missing:
-        # Pre-aux-head / pre-meta-feature checkpoint: both are training-only-ish
-        # additive params (the arena inference path never trains them), so a
-        # missing set that is *exactly* aux heads and/or meta embeddings is not
-        # a contract violation — just a reinitialization.
-        print(
-            "WARNING: checkpoint predates auxiliary heads and/or meta-feature "
-            "embeddings (prospective ko/prize/terminal/return, day/opponent/"
-            f"card-bucket embeddings); reinitializing with random weights, untrained: {sorted(missing)}"
+            "PyTorch inference state mismatch -- checkpoint does not fit "
+            "the current model architecture, retrain from scratch. "
+            f"missing={sorted(missing)!r}, unexpected={sorted(unexpected)!r}"
         )
     for key, tensor in state_dict.items():
         if not isinstance(tensor, torch.Tensor):
             raise ValueError(f"state_dict[{key!r}] is not a tensor")
         if tuple(tensor.shape) != tuple(expected[key].shape):
             raise ValueError(
-                f"shape mismatch for {key}: checkpoint {tuple(tensor.shape)} "
-                f"!= model {tuple(expected[key].shape)}"
+                f"shape mismatch for {key!r}: checkpoint "
+                f"{tuple(tensor.shape)} != model {tuple(expected[key].shape)}"
             )
         if tensor.is_floating_point() and tensor.dtype != torch.float16:
-            raise ValueError(f"state_dict[{key!r}] is {tensor.dtype}, expected torch.float16")
-    load_result = model.load_state_dict(state_dict, strict=False)
-    if set(load_result.unexpected_keys):
-        raise ValueError(f"unexpected keys during load: {sorted(load_result.unexpected_keys)}")
-    if set(load_result.missing_keys) != missing:
-        raise ValueError(f"unexpected missing keys during load: {sorted(load_result.missing_keys)}")
+            raise ValueError(
+                f"state_dict[{key!r}] is {tensor.dtype}, expected torch.float16"
+            )
+    model.load_state_dict(state_dict, strict=True)
     model.eval()
     return model, metadata
 

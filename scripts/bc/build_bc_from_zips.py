@@ -131,10 +131,10 @@ def _job(arg):
             atk.append(is_attack)
         return rows, labs, atk, ep_meta, wk_meta, {"episode_failures": 0}
     except Exception as exc:
-        return [], [], [], [], [], {
-            "episode_failures": 1,
-            f"episode_failure_{type(exc).__name__}": 1,
-        }
+        import traceback
+        print(f"[bc-zips][job-error {name}] {type(exc).__name__}: {exc}", flush=True)
+        traceback.print_exc()
+        raise
 
 
 def _merge_counts(target, source):
@@ -383,9 +383,11 @@ def _build_one_day(zip_path, output_dir, cfg, db, *, workers, flush, timeout, ma
                 for a in asyncs:
                     try:
                         rows, labels, attacks, meta, wk, job_stats = a.get(timeout=timeout)
-                    except Exception:
-                        rows, labels, attacks, meta, wk = [], [], [], [], []
-                        job_stats = {"episode_failures": 1, "episode_timeout_or_worker_failures": 1}
+                    except Exception as exc:
+                        import traceback
+                        print(f"[bc-zips][worker-error] {type(exc).__name__}: {exc}", flush=True)
+                        traceback.print_exc()
+                        raise
                     if rows:
                         episodes_used += 1
                     episode_failures += int(job_stats.get("episode_failures", 0))
