@@ -164,7 +164,6 @@ def main() -> None:
             # PyTorch-only and must not import or ship the MLX policy.
             if arc not in (
                 "rl/policy_mlx.py",
-                "rl/prospective_planner_mlx.py",
             ):
                 files.append((full, arc))
     else:
@@ -297,10 +296,6 @@ def _validate_archive(tar_path: str) -> None:
             "rl/encoder/encoding.py",
             "rl/policy.py",
             "rl/policy_infer_torch.py",
-            "rl/prospective_input_adapter.py",
-            "rl/prospective_planner_torch.py",
-            "rl/prospective_runtime.py",
-            "rl/prospective_schema.py",
             TORCH_CHECKPOINT_ARC,
         ]
         for rel in expected:
@@ -308,7 +303,6 @@ def _validate_archive(tar_path: str) -> None:
                 raise SystemExit(f"  ERROR: archive is missing {rel}")
         forbidden = (
             "rl/policy_mlx.py",
-            "rl/prospective_planner_mlx.py",
             "configs/train_config.json",
             "configs/train_config.schema.json",
             "_vendor",

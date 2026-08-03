@@ -256,67 +256,80 @@ class DatasetMetadataTests(unittest.TestCase):
         self.assertEqual(snapshot, (True, 17, False, 1234))
 
     def test_enabled_feature_cannot_validate_without_computation(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(RuntimeError, "no would-KO option"):
-                zip_builder._validate_would_ko_dataset(
-                    tmp,
-                    True,
-                    {
-                        "eligible_options": 12,
-                        "computed_options": 0,
-                        "valid_trials": 0,
-                    },
-                )
+        with self.assertRaisesRegex(RuntimeError, "no would-KO option"):
+            zip_builder._validate_would_ko_stats(
+                True,
+                {
+                    "eligible_options": 12,
+                    "computed_options": 0,
+                    "valid_trials": 0,
+                },
+            )
 
-    def test_resume_without_matching_contract_is_rejected(self):
-        contract = {"build_fingerprint": "one"}
-        with tempfile.TemporaryDirectory() as tmp:
-            shard = Path(tmp) / "shard_0000"
-            shard.mkdir()
-            (shard / ".done").touch()
-            with self.assertRaisesRegex(RuntimeError, "no build contract"):
-                zip_builder._prepare_resume_manifest(tmp, contract)
+    def test_disabled_feature_short_circuits_validation(self):
+        self.assertEqual(zip_builder._validate_would_ko_stats(False, {}), "disabled")
 
-        with tempfile.TemporaryDirectory() as tmp:
-            zip_builder._prepare_resume_manifest(tmp, contract)
-            with self.assertRaisesRegex(RuntimeError, "different config"):
-                zip_builder._prepare_resume_manifest(
-                    tmp, {"build_fingerprint": "two"}
-                )
+    def test_computed_feature_validates(self):
+        status = zip_builder._validate_would_ko_stats(
+            True,
+            {"eligible_options": 4, "computed_options": 3, "valid_trials": 20},
+        )
+        self.assertEqual(status, "computed")
 
-    def test_empty_shard_preserves_resume_and_merge_continuity(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            shards = root / "shards"
-            output = root / "merged"
-            self.assertEqual(
-                zip_builder._flush_shard(
-                    str(shards), 0, [], [], [], set(), stats={}
-                ),
-                0,
-            )
-            self.assertEqual(
-                zip_builder._flush_shard(
-                    str(shards),
-                    1,
-                    [{"feature": np.array([1.0], dtype=np.float32)}],
-                    [0],
-                    [False],
-                    set(),
-                    stats={},
-                ),
-                1,
-            )
-            self.assertEqual(zip_builder._discover_shards(str(shards)), 2)
-            self.assertEqual(
-                zip_builder._merge_shards(
-                    str(shards), str(output), n_shards=2
-                ),
-                1,
-            )
-            np.testing.assert_array_equal(
-                np.load(output / "__labels__.npy"), np.array([0])
-            )
+    def test_rows_to_table_flattens_multidim_fields_and_keeps_scalars(self):
+        # Synthetic 2-row batch exercising both a scalar-shaped field (shape (1,))
+        # and a multi-dim field (shape (2, 3)) flattened into a FixedSizeList.
+        enc_shapes = {"select_type": (1,), "opt_attr": (2, 3), "action_mask": (4,)}
+        rows = [
+            {
+                "select_type": np.array([1], dtype=np.int64),
+                "opt_attr": np.arange(6, dtype=np.float32).reshape(2, 3),
+                "__group__": np.array([0, 1, 2, 3], dtype=np.int32),
+            },
+            {
+                "select_type": np.array([2], dtype=np.int64),
+                "opt_attr": (np.arange(6, dtype=np.float32) + 6).reshape(2, 3),
+                "__group__": np.array([0, 1, 2, 3], dtype=np.int32),
+            },
+        ]
+        labels = [0, 1]
+        attack = [0, 1]
+        meta = [
+            {
+                "episode_id": "1", "side": 0, "step_id": 0, "decision_id": 0,
+                "substep": 0, "new_episode": True, "player_name": "A",
+                "opponent_name": "B", "outcome": 1, "is_self": True,
+                "player_deck_hash": "a" * 64, "opponent_deck_hash": "b" * 64,
+                "terminal": False, "reward": 0.0, "aux_ko": 0,
+                "aux_prize_delta": 0.0, "aux_terminal": False,
+                "aux_return": 0.5, "aux_valid": 1,
+            },
+            {
+                "episode_id": "1", "side": 0, "step_id": 1, "decision_id": 1,
+                "substep": 0, "new_episode": False, "player_name": "A",
+                "opponent_name": "B", "outcome": 1, "is_self": True,
+                "player_deck_hash": "a" * 64, "opponent_deck_hash": "b" * 64,
+                "terminal": True, "reward": 1.0, "aux_ko": 1,
+                "aux_prize_delta": 1.0, "aux_terminal": True,
+                "aux_return": 1.0, "aux_valid": 1,
+            },
+        ]
+        table, shape_meta = zip_builder._rows_to_table(
+            rows, labels, attack, meta, day_id=7,
+            int_keys={"select_type"}, enc_shapes=enc_shapes,
+        )
+        self.assertEqual(table.num_rows, 2)
+        self.assertEqual(shape_meta["select_type"], "scalar")
+        self.assertEqual(shape_meta["opt_attr"], [2, 3])
+        self.assertEqual(shape_meta["opt_group"], [4])
+        self.assertEqual(table.column("select_type").to_pylist(), [1, 2])
+        self.assertEqual(
+            table.column("opt_attr").to_pylist()[0], [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+        )
+        self.assertEqual(table.column("day_id").to_pylist(), [7, 7])
+        self.assertEqual(table.column("aux_ko").to_pylist(), [0, 1])
+        self.assertEqual(table.column("aux_return").to_pylist(), [0.5, 1.0])
+        self.assertEqual(table.column("terminal").to_pylist(), [0, 1])
 
 
 if __name__ == "__main__":

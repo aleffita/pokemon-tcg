@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 import shlex
 
-from rl.train_config import get_default_config_path, load_config
+from rl.train_config import get_default_config_path
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -45,12 +45,11 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="Show what would happen without executing")
     p.add_argument("--config", default=None, help="Authoritative train/build config")
     p.add_argument("--skip-download", action="store_true", help="Skip Kaggle download step")
-    p.add_argument("--skip-bc", action="store_true", help="Skip config-driven BC/prospective build")
+    p.add_argument("--skip-bc", action="store_true", help="Skip config-driven BC dataset build")
     p.add_argument("--skip-stats", action="store_true", help="Skip card/deck stats computation")
     p.add_argument("--skip-tournament", action="store_true", help="Skip local tournament")
     p.add_argument("--tournament-games", type=int, default=10, help="Games per opponent in tournament")
     args = p.parse_args()
-    cfg = load_config(config_path=args.config)
     config_source = args.config or get_default_config_path()
 
     start_time = datetime.now()
@@ -69,15 +68,10 @@ def main():
             ]),
         ))
 
-    # Step 2: config-driven BC + real prospective sidecar.
+    # Step 2: config-driven BC dataset build.
     if not args.skip_bc:
-        build_label = (
-            "Build BC dataset and prospective sidecar"
-            if bool(cfg.prospective_enabled)
-            else "Build BC dataset"
-        )
         steps.append((
-            build_label,
+            "Build BC dataset",
             " ".join([
                 "uv run tcg-build-bc",
                 "--config", shlex.quote(str(config_source)),

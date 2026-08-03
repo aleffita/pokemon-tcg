@@ -6,19 +6,22 @@ Faster on M1/M2 via native Metal GPU (no MPS NaN bug).
 FP16-native: numeric features stay float16 end-to-end.
 Gradient accumulation: --accum-steps K accumulates K microbatches before update.
 
+Data comes from the Parquet catalog (one Parquet file per day, registered in
+model/results.db by scripts/bc/build_bc_from_zips.py), streamed with
+pyarrow.dataset -- there is no more multi-.npy mmap directory format.
+
 Usage:
-  uv run tcg-train data/bc_data/bc_2026_07_21 \
-      --d-model 128 --static --split-heads --epochs 8 --batch 128
+  uv run tcg-train --days 2026-07-30,2026-08-01 --config configs/train_config.json
+  uv run tcg-train --last-n-days 5 --config configs/train_config.json
+  uv run tcg-train --all-days --config configs/train_config.json
+  uv run tcg-train --config configs/train_config.json  # uses training_days from config
 """
 
 import argparse
 import hashlib
 import json
 import os
-import queue
 import shutil
-import tempfile
-import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -28,6 +31,7 @@ import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
+import pyarrow.dataset as pads
 from rich.progress import (
     BarColumn,
     Progress,
@@ -43,36 +47,46 @@ from rl.encoder.enc_constants import OPT_WK
 from rl.encoder.encoding import TokenEncoder
 from rl.lr_schedule import lr_at
 from rl.policy_mlx import build_token_net_mlx
-from rl.prospective_input_adapter import (
-    ACTION_ATTR_AGGREGATE_VERSION,
-    ACTION_SET_FEATURE_VERSION,
-    BRANCH_FEATURE_LAYOUT_VERSION,
-    PROSPECTIVE_INPUT_ADAPTER_VERSION,
-    ProspectivePlannerNumpyBatch,
-    RealProspectivePlannerIndex,
-    load_real_prospective_planner_index,
-    materialize_real_prospective_planner_batch,
-)
-from rl.prospective_planner_mlx import (
-    ProspectivePlannerMLX,
-    group_relative_objective,
-    prospective_mlx_checkpoint_payload,
-)
-from rl.prospective_schema import (
-    BRANCH_POLICY_SCORE,
-    EXPECTED_PRIZES,
-    KO_LOGIT,
-    N_PROSPECTIVE_AXES,
-    SCALAR_RETURN,
-    SCALAR_VALUE,
-    TERMINAL_LOGIT,
-    UNCERTAINTY,
-    ProspectivePlannerConfig,
-    build_tree_attention_mask,
-)
+from rl.results_db import ResultsDB
 from rl.train_config import load_config
 
 WK_LO, WK_HI = OPT_WK, OPT_WK + 3
+
+# Auxiliary-head target columns written by the Fase 3a dataset builder.
+# aux_valid gates which rows actually have a computed aux target (some rows,
+# e.g. near-terminal or non-attack decisions, may not carry every signal).
+_AUX_COLUMNS = ["aux_ko", "aux_prize_delta", "aux_terminal", "aux_return", "aux_valid"]
+
+# One pyarrow I/O batch is the physical read unit (no more slab_rows). This is
+# independent of the trainer's --batch (microbatch) size; the streaming
+# re-chunker (`_stream_train_microbatches`) re-slices I/O batches into exact
+# `cfg.batch_size` microbatches regardless of how pyarrow partitions row
+# groups, so the microbatch/optimizer-step accounting stays exact.
+_IO_BATCH_ROWS = 32768
+
+# Metadata/aux columns that are NOT part of the encoder's token schema (i.e.
+# not in TokenEncoder.shapes) but are still real Parquet columns written by
+# build_bc_from_zips.py. Each maps to the numpy dtype it should be read back
+# as. "y" (label) and "opt_group" (dedup canonicalization, __group__ in the
+# old .npy format) are handled explicitly wherever they're read, since their
+# shape depends on the encoder (opt_group reuses action_mask's shape).
+_META_COLUMN_DTYPES: dict[str, type] = {
+    "y": np.int32,
+    "is_attack": np.bool_,
+    "episode_id": np.int64,
+    "side": np.int32,
+    "step_id": np.int32,
+    "decision_id": np.int32,
+    "substep": np.int32,
+    "new_episode": np.bool_,
+    "terminal": np.bool_,
+    "reward": np.float32,
+    "aux_ko": np.int32,
+    "aux_prize_delta": np.float32,
+    "aux_terminal": np.bool_,
+    "aux_return": np.float32,
+    "aux_valid": np.int32,
+}
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -119,7 +133,31 @@ class FP32StateAdamW(optim.AdamW):
 
 
 class PathSafeMultiOptimizer(optim.MultiOptimizer):
-    """MultiOptimizer merge that supports parameter trees containing lists."""
+    """MultiOptimizer merge that supports parameter trees containing lists.
+
+    Also fixes the base MultiOptimizer's `_split_dictionary` which silently
+    drops parameters that don't match any filter (rather than routing them to
+    the fallback optimizer, which is the last one by convention). Here every
+    unfiltered leaf goes to the last optimizer.
+    """
+
+    def _split_dictionary(self, gradients: dict):
+        if len(self.optimizers) == 1:
+            return [gradients]
+        parts = [[] for _ in range(len(self.optimizers))]
+        for k, g in nn.utils.tree_flatten(gradients):
+            matched = False
+            for i, fn in enumerate(self.filters):
+                if fn(k, g):
+                    parts[i].append((k, g))
+                    matched = True
+                    break
+            if not matched:
+                parts[-1].append((k, g))
+        # tree_unflatten([]) returns [] which breaks Optimizer.init on empty
+        # splits (structured heads may be dormant with structured=False). Force
+        # {} in that case so downstream .init() treats it as an empty dict tree.
+        return [nn.utils.tree_unflatten(p) if p else {} for p in parts]
 
     def apply_gradients(self, gradients: dict, parameters: dict):
         merged_leaves = []
@@ -145,12 +183,24 @@ _ADAMW_PARAMETER_PREFIXES = (
     "value_head.",
 )
 
+# Structured verb heads get their own AdamW group with a heavier weight decay
+# so rare verbs collapse toward the shared opt_head fallback instead of drifting.
+_STRUCTURED_PARAMETER_PREFIXES = (
+    "type_query.",
+    "type_bias.",
+)
+
 
 def _use_muon_parameter(path: str, parameter: mx.array) -> bool:
     """Route only hidden 2D projection/Transformer weights to Muon."""
     if parameter.ndim != 2 or not path.endswith(".weight"):
         return False
     return not path.startswith(_ADAMW_PARAMETER_PREFIXES)
+
+
+def _use_structured_adamw_parameter(path: str, parameter: mx.array) -> bool:
+    """Route the verb-conditioned structured heads to a high-decay AdamW."""
+    return path.startswith(_STRUCTURED_PARAMETER_PREFIXES)
 
 
 def _optimizer_contract(cfg) -> dict:
@@ -162,9 +212,10 @@ def _optimizer_contract(cfg) -> dict:
         "adamw_betas": [float(value) for value in cfg.adamw_betas],
         "adamw_eps": float(cfg.adamw_eps),
         "adamw_weight_decay": float(cfg.adamw_weight_decay),
+        "structured_weight_decay": float(cfg.structured_weight_decay),
         "state_dtype": "float32",
         "parameter_dtype": "float16",
-        "routing_version": 1,
+        "routing_version": 2,
     }
 
 
@@ -190,99 +241,24 @@ def _build_optimizer(cfg) -> optim.MultiOptimizer:
         momentum=cfg.muon_momentum,
         weight_decay=cfg.muon_weight_decay,
     )
+    structured_adamw = FP32StateAdamW(
+        learning_rate=cfg.lr,
+        betas=[float(value) for value in cfg.adamw_betas],
+        eps=cfg.adamw_eps,
+        weight_decay=cfg.structured_weight_decay,
+    )
     adamw = FP32StateAdamW(
         learning_rate=cfg.lr,
         betas=[float(value) for value in cfg.adamw_betas],
         eps=cfg.adamw_eps,
         weight_decay=cfg.adamw_weight_decay,
     )
-    return PathSafeMultiOptimizer([muon, adamw], filters=[_use_muon_parameter])
-
-
-_PROSPECTIVE_ADAMW_PREFIXES = (
-    "policy_head.",
-    "return_head.",
-    "value_head.",
-    "ko_head.",
-    "prize_head.",
-    "terminal_head.",
-    "uncertainty_head.",
-)
-
-
-def _use_prospective_muon_parameter(path: str, parameter: mx.array) -> bool:
-    """Route only prospective hidden matrices to Muon."""
-
-    if parameter.ndim != 2 or not path.endswith(".weight"):
-        return False
-    return not path.startswith(_PROSPECTIVE_ADAMW_PREFIXES)
-
-
-def _prospective_planner_config(cfg) -> ProspectivePlannerConfig:
-    """Resolve the cross-backend prospective architecture from TrainConfig."""
-
-    config = ProspectivePlannerConfig(
-        d_model=int(cfg.d_model),
-        nhead=int(cfg.prospective_nhead),
-        nlayers=int(cfg.prospective_nlayers),
-        ff_dim=int(cfg.prospective_ff_dim),
-        rope_base=float(cfg.prospective_rope_base),
-        uncertainty_floor=float(cfg.prospective_uncertainty_floor),
-    )
-    config.validate()
-    return config
-
-
-def _prospective_optimizer_contract(cfg) -> dict:
-    """Serializable identity for the planner's independent optimizer."""
-
-    return {
-        "name": str(cfg.optimizer),
-        "learning_rate": float(cfg.prospective_lr),
-        "muon_momentum": float(cfg.muon_momentum),
-        "muon_weight_decay": float(cfg.muon_weight_decay),
-        "adamw_betas": [float(value) for value in cfg.adamw_betas],
-        "adamw_eps": float(cfg.adamw_eps),
-        "adamw_weight_decay": float(cfg.adamw_weight_decay),
-        "state_dtype": "float32",
-        "parameter_dtype": "float16",
-        "routing_version": 1,
-        "scope": "prospective_planner",
-    }
-
-
-def _build_prospective_optimizer(cfg) -> optim.MultiOptimizer:
-    """Build a planner-local Muon/AdamW optimizer."""
-
-    if cfg.optimizer != "muon_adamw":
-        raise ValueError(f"unsupported optimizer contract: {cfg.optimizer!r}")
-    muon = FP32StateMuon(
-        learning_rate=cfg.prospective_lr,
-        momentum=cfg.muon_momentum,
-        weight_decay=cfg.muon_weight_decay,
-    )
-    adamw = FP32StateAdamW(
-        learning_rate=cfg.prospective_lr,
-        betas=[float(value) for value in cfg.adamw_betas],
-        eps=cfg.adamw_eps,
-        weight_decay=cfg.adamw_weight_decay,
-    )
+    # Filter order matches optimizer order: 2D-hidden -> Muon, verb heads ->
+    # structured AdamW, everything else -> default AdamW fallback.
     return PathSafeMultiOptimizer(
-        [muon, adamw], filters=[_use_prospective_muon_parameter]
+        [muon, structured_adamw, adamw],
+        filters=[_use_muon_parameter, _use_structured_adamw_parameter],
     )
-
-
-def _prospective_scheduler_contract(
-    cfg, total_steps: int, warmup_steps: int
-) -> dict:
-    return {
-        "schedule": str(cfg.lr_schedule),
-        "base_lr": float(cfg.prospective_lr),
-        "warmup_steps": int(warmup_steps),
-        "min_ratio": float(cfg.lr_min_ratio),
-        "total_steps": int(total_steps),
-        "scope": "prospective_planner",
-    }
 
 
 def _cross_entropy_sum(logits: mx.array, labels: mx.array) -> mx.array:
@@ -290,6 +266,84 @@ def _cross_entropy_sum(logits: mx.array, labels: mx.array) -> mx.array:
     return nn.losses.cross_entropy(
         logits.astype(mx.float32), labels, reduction="sum"
     ).astype(mx.float32)
+
+
+def _aux_loss(
+    aux_dict: dict[str, mx.array],
+    aux_targets: dict[str, mx.array],
+    weights: dict[str, float],
+) -> mx.array:
+    """Compute the weighted mean of the four auxiliary-head losses.
+
+    ``aux_targets`` carries an ``aux_valid`` row mask -- only rows with
+    aux_valid=1 contribute. Returns a scalar FP32 loss in MEAN form (i.e.
+    already divided by the valid-row count), 0.0 if no row in the batch is
+    valid. Callers that accumulate loss in SUM form (to match
+    ``_cross_entropy_sum``) must rescale by the row count themselves.
+    """
+    ko_logit = aux_dict["ko_logit"].astype(mx.float32)
+    prize_pred = aux_dict["prize_pred"].astype(mx.float32)
+    terminal_logit = aux_dict["terminal_logit"].astype(mx.float32)
+    return_pred = aux_dict["return_pred"].astype(mx.float32)
+
+    ko_tgt = aux_targets["aux_ko"].astype(mx.float32)
+    prize_tgt = aux_targets["aux_prize_delta"].astype(mx.float32)
+    terminal_tgt = aux_targets["aux_terminal"].astype(mx.float32)
+    return_tgt = aux_targets["aux_return"].astype(mx.float32)
+    valid = aux_targets["aux_valid"].astype(mx.float32)
+    valid_sum = mx.maximum(mx.sum(valid), mx.array(1.0, dtype=mx.float32))
+
+    ko_bce = (
+        mx.logaddexp(mx.array(0.0, dtype=mx.float32), ko_logit) - ko_tgt * ko_logit
+    )
+    terminal_bce = (
+        mx.logaddexp(mx.array(0.0, dtype=mx.float32), terminal_logit)
+        - terminal_tgt * terminal_logit
+    )
+    prize_mse = (prize_pred - prize_tgt) ** 2
+    return_mse = (return_pred - return_tgt) ** 2
+
+    loss = (
+        weights["ko"] * mx.sum(valid * ko_bce) / valid_sum
+        + weights["prize"] * mx.sum(valid * prize_mse) / valid_sum
+        + weights["terminal"] * mx.sum(valid * terminal_bce) / valid_sum
+        + weights["return"] * mx.sum(valid * return_mse) / valid_sum
+    )
+    return loss
+
+
+def _aux_metrics(
+    aux_dict: dict[str, np.ndarray], aux_targets: dict[str, np.ndarray]
+) -> dict[str, float]:
+    """Per-head, unweighted, masked-mean metrics for reporting (numpy, host-side).
+
+    Unlike ``_aux_loss`` (which returns one combined weighted scalar for
+    backprop), this keeps every head separate so val logs can show
+    ``aux_ko_bce``/``aux_prize_mse``/``aux_terminal_bce``/``aux_return_mse``
+    independently of the configured loss weights.
+    """
+    valid = aux_targets["aux_valid"].astype(np.float32)
+    valid_sum = max(float(valid.sum()), 1.0)
+    ko_logit = aux_dict["ko_logit"].astype(np.float32)
+    terminal_logit = aux_dict["terminal_logit"].astype(np.float32)
+    prize_pred = aux_dict["prize_pred"].astype(np.float32)
+    return_pred = aux_dict["return_pred"].astype(np.float32)
+    ko_tgt = aux_targets["aux_ko"].astype(np.float32)
+    terminal_tgt = aux_targets["aux_terminal"].astype(np.float32)
+    prize_tgt = aux_targets["aux_prize_delta"].astype(np.float32)
+    return_tgt = aux_targets["aux_return"].astype(np.float32)
+
+    ko_bce = np.logaddexp(0.0, ko_logit) - ko_tgt * ko_logit
+    terminal_bce = np.logaddexp(0.0, terminal_logit) - terminal_tgt * terminal_logit
+    prize_mse = (prize_pred - prize_tgt) ** 2
+    return_mse = (return_pred - return_tgt) ** 2
+
+    return {
+        "aux_ko_bce": float((valid * ko_bce).sum() / valid_sum),
+        "aux_prize_mse": float((valid * prize_mse).sum() / valid_sum),
+        "aux_terminal_bce": float((valid * terminal_bce).sum() / valid_sum),
+        "aux_return_mse": float((valid * return_mse).sum() / valid_sum),
+    }
 
 
 def _sequential_tbptt_loss(
@@ -319,8 +373,22 @@ def _batched_sequential_tbptt_loss(
     lane_memory_in: list[mx.array | None],
     *,
     return_logits: bool = False,
+    return_aux: bool = False,
+    lane_aux_targets: list[dict[str, mx.array]] | None = None,
+    aux_weights: dict[str, float] | None = None,
 ):
-    """Unroll independent lanes in parallel without sharing recurrent memory."""
+    """Unroll independent lanes in parallel without sharing recurrent memory.
+
+    When ``aux_weights`` is given (together with a matching
+    ``lane_aux_targets`` -- one dict of per-lane aux-column arrays per lane,
+    row-aligned with that lane's ``lane_labels``/``lane_observations``),
+    every decision forward calls ``model.logits_value_aux`` instead of
+    ``model.logits_value``. The auxiliary predictions and targets from every
+    decision across the whole temporal batch are accumulated and scored once
+    at the end with ``_aux_loss`` (a single global masked mean over every
+    valid row in the batch), then rescaled to SUM form -- matching
+    ``_cross_entropy_sum`` -- and folded into the returned loss.
+    """
     lane_count = len(lane_observations)
     if not (
         lane_count
@@ -331,6 +399,12 @@ def _batched_sequential_tbptt_loss(
         raise ValueError("TBPTT lane inputs must have identical lengths")
     if lane_count == 0:
         raise ValueError("TBPTT temporal batches must contain at least one lane")
+    if (lane_aux_targets is None) != (aux_weights is None):
+        raise ValueError(
+            "lane_aux_targets and aux_weights must be provided together"
+        )
+    if lane_aux_targets is not None and len(lane_aux_targets) != lane_count:
+        raise ValueError("lane_aux_targets must have one entry per lane")
 
     for labels, decision_lengths in zip(lane_labels, lane_decision_lengths):
         if not decision_lengths or any(length <= 0 for length in decision_lengths):
@@ -338,10 +412,14 @@ def _batched_sequential_tbptt_loss(
         if sum(decision_lengths) != int(labels.shape[0]):
             raise ValueError("TBPTT decision lengths do not cover all lane rows")
 
+    aux_active = aux_weights is not None
     loss_sum = mx.array(0.0, dtype=mx.float32)
     lane_memories = list(lane_memory_in)
     lane_offsets = [0] * lane_count
     lane_logits: list[list[mx.array]] = [[] for _ in range(lane_count)]
+    aux_pred_parts: dict[str, list[mx.array]] = defaultdict(list)
+    aux_target_parts: dict[str, list[mx.array]] = defaultdict(list)
+    total_aux_rows = 0
     max_decisions = max(len(lengths) for lengths in lane_decision_lengths)
 
     for decision_index in range(max_decisions):
@@ -352,6 +430,7 @@ def _batched_sequential_tbptt_loss(
         ]
         decision_observations: list[dict[str, mx.array]] = []
         decision_labels: list[mx.array] = []
+        decision_aux_targets: list[dict[str, mx.array]] = []
         repeated_memories: list[mx.array] = []
         row_counts: list[int] = []
 
@@ -366,6 +445,13 @@ def _batched_sequential_tbptt_loss(
                 }
             )
             decision_labels.append(lane_labels[lane_index][row_start:row_stop])
+            if aux_active:
+                decision_aux_targets.append(
+                    {
+                        key: value[row_start:row_stop]
+                        for key, value in lane_aux_targets[lane_index].items()
+                    }
+                )
             memory = lane_memories[lane_index]
             if memory is None:
                 memory = model.learned_init.reshape(
@@ -389,9 +475,24 @@ def _batched_sequential_tbptt_loss(
         }
         combined_labels = mx.concatenate(decision_labels, axis=0)
         combined_memory = mx.concatenate(repeated_memories, axis=0)
-        logits, _, memory_out = model.logits_value(
-            combined_observation, memory_in=combined_memory
-        )
+        if aux_active:
+            logits, _, memory_out, aux_dict = model.logits_value_aux(
+                combined_observation, memory_in=combined_memory
+            )
+            for aux_key, aux_value in aux_dict.items():
+                aux_pred_parts[aux_key].append(aux_value)
+            for aux_key in _AUX_COLUMNS:
+                aux_target_parts[aux_key].append(
+                    mx.concatenate(
+                        [target[aux_key] for target in decision_aux_targets],
+                        axis=0,
+                    )
+                )
+            total_aux_rows += int(combined_labels.shape[0])
+        else:
+            logits, _, memory_out = model.logits_value(
+                combined_observation, memory_in=combined_memory
+            )
         loss_sum = loss_sum + _cross_entropy_sum(logits, combined_labels)
 
         row_offset = 0
@@ -407,19 +508,40 @@ def _batched_sequential_tbptt_loss(
             ]
             row_offset += row_count
 
+    aux_dict_all: dict[str, mx.array] | None = None
+    aux_targets_all: dict[str, mx.array] | None = None
+    if aux_active and total_aux_rows > 0:
+        aux_dict_all = {
+            key: mx.concatenate(parts, axis=0)
+            for key, parts in aux_pred_parts.items()
+        }
+        aux_targets_all = {
+            key: mx.concatenate(parts, axis=0)
+            for key, parts in aux_target_parts.items()
+        }
+        aux_mean = _aux_loss(aux_dict_all, aux_targets_all, aux_weights)
+        # Rescale mean -> sum form so it composes with the CE sum above and
+        # the caller's single division by total example count at the
+        # optimizer-step boundary yields mean(CE) + mean(aux), consistent
+        # with the non-TBPTT scaling choice.
+        loss_sum = loss_sum + aux_mean * total_aux_rows
+
     if any(memory is None for memory in lane_memories):
         raise ValueError("every TBPTT lane must advance at least one decision")
     combined_final_memory = mx.concatenate(
         [memory for memory in lane_memories if memory is not None],
         axis=0,
     )
+
+    result: list = [loss_sum, combined_final_memory]
     if return_logits:
-        return (
-            loss_sum,
-            combined_final_memory,
-            [mx.concatenate(parts, axis=0) for parts in lane_logits],
-        )
-    return loss_sum, combined_final_memory
+        result.append([mx.concatenate(parts, axis=0) for parts in lane_logits])
+    if return_aux:
+        if not aux_active:
+            raise ValueError("return_aux requires aux_weights/lane_aux_targets")
+        result.append(aux_dict_all)
+        result.append(aux_targets_all)
+    return tuple(result)
 
 
 @dataclass(frozen=True)
@@ -436,9 +558,15 @@ class _TBPTTChunk:
 
 
 def _build_tbptt_decision_groups(
-    episode_meta: np.ndarray, train_rows: int
+    episode_meta, train_rows: int
 ) -> list[list[np.ndarray]]:
-    """Group ordered rows into decisions, preserving episode and side isolation."""
+    """Group ordered rows into decisions, preserving episode and side isolation.
+
+    ``episode_meta`` only needs bracket-key access to parallel "episode_id" /
+    "side" / "step_id" arrays of length >= train_rows -- a plain
+    ``dict[str, np.ndarray]`` works exactly like the old structured-dtype
+    ``episode_meta.npy`` array did here.
+    """
     row_groups = _build_tbptt_groups(episode_meta, train_rows)
     decision_groups: list[list[np.ndarray]] = []
     step_ids = episode_meta["step_id"]
@@ -586,14 +714,7 @@ def _ceil_div(numerator: int, denominator: int) -> int:
     return (numerator + denominator - 1) // denominator
 
 
-def _standard_microbatch_count(
-    slab_bounds: list[tuple[int, int]], batch_size: int
-) -> int:
-    """Count the batches actually yielded across all slab boundaries."""
-    return sum(_ceil_div(stop - start, batch_size) for start, stop in slab_bounds)
-
-
-def _build_tbptt_groups(episode_meta: np.ndarray, train_rows: int) -> list[np.ndarray]:
+def _build_tbptt_groups(episode_meta, train_rows: int) -> list[np.ndarray]:
     """Build the exact ordered row groups consumed by the TBPTT generator."""
     groups: dict[tuple[str, int], list[int]] = defaultdict(list)
     episode_ids = episode_meta["episode_id"][:train_rows]
@@ -608,606 +729,180 @@ def _tbptt_microbatch_count(groups: list[np.ndarray], chunk_size: int) -> int:
     return sum(_ceil_div(len(rows), chunk_size) for rows in groups)
 
 
-def read_rows(arr: np.ndarray, start: int, stop: int) -> np.ndarray:
-    """Rows [start:stop) — buffered sequential read for memmap, slice for in-RAM."""
-    if not isinstance(arr, np.memmap):
-        return np.asarray(arr[start:stop])
-    rowel = int(np.prod(arr.shape[1:], dtype=np.int64))
-    flat = np.fromfile(
-        arr.filename,
-        dtype=arr.dtype,
-        count=(stop - start) * rowel,
-        offset=arr.offset + start * rowel * arr.dtype.itemsize,
-    )
-    return flat.reshape((stop - start,) + arr.shape[1:])
-
-
-def _prospective_target_arrays(
-    nodes: np.ndarray,
-    node_index: np.ndarray,
-) -> dict[str, np.ndarray]:
-    """Gather targets separately from the causal prospective input adapter."""
-
-    shape = node_index.shape
-    targets = {
-        "scalar_return": np.zeros(shape, dtype=np.float32),
-        "terminal": np.zeros(shape, dtype=np.float32),
-        "ko": np.zeros(shape, dtype=np.float32),
-        "prizes": np.zeros(shape, dtype=np.float32),
-        "behavior_logprob": np.zeros(shape, dtype=np.float32),
-        "has_behavior_logprob": np.zeros(shape, dtype=np.bool_),
-        "reference_logprob": np.zeros(shape, dtype=np.float32),
-        "has_reference_logprob": np.zeros(shape, dtype=np.bool_),
-    }
-    occupied = node_index >= 0
-    source = nodes[node_index[occupied]]
-    targets["scalar_return"][occupied] = source["scalar_return"]
-    targets["terminal"][occupied] = source["terminal"].astype(np.float32)
-    targets["ko"][occupied] = (source["ko_signal"] > 0).astype(np.float32)
-    targets["prizes"][occupied] = source["prizes_taken"].astype(np.float32)
-    targets["behavior_logprob"][occupied] = source["behavior_logprob"]
-    targets["has_behavior_logprob"][occupied] = source[
-        "has_behavior_logprob"
-    ]
-    targets["reference_logprob"][occupied] = source["reference_logprob"]
-    targets["has_reference_logprob"][occupied] = source[
-        "has_reference_logprob"
-    ]
-    return targets
-
-
-def _prospective_training_group_indices(
-    group_target_rows: np.ndarray,
-    *,
-    train_stop: int,
+def _read_batch_column(
+    batch, name: str, shapes: dict[str, tuple], int_keys: set[str]
 ) -> np.ndarray:
-    """Return only sidecar groups whose target belongs to the BC train split."""
+    """One Parquet column of a RecordBatch -> its original (rows, *shape) array.
 
-    target_rows = np.asarray(group_target_rows)
-    if target_rows.ndim != 1 or target_rows.dtype.kind not in "iu":
-        raise ValueError("prospective group_target_rows must be integer [G]")
-    if train_stop <= 0:
-        raise ValueError("invalid prospective train split boundary")
-    if np.any(target_rows < 0):
-        raise ValueError("prospective groups contain unresolved target rows")
-    selected = np.flatnonzero(target_rows < train_stop).astype(np.int64)
-    if len(selected) == 0:
-        raise ValueError(
-            "prospective sidecar has no groups inside the BC train split"
-        )
-    return selected
-
-
-def _prospective_training_has_node_flag(
-    index: RealProspectivePlannerIndex,
-    group_indices: np.ndarray,
-    field: str,
-) -> bool:
-    """Scan one boolean node field through memmap group slices without padding."""
-
-    if index.nodes.dtype.names is None or field not in index.nodes.dtype.names:
-        raise ValueError(f"prospective nodes lack required flag {field!r}")
-    for group_index in np.asarray(group_indices, dtype=np.int64):
-        start = int(index.node_starts[group_index])
-        stop = start + int(index.node_counts[group_index])
-        nodes = index.nodes[start:stop]
-        if np.any(nodes[field] & nodes["valid"]):
-            return True
-    return False
-
-
-def _prospective_training_target_balance(
-    index: RealProspectivePlannerIndex,
-    group_indices: np.ndarray,
-) -> dict[str, float]:
-    """Derive normalized rare-target weights from the real training split."""
-
-    counts = {
-        "valid": 0,
-        "return_nonzero": 0,
-        "ko_positive": 0,
-        "prize_nonzero": 0,
-        "terminal_positive": 0,
-    }
-    selected = np.asarray(group_indices, dtype=np.int64)
-    starts = np.asarray(index.node_starts[selected], dtype=np.int64)
-    stops = starts + np.asarray(index.node_counts[selected], dtype=np.int64)
-    if np.any(starts[1:] < starts[:-1]):
-        order = np.argsort(starts)
-        starts, stops = starts[order], stops[order]
-    breaks = np.flatnonzero(starts[1:] != stops[:-1]) + 1
-    range_starts = np.concatenate((starts[:1], starts[breaks]))
-    range_stops = np.concatenate((stops[breaks - 1], stops[-1:]))
-    scan_rows = 1_000_000
-    for range_start, range_stop in zip(range_starts, range_stops):
-        for start in range(int(range_start), int(range_stop), scan_rows):
-            stop = min(start + scan_rows, int(range_stop))
-            nodes = index.nodes[start:stop]
-            valid = np.asarray(nodes["valid"], dtype=np.bool_)
-            counts["valid"] += int(np.count_nonzero(valid))
-            counts["return_nonzero"] += int(
-                np.count_nonzero(
-                    valid & (np.abs(nodes["scalar_return"]) > 1e-8)
-                )
-            )
-            counts["ko_positive"] += int(
-                np.count_nonzero(valid & (nodes["ko_signal"] > 0))
-            )
-            counts["prize_nonzero"] += int(
-                np.count_nonzero(valid & (nodes["prizes_taken"] > 0))
-            )
-            counts["terminal_positive"] += int(
-                np.count_nonzero(valid & nodes["terminal"])
-            )
-    total = counts["valid"]
-    if total <= 0:
-        raise ValueError("prospective training split has no valid nodes")
-
-    def ratio(positive_key: str) -> float:
-        positive = counts[positive_key]
-        if positive <= 0 or positive >= total:
-            return 1.0
-        return float(total - positive) / float(positive)
-
-    return {
-        "return_nonzero": ratio("return_nonzero"),
-        "ko_positive": ratio("ko_positive"),
-        "prize_nonzero": ratio("prize_nonzero"),
-        "terminal_positive": ratio("terminal_positive"),
-    }
-
-
-def _prospective_physical_group_batches(
-    group_indices: np.ndarray,
-    batch_size: int,
-):
-    """Yield bounded sidecar group slices without materializing the corpus."""
-
-    selected = np.asarray(group_indices)
-    if selected.ndim != 1 or selected.dtype.kind not in "iu":
-        raise ValueError("prospective group indices must be integer [G]")
-    if batch_size <= 0:
-        raise ValueError("prospective physical batch size must be positive")
-    for start in range(0, len(selected), batch_size):
-        stop = min(start + batch_size, len(selected))
-        yield start, stop, selected[start:stop]
-
-
-def _reconstruct_prospective_trunk_context(
-    model: nn.Module,
-    observation_arrays: dict[str, np.ndarray],
-    integer_keys: set[str],
-    episode_meta: np.ndarray,
-    group_target_keys,
-    *,
-    row_limit: int,
-    work_plan=None,
-    context_destination: np.ndarray | None = None,
-    on_decision_complete=None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Rebuild detached causal trunk context for every real rollout tree.
-
-    Each ``(episode, side)`` lane is replayed in decision order. All expanded
-    rows of one multi-select decision receive exactly the same memory input,
-    and only the final subrow commits memory once for the next decision.
+    Encoder-schema columns were written by build_bc_from_zips.py's
+    ``_rows_to_table`` as either a plain scalar column (encoder shape ==
+    (1,)) or a flattened FixedSizeList (row-major) for any larger shape.
+    "opt_group" is the Parquet name for the old .npy-era "__group__" array
+    and reuses action_mask's shape. Anything else is a flat per-row
+    metadata/aux column (see ``_META_COLUMN_DTYPES``).
     """
-
-    context_plan = work_plan
-    if context_plan is None:
-        context_plan, _ = _prospective_context_work_plan(
-            episode_meta,
-            group_target_keys,
-            row_limit=row_limit,
-        )
-    context_shape = (
-        len(group_target_keys),
-        2 + int(model.scratch_tokens),
-        int(model.d),
-    )
-    if context_destination is None:
-        contexts = np.empty(context_shape, dtype=np.float16)
+    col = batch.column(name)
+    if name == "opt_group":
+        shape, dtype = shapes["action_mask"], np.int32
+    elif name in shapes:
+        shape = shapes[name]
+        dtype = np.int32 if name in int_keys else np.float32
     else:
-        if (
-            context_destination.shape != context_shape
-            or context_destination.dtype != np.float16
-        ):
-            raise ValueError(
-                "prospective context destination must be FP16 with shape "
-                f"{context_shape}"
-            )
-        contexts = context_destination
-    resolved = np.zeros(len(group_target_keys), dtype=np.bool_)
+        shape, dtype = None, _META_COLUMN_DTYPES.get(name, np.float32)
 
-    completed_decisions = 0
-    for _, decisions, target_groups in context_plan:
-        memory: mx.array | None = None
-        for step, decision_rows in decisions:
-            observation = {
-                key: mx.array(
-                    np.asarray(array[decision_rows]).astype(
-                        np.int32 if key in integer_keys else np.float16
-                    )
-                )
-                for key, array in observation_arrays.items()
-            }
-            memory_in = (
-                model.learned_init.reshape(1, model.scratch_tokens, model.d)
-                if memory is None
-                else memory
-            )
-            repeated_memory = mx.broadcast_to(
-                memory_in,
-                (len(decision_rows), model.scratch_tokens, model.d),
-            )
-            cls_out, _, pooled, _, memory_out = model._encode(
-                observation, memory_in=repeated_memory
-            )
-            if step in target_groups:
-                # The first subrow is the pre-action view (picked is empty).
-                # Later expanded rows contain behavior-action subselections and
-                # must not leak that label into the planner's current context.
-                target_context = mx.concatenate(
-                    (
-                        cls_out[:1, None, :],
-                        pooled[:1, None, :],
-                        memory_out[:1],
-                    ),
-                    axis=1,
-                )
-                target_context = mx.stop_gradient(
-                    target_context.astype(mx.float16)
-                )
-                mx.eval(target_context)
-                target_array = np.asarray(target_context[0])
-                for batch_index in target_groups[step]:
-                    contexts[batch_index] = target_array
-                    resolved[batch_index] = True
-
-            # All subrows saw identical memory_in. Commit the final subrow
-            # exactly once to advance the lane to the next engine decision.
-            memory = mx.stop_gradient(memory_out[-1:])
-            mx.eval(memory)
-            completed_decisions += 1
-            if on_decision_complete is not None:
-                on_decision_complete(completed_decisions)
-
-    if not np.all(resolved):
-        raise ValueError("prospective context plan did not resolve every group")
-    return contexts
+    if shape is None:
+        return col.to_numpy(zero_copy_only=False).astype(dtype)
+    if shape == (1,):
+        return col.to_numpy(zero_copy_only=False).astype(dtype).reshape(-1, 1)
+    flat_len = int(np.prod(shape))
+    flat = col.flatten().to_numpy(zero_copy_only=False).astype(dtype)
+    assert flat.shape[0] == batch.num_rows * flat_len
+    return flat.reshape((batch.num_rows, *shape))
 
 
-def _prospective_batch_geometry(
-    planner_batch: ProspectivePlannerNumpyBatch,
+def _materialize_columns(
+    dataset,
+    columns: list[str],
+    row_filter,
+    shapes: dict[str, tuple],
+    int_keys: set[str],
     *,
-    context_length: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Expand one physical sidecar batch to the learned trunk context width."""
+    batch_size: int = _IO_BATCH_ROWS,
+) -> dict[str, np.ndarray]:
+    """Fully read ``columns`` for rows matching ``row_filter`` into RAM.
 
-    if context_length <= 0:
-        raise ValueError("prospective context_length must be positive")
-    context_coordinates = np.zeros(
-        (
-            len(planner_batch.group_keys),
-            context_length,
-            N_PROSPECTIVE_AXES,
-        ),
-        dtype=np.int32,
-    )
-    context_coordinates[..., 0] = planner_batch.coordinates[:, :1, 0]
-    coordinates = np.concatenate(
-        (context_coordinates, planner_batch.coordinates[:, 1:, :]), axis=1
-    )
-    attention_mask = build_tree_attention_mask(
-        planner_batch.parent_index,
-        planner_batch.branch_valid,
-        context_length=context_length,
-    )
-    return coordinates, attention_mask
-
-
-def _prospective_context_work_plan(
-    episode_meta: np.ndarray,
-    group_target_keys,
-    *,
-    row_limit: int,
-) -> tuple[
-    list[
-        tuple[
-            tuple[str, int],
-            list[tuple[int, np.ndarray]],
-            dict[int, list[int]],
-        ]
-    ],
-    int,
-]:
-    """Plan one linear causal replay per ``(episode, side)`` lane."""
-
-    if row_limit <= 0 or row_limit > len(episode_meta):
-        raise ValueError("invalid prospective causal reconstruction row limit")
-    targets_by_lane: dict[tuple[str, int], dict[int, list[int]]] = {}
-    for batch_index, raw_target in enumerate(group_target_keys):
-        target = (
-            str(raw_target[0]),
-            int(raw_target[1]),
-            int(raw_target[2]),
-        )
-        targets_by_lane.setdefault(target[:2], {}).setdefault(
-            target[2], []
-        ).append(batch_index)
-
-    lane_rows: dict[tuple[str, int], list[int]] = {
-        lane_key: [] for lane_key in targets_by_lane
-    }
-    for row_index in range(row_limit):
-        metadata_row = episode_meta[row_index]
-        lane_key = (
-            str(metadata_row["episode_id"]),
-            int(metadata_row["side"]),
-        )
-        if lane_key in lane_rows:
-            lane_rows[lane_key].append(row_index)
-
-    plan = []
-    total_decisions = 0
-    for lane_key, target_groups in targets_by_lane.items():
-        rows = lane_rows[lane_key]
-        if len(rows) == 0:
-            raise ValueError(
-                f"prospective sidecar lane is absent from dataset: {lane_key}"
-            )
-        decisions: list[tuple[int, np.ndarray]] = []
-        current_step: int | None = None
-        current_rows: list[int] = []
-        seen_steps: set[int] = set()
-        for row in rows:
-            step = int(episode_meta["step_id"][row])
-            if current_step is None or step == current_step:
-                current_step = step
-                current_rows.append(int(row))
-                continue
-            if step in seen_steps:
-                raise ValueError(
-                    "prospective reconstruction found non-contiguous "
-                    "multi-select rows"
-                )
-            seen_steps.add(int(current_step))
-            decisions.append(
-                (int(current_step), np.asarray(current_rows, dtype=np.int64))
-            )
-            current_step = step
-            current_rows = [int(row)]
-        if current_rows and current_step is not None:
-            decisions.append(
-                (int(current_step), np.asarray(current_rows, dtype=np.int64))
-            )
-
-        target_positions = {
-            step: position
-            for position, (step, _) in enumerate(decisions)
-            if step in target_groups
-        }
-        missing_steps = set(target_groups) - set(target_positions)
-        if missing_steps:
-            raise ValueError(
-                "prospective target decisions are absent from dataset lane "
-                f"{lane_key}: {sorted(missing_steps)}"
-            )
-        stop = max(target_positions.values()) + 1
-        lane_work = decisions[:stop]
-        total_decisions += len(lane_work)
-        plan.append((lane_key, lane_work, target_groups))
-    return plan, total_decisions
-
-
-def _prospective_sibling_policy_terms(
-    scores: mx.array,
-    returns: mx.array,
-    parent_index: mx.array,
-    valid: mx.array,
-    *,
-    eps: float = 1e-6,
-) -> tuple[mx.array, mx.array, mx.array]:
-    """Build log-probabilities/advantages only within real sibling sets."""
-
-    if (
-        scores.shape != returns.shape
-        or scores.shape != parent_index.shape
-        or scores.shape != valid.shape
-        or scores.ndim != 2
+    Used for validation (always) and for TBPTT training (chunking needs
+    ordered access across a whole episode-side trajectory, which a row-by-row
+    Parquet stream cannot give cheaply -- see CLAUDE.md's TBPTT section).
+    """
+    parts: dict[str, list[np.ndarray]] = {c: [] for c in columns}
+    for io_batch in dataset.to_batches(
+        columns=columns, filter=row_filter, batch_size=batch_size
     ):
-        raise ValueError("prospective sibling tensors must share [B,T] shape")
-    valid_bool = valid.astype(mx.bool_)
-    sibling_mask = (
-        parent_index[:, :, None] == parent_index[:, None, :]
-    ) & valid_bool[:, :, None] & valid_bool[:, None, :]
-    sibling_count = mx.sum(sibling_mask.astype(mx.int32), axis=2)
-    scores_fp32 = scores.astype(mx.float32)
-    sibling_scores = mx.where(
-        sibling_mask,
-        scores_fp32[:, None, :],
-        mx.array(-1e30, dtype=mx.float32),
-    )
-    current_logprobs = scores_fp32 - mx.logsumexp(
-        sibling_scores, axis=2
-    )
-
-    returns_fp32 = returns.astype(mx.float32)
-    weights = sibling_mask.astype(mx.float32)
-    counts = mx.maximum(
-        mx.sum(weights, axis=2), mx.array(1.0, dtype=mx.float32)
-    )
-    means = mx.sum(
-        weights * returns_fp32[:, None, :], axis=2
-    ) / counts
-    centered = returns_fp32 - means
-    variances = mx.sum(
-        weights * (returns_fp32[:, None, :] - means[:, :, None]) ** 2,
-        axis=2,
-    ) / counts
-    policy_valid = valid_bool & (sibling_count >= 2) & (variances > eps)
-    advantages = centered / mx.sqrt(variances + eps)
-    advantages = mx.where(
-        policy_valid, advantages, mx.zeros_like(advantages)
-    )
-    return (
-        current_logprobs.astype(mx.float32),
-        mx.stop_gradient(advantages.astype(mx.float32)),
-        policy_valid,
-    )
-
-
-def _prospective_loss(
-    planner: ProspectivePlannerMLX,
-    context: mx.array,
-    branch_tokens: mx.array,
-    coordinates: mx.array,
-    attention_mask: mx.array,
-    branch_valid: mx.array,
-    parent_index: mx.array,
-    targets: dict[str, mx.array],
-    cfg,
-    target_balance: dict[str, float],
-    *,
-    use_behavior_logprobs: bool,
-    use_reference_logprobs: bool,
-) -> tuple[mx.array, ...]:
-    """FP32 multi-head prospective objective over real rollout nodes."""
-
-    outputs = planner(
-        context,
-        branch_tokens,
-        coordinates,
-        attention_mask,
-        branch_valid,
-    )
-    valid = branch_valid.astype(mx.bool_)
-    valid_fp32 = valid.astype(mx.float32)
-
-    def mean_valid(
-        value: mx.array,
-        *,
-        rare: mx.array | None = None,
-        rare_weight: float = 1.0,
-    ) -> mx.array:
-        weights = valid_fp32
-        if rare is not None:
-            weights = weights * (
-                1.0
-                + (float(rare_weight) - 1.0) * rare.astype(mx.float32)
+        if io_batch.num_rows == 0:
+            continue
+        for c in columns:
+            parts[c].append(_read_batch_column(io_batch, c, shapes, int_keys))
+    return {
+        c: (
+            np.concatenate(values, axis=0)
+            if values
+            else np.zeros(
+                (0,) + shapes.get(c, ()),
+                dtype=_META_COLUMN_DTYPES.get(c, np.float32),
             )
-        return mx.sum(value.astype(mx.float32) * weights) / mx.maximum(
-            mx.sum(weights), mx.array(1.0, dtype=mx.float32)
         )
+        for c, values in parts.items()
+    }
 
-    current_logprobs, advantages, policy_valid = (
-        _prospective_sibling_policy_terms(
-            outputs[BRANCH_POLICY_SCORE],
-            targets["scalar_return"],
-            parent_index,
-            valid,
+
+def _apply_dedup_relabel(chunk: dict[str, np.ndarray]) -> None:
+    """Remap chunk["y"] to its canonical dedup-group label, in place.
+
+    Mirrors the old .npy loader's one-shot ``labels = group[arange, labels]``
+    pass, applied per chunk instead of once over the whole label array -- the
+    remap is purely row-local so the two are exactly equivalent.
+    """
+    group = chunk.get("opt_group")
+    if group is None:
+        return
+    y = chunk["y"]
+    chunk["y"] = group[np.arange(len(y)), y]
+
+
+def _stream_train_microbatches(
+    dataset,
+    columns: list[str],
+    row_filter,
+    shapes: dict[str, tuple],
+    int_keys: set[str],
+    batch_size: int,
+    seed_key: list,
+    *,
+    io_batch_rows: int = _IO_BATCH_ROWS,
+):
+    """Yield exactly ``ceil(n_rows / batch_size)`` fixed-size microbatches.
+
+    Reads pyarrow I/O batches (whatever size pyarrow's row-group partitioning
+    happens to produce, capped at io_batch_rows) and re-chunks them through a
+    carry buffer, so the emitted microbatch boundary never depends on that
+    internal partitioning -- the trainer needs an exact microbatch count
+    computed independently ahead of time (``_ceil_div(n_train, batch_size)``)
+    for the optimizer-step/scheduler accounting to stay exact. Each I/O
+    batch's rows are shuffled (seeded on seed_key + io-batch index) before
+    entering the carry buffer.
+    """
+    carry: dict[str, np.ndarray] | None = None
+    io_index = 0
+    for io_batch in dataset.to_batches(
+        columns=columns, filter=row_filter, batch_size=io_batch_rows
+    ):
+        if io_batch.num_rows == 0:
+            continue
+        chunk = {
+            c: _read_batch_column(io_batch, c, shapes, int_keys) for c in columns
+        }
+        _apply_dedup_relabel(chunk)
+        n = io_batch.num_rows
+        perm = np.random.default_rng([*seed_key, io_index]).permutation(n)
+        io_index += 1
+        chunk = {c: v[perm] for c, v in chunk.items()}
+        if carry is not None:
+            chunk = {
+                c: np.concatenate([carry[c], chunk[c]], axis=0) for c in columns
+            }
+        total = len(chunk[columns[0]])
+        pos = 0
+        while total - pos >= batch_size:
+            yield {c: chunk[c][pos : pos + batch_size] for c in columns}
+            pos += batch_size
+        carry = {c: chunk[c][pos:] for c in columns} if pos < total else None
+    if carry is not None and len(carry[columns[0]]) > 0:
+        yield carry
+
+
+def _resolve_day_ids(args, cfg, db: "ResultsDB") -> list[int]:
+    """Resolve the `days` table ids selected by CLI flags or config."""
+    selectors = [bool(args.all_days), bool(args.last_n_days), bool(args.days)]
+    if sum(selectors) > 1:
+        raise SystemExit("use only one of --days, --last-n-days, --all-days")
+    if args.all_days:
+        rows = db.conn.execute("SELECT id FROM days ORDER BY date").fetchall()
+        return [int(row["id"]) for row in rows]
+    if args.last_n_days:
+        rows = db.conn.execute(
+            "SELECT id FROM days ORDER BY date DESC LIMIT ?", (args.last_n_days,)
+        ).fetchall()
+        return [int(row["id"]) for row in reversed(rows)]
+    dates: list[str] = []
+    if args.days:
+        dates = [d.strip() for d in args.days.split(",") if d.strip()]
+    elif cfg.training_days:
+        dates = list(cfg.training_days)
+    if not dates:
+        raise SystemExit(
+            "no training days specified; use --days, --last-n-days, --all-days, "
+            "or configure training_days"
         )
-    )
-    policy = group_relative_objective(
-        current_logprobs.reshape(-1),
-        advantages.reshape(-1),
-        valid_mask=policy_valid.reshape(-1),
-        behavior_logprobs=(
-            targets["behavior_logprob"].reshape(-1)
-            if use_behavior_logprobs
-            else None
-        ),
-        has_behavior_logprob=(
-            targets["has_behavior_logprob"].reshape(-1)
-            if use_behavior_logprobs
-            else None
-        ),
-        reference_logprobs=(
-            targets["reference_logprob"].reshape(-1)
-            if use_reference_logprobs
-            else None
-        ),
-        has_reference_logprob=(
-            targets["has_reference_logprob"].reshape(-1)
-            if use_reference_logprobs
-            else None
-        ),
-        clip_ratio=float(cfg.prospective_clip_ratio),
-        kl_coefficient=float(cfg.prospective_kl_coefficient),
-    )
+    day_ids = []
+    for date in dates:
+        row = db.conn.execute("SELECT id FROM days WHERE date = ?", (date,)).fetchone()
+        if row is None:
+            raise SystemExit(f"training day not found in catalog: {date!r}")
+        day_ids.append(int(row["id"]))
+    return day_ids
 
-    target_return = targets["scalar_return"].astype(mx.float32)
-    return_nonzero = mx.abs(target_return) > 1e-8
-    return_error = outputs[SCALAR_RETURN].astype(mx.float32) - target_return
-    value_error = outputs[SCALAR_VALUE].astype(mx.float32) - target_return
-    return_loss = mean_valid(
-        return_error * return_error,
-        rare=return_nonzero,
-        rare_weight=target_balance["return_nonzero"],
-    )
-    value_loss = mean_valid(
-        value_error * value_error,
-        rare=return_nonzero,
-        rare_weight=target_balance["return_nonzero"],
-    )
 
-    def binary_loss(
-        logit_key: str,
-        target_key: str,
-        balance_key: str,
-    ) -> mx.array:
-        logits = outputs[logit_key].astype(mx.float32)
-        target = targets[target_key].astype(mx.float32)
-        per_item = mx.logaddexp(
-            mx.array(0.0, dtype=mx.float32), logits
-        ) - target * logits
-        return mean_valid(
-            per_item,
-            rare=target > 0.5,
-            rare_weight=target_balance[balance_key],
+def _load_dataset_manifest(parquet_path: str) -> dict:
+    """Load the sidecar ``{date}.manifest.json`` written next to one Parquet file."""
+    p = Path(parquet_path)
+    manifest_path = p.with_name(p.stem + ".manifest.json")
+    if not manifest_path.is_file():
+        raise SystemExit(
+            f"missing dataset manifest for {parquet_path}: expected {manifest_path}"
         )
-
-    ko_loss = binary_loss(KO_LOGIT, "ko", "ko_positive")
-    terminal_loss = binary_loss(
-        TERMINAL_LOGIT, "terminal", "terminal_positive"
-    )
-    prize_error = (
-        outputs[EXPECTED_PRIZES].astype(mx.float32)
-        - targets["prizes"].astype(mx.float32)
-    ) / float(planner.config.max_prizes)
-    prize_loss = mean_valid(
-        prize_error * prize_error,
-        rare=targets["prizes"] > 0,
-        rare_weight=target_balance["prize_nonzero"],
-    )
-    scale = mx.maximum(
-        outputs[UNCERTAINTY].astype(mx.float32),
-        mx.array(float(cfg.prospective_uncertainty_floor), dtype=mx.float32),
-    )
-    uncertainty_loss = mean_valid(
-        0.5 * (return_error / scale) ** 2 + mx.log(scale),
-        rare=return_nonzero,
-        rare_weight=target_balance["return_nonzero"],
-    )
-
-    total_loss = (
-        float(cfg.prospective_policy_weight) * policy.loss
-        + float(cfg.prospective_return_weight) * return_loss
-        + float(cfg.prospective_value_weight) * value_loss
-        + float(cfg.prospective_ko_weight) * ko_loss
-        + float(cfg.prospective_prize_weight) * prize_loss
-        + float(cfg.prospective_terminal_weight) * terminal_loss
-        + float(cfg.prospective_uncertainty_weight) * uncertainty_loss
-    ).astype(mx.float32)
-    return (
-        total_loss,
-        policy.loss.astype(mx.float32),
-        return_loss.astype(mx.float32),
-        value_loss.astype(mx.float32),
-        ko_loss.astype(mx.float32),
-        prize_loss.astype(mx.float32),
-        terminal_loss.astype(mx.float32),
-        uncertainty_loss.astype(mx.float32),
-    )
+    with open(manifest_path, encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def _bool_arg(s: str) -> bool:
@@ -1225,9 +920,30 @@ def main() -> None:
         "data",
         nargs="?",
         default=None,
-        help="Dataset directory (default: most recent in data_dir)",
+        help=argparse.SUPPRESS,  # removed: see --days/--last-n-days/--all-days
     )
     p.add_argument("--config", default=None, help="Path to JSON config file")
+    p.add_argument(
+        "--days",
+        default=None,
+        help="Comma-separated training days, e.g. 2026-07-30,2026-08-01",
+    )
+    p.add_argument(
+        "--last-n-days",
+        type=int,
+        default=None,
+        help="Use the N most recently registered training days",
+    )
+    p.add_argument(
+        "--all-days",
+        action="store_true",
+        help="Use every day registered in the results catalog",
+    )
+    p.add_argument(
+        "--db",
+        default="model/results.db",
+        help="Path to the SQLite results catalog (default: model/results.db)",
+    )
     # Architecture
     p.add_argument("--d-model", type=int, default=None)
     p.add_argument("--nhead", type=int, default=None)
@@ -1298,6 +1014,30 @@ def main() -> None:
     p.add_argument("--adamw-weight-decay", type=float, default=None)
     p.add_argument(
         "--tbptt-chunk", type=int, default=None, help="TBPTT chunk size (0=disabled)"
+    )
+    p.add_argument(
+        "--aux-ko-weight",
+        type=float,
+        default=None,
+        help="Weight for the ko_head_aux BCE loss (0=disabled)",
+    )
+    p.add_argument(
+        "--aux-prize-weight",
+        type=float,
+        default=None,
+        help="Weight for the prize_head_aux MSE loss (0=disabled)",
+    )
+    p.add_argument(
+        "--aux-terminal-weight",
+        type=float,
+        default=None,
+        help="Weight for the terminal_head_aux BCE loss (0=disabled)",
+    )
+    p.add_argument(
+        "--aux-return-weight",
+        type=float,
+        default=None,
+        help="Weight for the return_head_aux MSE loss (0=disabled)",
     )
     # Trainer options
     p.add_argument(
@@ -1388,6 +1128,10 @@ def main() -> None:
         "adamw_eps": "adamw_eps",
         "adamw_weight_decay": "adamw_weight_decay",
         "tbptt_chunk": "tbptt_chunk",
+        "aux_ko_weight": "aux_ko_weight",
+        "aux_prize_weight": "aux_prize_weight",
+        "aux_terminal_weight": "aux_terminal_weight",
+        "aux_return_weight": "aux_return_weight",
         "compile": "compile",
         "prefetch": "prefetch",
         "log_interval": "log_interval",
@@ -1461,7 +1205,24 @@ def main() -> None:
         if a.adamw_weight_decay is not None
         else cfg.adamw_weight_decay
     )
+    # No CLI flag exists for this one (config-only knob); _build_optimizer(a)
+    # reads it straight off the namespace like every other optimizer field.
+    a.structured_weight_decay = cfg.structured_weight_decay
     a.tbptt_chunk = a.tbptt_chunk if a.tbptt_chunk is not None else cfg.tbptt_chunk
+    a.aux_ko_weight = (
+        a.aux_ko_weight if a.aux_ko_weight is not None else cfg.aux_ko_weight
+    )
+    a.aux_prize_weight = (
+        a.aux_prize_weight if a.aux_prize_weight is not None else cfg.aux_prize_weight
+    )
+    a.aux_terminal_weight = (
+        a.aux_terminal_weight
+        if a.aux_terminal_weight is not None
+        else cfg.aux_terminal_weight
+    )
+    a.aux_return_weight = (
+        a.aux_return_weight if a.aux_return_weight is not None else cfg.aux_return_weight
+    )
     a.compile = a.compile if a.compile is not None else cfg.compile
     a.prefetch = a.prefetch if a.prefetch is not None else cfg.prefetch
     a.log_interval = a.log_interval if a.log_interval is not None else cfg.log_interval
@@ -1485,251 +1246,262 @@ def main() -> None:
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     os.makedirs("model/bc_model", exist_ok=True)
 
+    # Auxiliary-head multi-task loss: active iff any weight is positive. Aux
+    # targets come from the parquet dataset (aux_ko, aux_prize_delta,
+    # aux_terminal, aux_return, aux_valid) -- see _AUX_COLUMNS / _aux_loss.
+    aux_weights = {
+        "ko": float(a.aux_ko_weight),
+        "prize": float(a.aux_prize_weight),
+        "terminal": float(a.aux_terminal_weight),
+        "return": float(a.aux_return_weight),
+    }
+    aux_active = any(w > 0.0 for w in aux_weights.values())
+    if aux_active:
+        print(
+            f"[bc-train-mlx] aux losses active — ko={aux_weights['ko']}, "
+            f"prize={aux_weights['prize']}, terminal={aux_weights['terminal']}, "
+            f"return={aux_weights['return']}",
+            flush=True,
+        )
+
     # MLX auto-detecta GPU (Metal) — sem device management!
     print(f"[bc-train-mlx] device={mx.default_device()}", flush=True)
 
-    # Auto-detect dataset: use most recent if not specified
-    if a.data is None:
-        data_dir = Path(cfg.data_dir)
-        datasets = sorted(
-            [
-                d
-                for d in data_dir.iterdir()
-                if d.is_dir() and (d / "__labels__.npy").exists()
-            ]
+    if a.data is not None:
+        raise SystemExit(
+            "the .npy dataset path arg is no longer supported; use "
+            "--days/--all-days/--last-n-days or the training_days config field"
         )
-        if not datasets:
-            print(f"[bc-train-mlx] ERROR: No datasets found in {data_dir}")
-            return
-        a.data = str(datasets[-1])
-        print(f"[bc-train-mlx] Auto-detected dataset: {a.data}", flush=True)
 
-    # --- data loading (igual ao PyTorch) ---
-    mmapped = os.path.isdir(a.data)
-    if mmapped:
-        d = {
-            f[:-4]: np.load(os.path.join(a.data, f), mmap_mode="r")
-            for f in sorted(os.listdir(a.data))
-            if f.endswith(".npy")
-        }
-    else:
-        z = np.load(a.data)
-        d = {k: z[k] for k in z.files}
-
-    dataset_manifest: dict = {}
-    manifest_path = os.path.join(a.data, "dataset_manifest.json") if mmapped else None
-    if manifest_path and os.path.isfile(manifest_path):
-        with open(manifest_path, encoding="utf-8") as handle:
-            dataset_manifest = json.load(handle)
-        if not isinstance(dataset_manifest, dict):
-            raise ValueError("dataset_manifest.json must contain an object")
-    manifest_would_ko = dataset_manifest.get("would_ko")
-    if manifest_would_ko is not None and not isinstance(manifest_would_ko, dict):
-        raise ValueError("dataset manifest would_ko contract must be an object")
-    if manifest_would_ko is not None:
-        dataset_would_ko = bool(manifest_would_ko.get("enabled", False))
-        dataset_would_ko_nvar = int(manifest_would_ko.get("n_var", 0))
-        dataset_would_ko_status = str(
-            manifest_would_ko.get("status", "missing")
+    # ---- resolve training days from the SQLite results catalog ----
+    db = ResultsDB(a.db)
+    try:
+        day_ids = _resolve_day_ids(a, cfg, db)
+        datasets = db.list_datasets_by_days(day_ids)
+    finally:
+        db.close()
+    if not datasets:
+        raise SystemExit(
+            f"no datasets registered in {a.db} for the requested training days"
         )
-        if dataset_would_ko != bool(cfg.bc_would_ko):
-            raise ValueError(
-                "training config and dataset disagree on would-KO: "
-                f"config={bool(cfg.bc_would_ko)}, "
-                f"dataset={dataset_would_ko}. Rebuild the dataset with the "
-                "current run sheet."
-            )
-        if dataset_would_ko:
-            if dataset_would_ko_nvar != int(cfg.bc_wk_nvar):
-                raise ValueError(
-                    "training config and dataset disagree on bc_wk_nvar: "
-                    f"config={int(cfg.bc_wk_nvar)}, "
-                    f"dataset={dataset_would_ko_nvar}"
-                )
-            if dataset_would_ko_status != "computed":
-                raise ValueError(
-                    "would-KO dataset is not computation-complete: "
-                    f"status={dataset_would_ko_status!r}"
-                )
-    elif mmapped and bool(cfg.bc_would_ko):
+    for row in datasets:
+        if not os.path.isfile(row["path"]):
+            raise SystemExit(f"dataset parquet file missing on disk: {row['path']}")
+    dataset_paths = [row["path"] for row in datasets]
+    print(
+        "[bc-train-mlx] training days: "
+        + ", ".join(f"{row['day_date']}({row['rows']:,} rows)" for row in datasets),
+        flush=True,
+    )
+
+    # ---- would-KO contract, checked against every selected day's manifest ----
+    manifests = [_load_dataset_manifest(p) for p in dataset_paths]
+    would_ko_blocks = [m.get("would_ko") or {} for m in manifests]
+    would_ko_enabled_flags = {bool(b.get("enabled", False)) for b in would_ko_blocks}
+    if len(would_ko_enabled_flags) > 1:
         raise ValueError(
-            "bc_would_ko=true requires a dataset_manifest.json with a verified "
-            "would_ko contract"
+            "selected training days disagree on would-KO ('enabled' differs "
+            "across days); pick a homogeneous set of days"
         )
-    else:
-        # Legacy/unmanifested corpora cannot prove prospective features.
-        dataset_would_ko = False
+    dataset_would_ko = (
+        would_ko_enabled_flags.pop() if would_ko_enabled_flags else False
+    )
+    if dataset_would_ko != bool(cfg.bc_would_ko):
+        raise ValueError(
+            "training config and dataset disagree on would-KO: "
+            f"config={bool(cfg.bc_would_ko)}, dataset={dataset_would_ko}. "
+            "Rebuild the dataset(s) with the current run sheet."
+        )
+    if dataset_would_ko:
+        wk_nvars = {
+            int((m.get("build_config") or {}).get("bc_wk_nvar", -1))
+            for m in manifests
+        }
+        if wk_nvars != {int(cfg.bc_wk_nvar)}:
+            raise ValueError(
+                "training config and dataset(s) disagree on bc_wk_nvar: "
+                f"config={int(cfg.bc_wk_nvar)}, dataset(s)={sorted(wk_nvars)}"
+            )
+        statuses = {str(b.get("status", "missing")) for b in would_ko_blocks}
+        if statuses != {"computed"}:
+            raise ValueError(
+                "would-KO dataset is not computation-complete on every "
+                f"selected day: statuses={sorted(statuses)}"
+            )
         dataset_would_ko_nvar = int(cfg.bc_wk_nvar)
-        dataset_would_ko_status = "unverified-disabled"
+        dataset_would_ko_status = "computed"
+    else:
+        dataset_would_ko_nvar = int(cfg.bc_wk_nvar)
+        dataset_would_ko_status = "disabled"
 
     effective_would_ko = bool(dataset_would_ko and not a.zero_wouldko)
-    inference_provenance = (
-        "verified-dataset-manifest"
-        if manifest_would_ko is not None
-        else "unmanifested-corpus-would-ko-disabled"
-    )
+    inference_provenance = "verified-dataset-manifest"
     if a.zero_wouldko:
         inference_provenance = "explicit-zero-would-ko"
-    if a.zero_wouldko:
         print(
             "[bc-train-mlx] would-KO features explicitly zeroed for this run; "
             "checkpoint inference will disable would-KO",
             flush=True,
         )
-    N = int(d["__labels__"].shape[0])
 
-    # Apply max_rows limit (for smoke testing)
-    if a.max_rows and a.max_rows > 0:
-        N = min(N, a.max_rows)
-        print(
-            f"[bc-train-mlx] limited to {a.max_rows} rows (max_rows={a.max_rows})",
-            flush=True,
-        )
+    dataset_manifest = {
+        "days": [
+            {
+                "date": row["day_date"],
+                "path": row["path"],
+                "rows": int(row["rows"]),
+                "sha256": row["sha256"],
+            }
+            for row in datasets
+        ],
+        "would_ko": {
+            "enabled": dataset_would_ko,
+            "status": dataset_would_ko_status,
+            "n_var": dataset_would_ko_nvar,
+        },
+        "schema_versions": sorted(
+            {int(m.get("schema_version", -1)) for m in manifests}
+        ),
+    }
+    dataset_build_fingerprint = hashlib.sha256(
+        "|".join(sorted(row["sha256"] for row in datasets)).encode("utf-8")
+    ).hexdigest()
 
-    labels = read_rows(d["__labels__"], 0, N)
-    keys = [key for key in d if not key.startswith("__") and key != "episode_meta"]
-    obs_np = {k: d[k] for k in keys}
-    group_np = d.get("__group__")
-
-    # Dedup
-    if a.dedup:
-        has_group = "__group__" in d
-        if not has_group:
-            raise SystemExit("--dedup needs __group__")
-        for _s in range(0, N, 1 << 20):
-            _e = min(N, _s + (1 << 20))
-            _g = read_rows(group_np, _s, _e)
-            labels[_s:_e] = _g[np.arange(_e - _s), labels[_s:_e]]
-    y = labels.astype(np.int32)
-    is_attack = (
-        read_rows(d["__is_attack__"], 0, N).astype(bool)
-        if "__is_attack__" in d
-        else np.zeros(N, dtype=bool)
-    )
-
-    # D.4: Episode-level val split (snap to episode boundary if metadata available)
-    nval = max(1, int(N * a.val_frac))
-    v0 = N - nval
-    episode_meta_all: np.ndarray | None = None
-    meta_path = os.path.join(a.data, "episode_meta.npy") if mmapped else None
-    if meta_path and os.path.exists(meta_path):
-        try:
-            meta = np.load(meta_path, mmap_mode="r")
-            episode_meta_all = meta
-            new_ep = meta["new_episode"]
-            boundaries = np.where(new_ep)[0]
-            valid_boundaries = boundaries[boundaries <= N - nval]
-            if len(valid_boundaries) > 0:
-                v0 = int(valid_boundaries[-1])
-                nval = N - v0
-                print(
-                    f"[bc-train-mlx] D.4: episode-level split at row {v0} "
-                    f"({v0} train, {nval} val)",
-                    flush=True,
-                )
-            else:
-                print(
-                    f"[bc-train-mlx] D.4: no episode boundary before {N - nval}, "
-                    f"using tail split at {v0}",
-                    flush=True,
-                )
-        except Exception as e:
-            print(
-                f"[bc-train-mlx] D.4: failed to load episode_meta ({e}), "
-                f"using tail split at {v0}",
-                flush=True,
-            )
-    idx = np.arange(N)
-    vi, ti = idx[v0:], idx[:v0]
-
-    # Val cache
-    val_np = {k: read_rows(obs_np[k], v0, N) for k in keys}
-    gv_np = read_rows(group_np, v0, N) if group_np is not None else None
-    oa_v = val_np["opt_attr"]
-    vi_atk = is_attack[vi]
-    vi_ko = (oa_v[..., WK_LO] >= 0.5).any(axis=1)
-
+    # ---- encoder / token schema (needed to reshape Parquet columns) ----
     ct = get_card_table()
     enc = TokenEncoder(ct)
     int_keys = set(enc.int_keys)
+    enc_shapes = dict(enc.shapes)
+    keys = sorted(enc_shapes.keys())
 
-    prospective_index: RealProspectivePlannerIndex | None = None
-    prospective_group_indices: np.ndarray | None = None
-    prospective_manifest: dict = {}
-    prospective_runtime: dict = {}
-    if cfg.prospective_enabled:
-        if not mmapped:
-            raise ValueError(
-                "prospective_enabled=true requires a directory-backed real dataset"
-            )
-        if episode_meta_all is None:
-            raise ValueError(
-                "prospective_enabled=true requires episode_meta.npy"
-            )
-        if int(cfg.prospective_batch_size) <= 0:
-            raise ValueError("prospective_batch_size must be positive")
-        sidecar_dir = Path(a.data) / str(cfg.prospective_sidecar_name)
-        manifest_file = sidecar_dir / "prospective_manifest.json"
-        nodes_file = sidecar_dir / "prospective_nodes.npy"
-        if not manifest_file.is_file() or not nodes_file.is_file():
-            raise FileNotFoundError(
-                "prospective_enabled=true requires a real sidecar at "
-                f"{sidecar_dir}"
-            )
-        with manifest_file.open(encoding="utf-8") as handle:
-            prospective_manifest = json.load(handle)
-        if not isinstance(prospective_manifest, dict):
-            raise ValueError("prospective manifest must contain an object")
-        fingerprint = str(prospective_manifest.get("fingerprint", ""))
-        if len(fingerprint) != 64:
-            raise ValueError("prospective manifest has no valid fingerprint")
-        if (
-            prospective_manifest.get("semantics", {}).get(
-                "synthetic_fill_allowed"
-            )
-            is not False
-        ):
-            raise ValueError("prospective sidecar must forbid synthetic fill")
-        prospective_runtime = prospective_manifest.get("config", {})
-        if not isinstance(prospective_runtime, dict):
-            raise ValueError("prospective manifest config must be an object")
-        expected_runtime = {
-            "max_groups": int(cfg.prospective_max_groups),
-            "max_branches": int(cfg.prospective_max_branches),
-            "trials": int(cfg.prospective_trials),
-            "horizon": int(cfg.prospective_horizon),
-            "gamma": float(cfg.prospective_gamma),
-        }
-        for key, expected in expected_runtime.items():
-            actual = prospective_runtime.get(key)
-            if isinstance(expected, float):
-                matches = actual is not None and np.isclose(
-                    float(actual), expected
-                )
-            else:
-                matches = actual is not None and int(actual) == expected
-            if not matches:
-                raise ValueError(
-                    "training config and prospective sidecar disagree on "
-                    f"{key}: config={expected!r}, sidecar={actual!r}"
-                )
-        prospective_index = load_real_prospective_planner_index(
-            a.data,
-            sidecar_name=str(cfg.prospective_sidecar_name),
-        )
-        all_prospective_groups = len(prospective_index)
-        prospective_group_indices = _prospective_training_group_indices(
-            prospective_index.group_target_rows,
-            train_stop=v0,
-        )
+    # ---- pyarrow streaming dataset over every selected day's Parquet file ----
+    pa_dataset = pads.dataset(dataset_paths, format="parquet")
+
+    # One pass over the "episode_id" column (single int64 column, cheap even
+    # for a large multi-day corpus) builds the episode universe for the
+    # train/val split and, if max_rows is set, the smoke-test row cap.
+    # Parquet has no cheap absolute row-position slice across multiple files,
+    # so max_rows caps by whole episode (kept in first-appearance/day order)
+    # rather than by exact row count -- fine for its only real use, smoke
+    # tests.
+    eid_chunks = [
+        batch.column("episode_id").to_numpy(zero_copy_only=False)
+        for batch in pa_dataset.to_batches(columns=["episode_id"])
+        if batch.num_rows > 0
+    ]
+    if not eid_chunks:
+        raise SystemExit("selected training days contain no rows")
+    all_eids = np.concatenate(eid_chunks)
+    unique_eids, first_index, counts = np.unique(
+        all_eids, return_index=True, return_counts=True
+    )
+    appearance_order = np.argsort(first_index)
+    unique_eids = unique_eids[appearance_order]
+    counts = counts[appearance_order]
+
+    if a.max_rows and a.max_rows > 0:
+        cum = np.cumsum(counts)
+        cutoff = min(int(np.searchsorted(cum, a.max_rows) + 1), len(unique_eids))
+        selected_eids = unique_eids[:cutoff]
         print(
-            "[bc-train-mlx] prospective sidecar verified: "
-            f"train_groups={len(prospective_group_indices):,}/"
-            f"{all_prospective_groups:,}, "
-            f"nodes={len(prospective_index.nodes):,}, "
-            "storage=compact-memmap; "
-            f"fingerprint={fingerprint[:12]}...",
+            f"[bc-train-mlx] limited to {a.max_rows} rows (max_rows={a.max_rows}): "
+            f"capped to {cutoff} episode(s), ~{int(cum[cutoff - 1]):,} rows",
             flush=True,
+        )
+    else:
+        selected_eids = unique_eids
+
+    # D.4 (episode-level val split): unlike the old position-based tail split
+    # over one contiguous .npy array, the corpus is now N independent Parquet
+    # files, so the split key is the episode set itself, seeded and
+    # deterministic. Episodes never straddle files (one zip == one day == one
+    # episode's home), so this keeps train/val fully episode-disjoint.
+    rng = np.random.default_rng(a.seed)
+    shuffled_eids = selected_eids[rng.permutation(len(selected_eids))]
+    n_val_eps = max(1, int(round(len(shuffled_eids) * a.val_frac)))
+    if n_val_eps >= len(shuffled_eids):
+        n_val_eps = len(shuffled_eids) - 1
+    if n_val_eps <= 0 or len(shuffled_eids) - n_val_eps <= 0:
+        raise ValueError(
+            "episode split produced an empty train or val set "
+            f"({len(shuffled_eids)} episode(s) selected); add more training "
+            "days or lower --val-frac"
+        )
+    val_episode_ids = shuffled_eids[:n_val_eps]
+    train_episode_ids = shuffled_eids[n_val_eps:]
+    val_filter = pads.field("episode_id").isin(val_episode_ids.tolist())
+    train_filter = pads.field("episode_id").isin(train_episode_ids.tolist())
+    print(
+        f"[bc-train-mlx] episode split: {len(train_episode_ids):,} train / "
+        f"{len(val_episode_ids):,} val episodes (val_frac={a.val_frac}, "
+        f"seed={a.seed})",
+        flush=True,
+    )
+
+    _use_tbptt = bool(a.tbptt_chunk > 0)
+
+    # ---- validation split: always fully materialized in RAM (same as the
+    # old loader -- validation needs random access for TBPTT chunk replay and
+    # for the whole-split metric pass either way) ----
+    val_columns = list(keys) + ["y", "is_attack"]
+    if a.dedup:
+        val_columns.append("opt_group")
+    if aux_active:
+        val_columns.extend(_AUX_COLUMNS)
+    val_meta_columns = ["episode_id", "side", "step_id"]
+    val_all = _materialize_columns(
+        pa_dataset, val_columns + val_meta_columns, val_filter, enc_shapes, int_keys
+    )
+    _apply_dedup_relabel(val_all)
+    n_val = len(val_all["y"])
+    if n_val == 0:
+        raise RuntimeError(
+            "validation split produced no rows; adjust --val-frac or the "
+            "selected training days"
+        )
+    val_np = {k: val_all[k] for k in keys}
+    y_val = val_all["y"]
+    gv_np = val_all.get("opt_group") if a.dedup else None
+    aux_val_np = {c: val_all[c] for c in _AUX_COLUMNS} if aux_active else None
+    vi_atk = val_all["is_attack"].astype(bool)
+    oa_v = val_np["opt_attr"]
+    vi_ko = (oa_v[..., WK_LO] >= 0.5).any(axis=1)
+    val_meta = {k: val_all[k] for k in val_meta_columns}
+
+    # ---- training split: streamed unless TBPTT needs full in-RAM chunking
+    # (TBPTT replays whole episode-side trajectories, which a row-by-row
+    # Parquet stream can't give cheap random access to) ----
+    train_columns = list(keys) + ["y"]
+    if a.dedup:
+        train_columns.append("opt_group")
+    if aux_active:
+        train_columns.extend(_AUX_COLUMNS)
+    counts_by_eid = dict(zip(unique_eids.tolist(), counts.tolist()))
+    if _use_tbptt:
+        train_meta_columns = ["episode_id", "side", "step_id"]
+        train_all = _materialize_columns(
+            pa_dataset,
+            train_columns + train_meta_columns,
+            train_filter,
+            enc_shapes,
+            int_keys,
+        )
+        _apply_dedup_relabel(train_all)
+        n_train = len(train_all["y"])
+        train_np = {k: train_all[k] for k in keys}
+        y_train = train_all["y"]
+        train_meta = {k: train_all[k] for k in train_meta_columns}
+        aux_train_np = {c: train_all[c] for c in _AUX_COLUMNS} if aux_active else None
+    else:
+        n_train = int(sum(counts_by_eid[e] for e in train_episode_ids.tolist()))
+        train_np = None  # streamed per epoch; never fully materialized
+        y_train = None
+        train_meta = None
+        aux_train_np = None
+    if n_train == 0:
+        raise RuntimeError(
+            "training split produced no rows; adjust --val-frac or the "
+            "selected training days"
         )
 
     # --- model (MLX!) ---
@@ -1861,46 +1633,86 @@ def main() -> None:
         f"{' +accum' if a.accum_steps > 1 else ''}"
     )
     print(
-        f"[bc-train-mlx] {tag} params={nparams:,} N={N} train={len(ti)} val={len(vi)} "
+        f"[bc-train-mlx] {tag} params={nparams:,} "
+        f"N={n_train + n_val} train={n_train} val={n_val} "
         f"batch={a.batch} accum_steps={a.accum_steps}",
         flush=True,
     )
 
     # --- batch generator (C.1: FP16-native numeric features) ---
-    def batches(
-        arrs: dict, grp: np.ndarray | None, base: int, order: np.ndarray, bs: int
-    ):
-        for i in range(0, len(order), bs):
-            b = order[i : i + bs]
-            ob = {
-                k: mx.array(
-                    np.asarray(arrs[k][b]).astype(
-                        np.int32 if k in int_keys else np.float16
-                    )
-                )
-                for k in keys
+    # `chunk` is a plain dict[str, np.ndarray] with row-aligned keys `keys` +
+    # "y" (+ "opt_group" iff --dedup) (+ _AUX_COLUMNS iff aux_active) --
+    # exactly what the pyarrow streaming re-chunker (_stream_train_microbatches)
+    # and the val-batch slicer below both produce, so the same conversion
+    # serves training and validation.
+    def _to_mx_batch(
+        chunk: dict[str, np.ndarray],
+    ) -> tuple[dict[str, mx.array], mx.array, dict[str, mx.array] | None]:
+        ob = {
+            k: mx.array(
+                np.asarray(chunk[k]).astype(np.int32 if k in int_keys else np.float16)
+            )
+            for k in keys
+        }
+        if a.dedup:
+            gb = mx.array(np.asarray(chunk["opt_group"]), dtype=mx.int32)
+            canon = (gb == mx.arange(gb.shape[1])[None, :]).astype(mx.float16)
+            ob["action_mask"] = ob["action_mask"] * canon
+        if a.zero_wouldko:
+            attr = np.asarray(ob["opt_attr"]).copy()
+            attr[..., WK_LO:WK_HI] = 0.0
+            ob["opt_attr"] = mx.array(attr, dtype=mx.float16)
+        yb = mx.array(np.asarray(chunk["y"]).astype(np.int32))
+        aux_targets = None
+        if aux_active and "aux_valid" in chunk:
+            aux_targets = {
+                c: mx.array(np.asarray(chunk[c]).astype(np.float32))
+                for c in _AUX_COLUMNS
             }
+        return ob, yb, aux_targets
+
+    def _val_batches(batch_size: int):
+        """Slice the fully-materialized validation split into fixed batches."""
+        for i in range(0, n_val, batch_size):
+            j = min(n_val, i + batch_size)
+            chunk = {k: val_np[k][i:j] for k in keys}
+            chunk["y"] = y_val[i:j]
             if a.dedup:
-                gb = mx.array(np.asarray(grp[b]), dtype=mx.int32)
-                canon = (gb == mx.arange(gb.shape[1])[None, :]).astype(mx.float16)
-                ob["action_mask"] = ob["action_mask"] * canon
-            if a.zero_wouldko:
-                attr = np.asarray(ob["opt_attr"]).copy()
-                attr[..., WK_LO:WK_HI] = 0.0
-                ob["opt_attr"] = mx.array(attr, dtype=mx.float16)
-            yield ob, mx.array(y[base + b].astype(np.int32))
+                chunk["opt_group"] = gv_np[i:j]
+            if aux_active:
+                for c in _AUX_COLUMNS:
+                    chunk[c] = aux_val_np[c][i:j]
+            yield _to_mx_batch(chunk)
 
     # --- loss + grad function ---
-    grad_fn = mx.value_and_grad(
-        lambda model, ob, yb: _cross_entropy_sum(
-            model.logits_value(ob)[0], yb
-        ),
-        argnums=0,
-    )
+    # aux_targets is always the 3rd positional arg (None when aux is
+    # inactive) so both branches share one call signature; the inactive
+    # branch is byte-identical to the pre-aux legacy path (logits_value,
+    # no aux forward at all).
+    if aux_active:
+        def _loss_fn(model, ob, yb, aux_targets):
+            logits, _value, _mem, aux_dict = model.logits_value_aux(ob)
+            ce = _cross_entropy_sum(logits, yb)
+            aux_mean = _aux_loss(aux_dict, aux_targets, aux_weights)
+            # Rescale mean -> sum form (see _batched_sequential_tbptt_loss's
+            # matching comment) so a single division by n_examples at the
+            # optimizer-step boundary yields mean(CE) + mean(aux).
+            total = ce + aux_mean * yb.shape[0]
+            return total, aux_mean
+    else:
+        def _loss_fn(model, ob, yb, aux_targets):
+            return _cross_entropy_sum(model.logits_value(ob)[0], yb)
+
+    grad_fn = mx.value_and_grad(_loss_fn, argnums=0)
 
     # F.3: TBPTT loss + grad function (accepts memory, returns memory_out)
     def _tbptt_loss_fn(
-        model, lane_observations, lane_labels, decision_lengths, lane_memory_in
+        model,
+        lane_observations,
+        lane_labels,
+        decision_lengths,
+        lane_memory_in,
+        lane_aux_targets,
     ):
         return _batched_sequential_tbptt_loss(
             model,
@@ -1908,48 +1720,55 @@ def main() -> None:
             lane_labels,
             decision_lengths,
             lane_memory_in,
+            lane_aux_targets=lane_aux_targets,
+            aux_weights=aux_weights if aux_active else None,
+            return_aux=aux_active,
         )
 
     _tbptt_grad_fn = mx.value_and_grad(_tbptt_loss_fn, argnums=0)
 
     def tbptt_loss_and_grad(
-        model, lane_observations, lane_labels, decision_lengths, lane_memory_in
+        model,
+        lane_observations,
+        lane_labels,
+        decision_lengths,
+        lane_memory_in,
+        lane_aux_targets=None,
     ):
         """Forward with memory, cross-entropy loss, backward through model params only."""
-        (loss, memory_out), grads = _tbptt_grad_fn(
+        value, grads = _tbptt_grad_fn(
             model,
             lane_observations,
             lane_labels,
             decision_lengths,
             lane_memory_in,
+            lane_aux_targets,
         )
-        return loss, grads, memory_out
+        if aux_active:
+            loss, memory_out, aux_dict_all, aux_targets_all = value
+            aux_mean = _aux_loss(aux_dict_all, aux_targets_all, aux_weights)
+            return loss, grads, memory_out, aux_mean
+        loss, memory_out = value
+        return loss, grads, memory_out, None
 
     # --- exact work plan and optimizer-step schedule (C.4 / F.3) ---
-    slab_bounds = [(s, min(s + a.slab_rows, v0)) for s in range(0, v0, a.slab_rows)]
-    tbptt_meta_path = os.path.join(a.data, "episode_meta.npy") if mmapped else None
-    _use_tbptt = bool(
-        a.tbptt_chunk > 0 and tbptt_meta_path and os.path.exists(tbptt_meta_path)
-    )
+    # `_use_tbptt` was already resolved above (before deciding whether to
+    # stream or fully materialize the training split); train_meta/val_meta
+    # are the plain-dict "episode_id"/"side"/"step_id" arrays materialized
+    # earlier, one entry per row, 0-indexed within their own split.
     _tbptt_groups: list[np.ndarray] = []
     _tbptt_decision_groups: list[list[np.ndarray]] = []
     _tbptt_plan: list[list[_TBPTTChunk]] = []
     _val_tbptt_plan: list[list[_TBPTTChunk]] = []
     if _use_tbptt:
-        tbptt_meta = np.load(tbptt_meta_path, mmap_mode="r")
-        _tbptt_groups = _build_tbptt_groups(tbptt_meta, v0)
-        _tbptt_decision_groups = _build_tbptt_decision_groups(tbptt_meta, v0)
+        _tbptt_groups = _build_tbptt_groups(train_meta, n_train)
+        _tbptt_decision_groups = _build_tbptt_decision_groups(train_meta, n_train)
         _tbptt_plan = _build_tbptt_plan(
             _tbptt_decision_groups,
             chunk_size=a.tbptt_chunk,
             row_budget=a.batch,
         )
-        if episode_meta_all is None:
-            raise ValueError("TBPTT validation requires episode_meta")
-        validation_meta = episode_meta_all[v0:N]
-        validation_decision_groups = _build_tbptt_decision_groups(
-            validation_meta, nval
-        )
+        validation_decision_groups = _build_tbptt_decision_groups(val_meta, n_val)
         _val_tbptt_plan = _build_tbptt_plan(
             validation_decision_groups,
             chunk_size=a.tbptt_chunk,
@@ -1961,8 +1780,8 @@ def main() -> None:
             f"rows/batch<={a.batch:,}, groups={len(_tbptt_groups):,})"
         )
     else:
-        microbatches_per_epoch = _standard_microbatch_count(slab_bounds, a.batch)
-        progress_mode = f"shuffled batches (batch<={a.batch:,})"
+        microbatches_per_epoch = _ceil_div(n_train, a.batch)
+        progress_mode = f"streamed shuffled batches (batch<={a.batch:,})"
 
     if microbatches_per_epoch <= 0:
         raise ValueError("training split produced no microbatches")
@@ -2033,256 +1852,6 @@ def main() -> None:
                 f"current={scheduler_contract!r}"
             )
 
-    prospective_planner: ProspectivePlannerMLX | None = None
-    prospective_optimizer: optim.MultiOptimizer | None = None
-    prospective_optimizer_contract: dict | None = None
-    prospective_optimizer_steps = 0
-    prospective_optimizer_phase_step = 0
-    prospective_scheduler_phase_step = 0
-    prospective_scheduler_total_steps = 0
-    prospective_scheduler_contract: dict | None = None
-    prospective_steps_per_epoch = 0
-    prospective_warmup_steps = 0
-    if cfg.prospective_enabled:
-        if (
-            prospective_index is None
-            or prospective_group_indices is None
-        ):
-            raise AssertionError("prospective data was not initialized")
-        planner_config = _prospective_planner_config(cfg)
-        prospective_planner = ProspectivePlannerMLX(planner_config)
-        saved_planner = state.get("prospective_planner") if a.resume else None
-        if saved_planner is not None:
-            if not isinstance(saved_planner, dict):
-                raise ValueError("checkpoint prospective_planner must be an object")
-            if saved_planner.get("config") != planner_config.to_dict():
-                raise ValueError(
-                    "prospective planner config differs from checkpoint"
-                )
-            if (
-                saved_planner.get("input_adapter_version")
-                != PROSPECTIVE_INPUT_ADAPTER_VERSION
-            ):
-                raise ValueError(
-                    "prospective input adapter differs from checkpoint"
-                )
-            if (
-                saved_planner.get("action_attr_aggregate_version")
-                != ACTION_ATTR_AGGREGATE_VERSION
-                or saved_planner.get("action_set_feature_version")
-                != ACTION_SET_FEATURE_VERSION
-                or saved_planner.get("branch_feature_layout_version")
-                != BRANCH_FEATURE_LAYOUT_VERSION
-            ):
-                raise ValueError(
-                    "prospective branch action aggregate/layout differs "
-                    "from checkpoint"
-                )
-            saved_model = saved_planner.get("model")
-            if not isinstance(saved_model, dict):
-                raise ValueError("checkpoint prospective planner has no model")
-            prospective_planner.update(saved_model)
-            prospective_optimizer_steps = int(
-                saved_planner.get("optimizer_steps", 0)
-            )
-            print(
-                "[bc-train-mlx] prospective planner weights resumed "
-                f"(trained optimizer steps={prospective_optimizer_steps:,})",
-                flush=True,
-            )
-        elif a.resume:
-            print(
-                "[bc-train-mlx] legacy checkpoint has no prospective planner; "
-                "planner starts disabled/untrained until its first optimizer step",
-                flush=True,
-            )
-        prospective_planner.set_dtype(mx.float16)
-        mx.eval(prospective_planner.parameters())
-        prospective_parameter_dtypes = {
-            str(parameter.dtype)
-            for _, parameter in nn.utils.tree_flatten(
-                prospective_planner.parameters()
-            )
-        }
-        if prospective_parameter_dtypes != {"mlx.core.float16"}:
-            raise RuntimeError(
-                "prospective planner parameters are not strictly FP16: "
-                f"{prospective_parameter_dtypes}"
-            )
-
-        prospective_optimizer = _build_prospective_optimizer(cfg)
-        prospective_optimizer_contract = _prospective_optimizer_contract(cfg)
-        if a.resume and a.optimizer_state == "resume":
-            if saved_planner is None:
-                raise ValueError(
-                    "cannot resume prospective optimizer from a legacy checkpoint"
-                )
-            if (
-                saved_planner.get("optimizer_contract")
-                != prospective_optimizer_contract
-            ):
-                raise ValueError(
-                    "cannot resume prospective optimizer with a different contract"
-                )
-            saved_prospective_optimizer = saved_planner.get("optimizer")
-            if saved_prospective_optimizer is None:
-                raise ValueError(
-                    "checkpoint has no prospective optimizer state to resume"
-                )
-            prospective_optimizer.state = saved_prospective_optimizer
-            prospective_optimizer_phase_step = int(
-                saved_planner.get("optimizer_phase_step", 0)
-            )
-        else:
-            prospective_optimizer.init(
-                prospective_planner.trainable_parameters()
-            )
-        prospective_optimizer.learning_rate = cfg.prospective_lr
-        mx.eval(prospective_optimizer.state)
-        _validate_optimizer_state_dtypes(prospective_optimizer.state)
-
-        prospective_steps_per_epoch = _ceil_div(
-            len(prospective_group_indices),
-            int(cfg.prospective_batch_size),
-        )
-        prospective_run_steps = run_epochs * prospective_steps_per_epoch
-        if a.resume and a.scheduler_state == "resume":
-            if saved_planner is None:
-                raise ValueError(
-                    "cannot resume prospective scheduler from a legacy checkpoint"
-                )
-            prospective_scheduler_phase_step = int(
-                saved_planner.get("scheduler_phase_step", 0)
-            )
-            prospective_scheduler_total_steps = int(
-                saved_planner.get("scheduler_total_steps", 0)
-            )
-            if prospective_scheduler_total_steps <= 0:
-                raise ValueError(
-                    "checkpoint has no prospective scheduler horizon"
-                )
-            if (
-                int(cfg.prospective_scheduler_total_steps) > 0
-                and int(cfg.prospective_scheduler_total_steps)
-                != prospective_scheduler_total_steps
-            ):
-                raise ValueError(
-                    "prospective scheduler_total_steps cannot change on resume"
-                )
-        else:
-            prospective_scheduler_total_steps = (
-                int(cfg.prospective_scheduler_total_steps)
-                if int(cfg.prospective_scheduler_total_steps) > 0
-                else prospective_run_steps
-            )
-        if (
-            a.resume
-            and a.scheduler_state == "resume"
-            and prospective_scheduler_phase_step + prospective_run_steps
-            > prospective_scheduler_total_steps
-        ):
-            raise ValueError(
-                "resumed prospective scheduler has insufficient remaining steps"
-            )
-        prospective_warmup_steps = min(
-            int(cfg.warmup_steps),
-            max(1, prospective_scheduler_total_steps // 5),
-        )
-        prospective_scheduler_contract = _prospective_scheduler_contract(
-            cfg,
-            prospective_scheduler_total_steps,
-            prospective_warmup_steps,
-        )
-        if (
-            a.resume
-            and a.scheduler_state == "resume"
-            and saved_planner.get("scheduler_contract")
-            != prospective_scheduler_contract
-        ):
-            raise ValueError(
-                "cannot resume prospective scheduler with a different contract"
-            )
-        print(
-            "[bc-train-mlx] prospective phase plan: "
-            f"groups/epoch={len(prospective_group_indices):,}, "
-            f"optimizer_steps/epoch={prospective_steps_per_epoch:,}, "
-            f"scheduler={prospective_scheduler_phase_step:,}/"
-            f"{prospective_scheduler_total_steps:,}",
-            flush=True,
-        )
-
-    prospective_use_behavior_logprobs = False
-    prospective_use_reference_logprobs = False
-    prospective_target_balance: dict[str, float] = {}
-    prospective_grad_fn = None
-    if prospective_planner is not None:
-        if (
-            prospective_index is None
-            or prospective_group_indices is None
-        ):
-            raise AssertionError("prospective data was not initialized")
-        prospective_use_behavior_logprobs = (
-            _prospective_training_has_node_flag(
-                prospective_index,
-                prospective_group_indices,
-                "has_behavior_logprob",
-            )
-        )
-        prospective_use_reference_logprobs = (
-            _prospective_training_has_node_flag(
-                prospective_index,
-                prospective_group_indices,
-                "has_reference_logprob",
-            )
-        )
-        prospective_target_balance = _prospective_training_target_balance(
-            prospective_index,
-            prospective_group_indices,
-        )
-
-        def _prospective_loss_fn(
-            planner,
-            context,
-            branch_tokens,
-            coordinates,
-            attention_mask,
-            branch_valid,
-            parent_index,
-            targets,
-        ):
-            return _prospective_loss(
-                planner,
-                context,
-                branch_tokens,
-                coordinates,
-                attention_mask,
-                branch_valid,
-                parent_index,
-                targets,
-                cfg,
-                prospective_target_balance,
-                use_behavior_logprobs=prospective_use_behavior_logprobs,
-                use_reference_logprobs=prospective_use_reference_logprobs,
-            )
-
-        prospective_grad_fn = mx.value_and_grad(
-            _prospective_loss_fn, argnums=0
-        )
-        prospective_method = (
-            "grpo_strict"
-            if prospective_use_behavior_logprobs
-            else "group_relative_ranking_distillation"
-        )
-        print(
-            "[bc-train-mlx] prospective objective: "
-            f"{prospective_method}; reference_kl="
-            f"{prospective_use_reference_logprobs}; normalized_balance="
-            + ",".join(
-                f"{key}:{value:.2f}"
-                for key, value in prospective_target_balance.items()
-            ),
-            flush=True,
-        )
     run_end_epoch = start_epoch + run_epochs
     print(
         f"[bc-train-mlx] global epoch range: {start_epoch + 1}-{run_end_epoch} "
@@ -2312,62 +1881,6 @@ def main() -> None:
                 "sha256": _sha256_bytes(static_array.tobytes(order="C")),
                 "card_csv_sha256": _sha256_file(ct.csv_path),
             }
-        planner_checkpoint = None
-        planner_inference = {
-            "enabled": False,
-            "trained_optimizer_steps": 0,
-        }
-        if prospective_planner is not None:
-            if (
-                prospective_optimizer is None
-                or prospective_optimizer_contract is None
-                or prospective_scheduler_contract is None
-            ):
-                raise AssertionError("prospective training state is incomplete")
-            planner_checkpoint = {
-                **prospective_mlx_checkpoint_payload(prospective_planner),
-                "action_attr_aggregate_version": (
-                    ACTION_ATTR_AGGREGATE_VERSION
-                ),
-                "action_set_feature_version": ACTION_SET_FEATURE_VERSION,
-                "branch_feature_layout_version": (
-                    BRANCH_FEATURE_LAYOUT_VERSION
-                ),
-                "optimizer": prospective_optimizer.state,
-                "optimizer_contract": prospective_optimizer_contract,
-                "optimizer_steps": prospective_optimizer_steps,
-                "optimizer_phase_step": prospective_optimizer_phase_step,
-                "scheduler_phase_step": prospective_scheduler_phase_step,
-                "scheduler_total_steps": prospective_scheduler_total_steps,
-                "scheduler_contract": prospective_scheduler_contract,
-                "sidecar_manifest": prospective_manifest,
-                "sidecar_fingerprint": prospective_manifest.get("fingerprint"),
-            }
-            planner_trained = prospective_optimizer_steps > 0
-            planner_inference = {
-                "enabled": planner_trained,
-                "trained_optimizer_steps": prospective_optimizer_steps,
-                "planner_version": planner_checkpoint["planner_version"],
-                "coord_schema_version": planner_checkpoint[
-                    "coord_schema_version"
-                ],
-                "input_adapter_version": PROSPECTIVE_INPUT_ADAPTER_VERSION,
-                "action_attr_aggregate_version": (
-                    ACTION_ATTR_AGGREGATE_VERSION
-                ),
-                "action_set_feature_version": ACTION_SET_FEATURE_VERSION,
-                "branch_feature_layout_version": (
-                    BRANCH_FEATURE_LAYOUT_VERSION
-                ),
-                "config": planner_checkpoint["config"],
-                "runtime": {
-                    "trials": int(cfg.prospective_trials),
-                    "horizon": int(cfg.prospective_horizon),
-                    "max_branches": int(cfg.prospective_max_branches),
-                    "gamma": float(cfg.prospective_gamma),
-                    "seed": int(a.seed),
-                },
-            }
         payload = {
             "model": model.parameters(),
             "optimizer": optimizer.state,
@@ -2381,7 +1894,8 @@ def main() -> None:
             # exported agents never consult a possibly changed JSON file.
             "run_config": {
                 **cfg.to_dict(),
-                "data_path": a.data,
+                "data_days": [row["day_date"] for row in datasets],
+                "data_paths": dataset_paths,
                 "output_path": a.out,
                 "zero_wouldko": bool(a.zero_wouldko),
             },
@@ -2391,19 +1905,17 @@ def main() -> None:
                 "bc_would_ko": effective_would_ko,
                 "bc_wk_nvar": int(dataset_would_ko_nvar),
                 "provenance": inference_provenance,
-                "prospective_planner": planner_inference,
             },
             "dataset_manifest": dataset_manifest,
-            "dataset_build_fingerprint": dataset_manifest.get(
-                "build_fingerprint"
-            ),
+            "dataset_build_fingerprint": dataset_build_fingerprint,
             "phase_id": a.phase_id,
             "epoch": epoch,
             "gstep": gstep,
             "val_acc": val_acc,
             "best_val_acc": best,
             "seed": a.seed,
-            "dataset_path": a.data,
+            "dataset_days": [row["day_date"] for row in datasets],
+            "dataset_paths": dataset_paths,
             "accum_steps": a.accum_steps,
             "microbatches_per_epoch": microbatches_per_epoch,
             "optimizer_steps_per_epoch": optimizer_steps_per_epoch,
@@ -2412,23 +1924,13 @@ def main() -> None:
             "scheduler_contract": scheduler_contract,
             "scheduler_state": a.scheduler_state,
         }
-        if planner_checkpoint is not None:
-            payload["prospective_planner"] = planner_checkpoint
         return payload
 
     def _save_checkpoint(path: str, epoch: int, val_acc: float) -> None:
         import pickle
 
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        if prospective_planner is not None and prospective_optimizer is not None:
-            mx.eval(
-                model.parameters(),
-                optimizer.state,
-                prospective_planner.parameters(),
-                prospective_optimizer.state,
-            )
-        else:
-            mx.eval(model.parameters(), optimizer.state)
+        mx.eval(model.parameters(), optimizer.state)
         tmp_path = f"{path}.tmp"
         with open(tmp_path, "wb") as f:
             pickle.dump(_checkpoint_payload(epoch, val_acc), f)
@@ -2465,12 +1967,19 @@ def main() -> None:
         return grads
 
     # --- train step with gradient accumulation (C.2) ---
-    def train_step_accum(ob: dict, yb: mx.array):
+    def train_step_accum(ob: dict, yb: mx.array, aux_targets: dict | None):
         """Forward + backward for one microbatch using an FP32 loss sum."""
-        loss, grads = grad_fn(model, ob, yb)
-        mx.eval(loss)
+        result, grads = grad_fn(model, ob, yb, aux_targets)
+        if aux_active:
+            loss, aux_mean = result
+            mx.eval(loss, aux_mean)
+            aux_val = float(aux_mean)
+        else:
+            loss = result
+            mx.eval(loss)
+            aux_val = 0.0
         loss_val = float(loss)
-        return loss_val, _to_fp32_grads(grads)
+        return loss_val, aux_val, _to_fp32_grads(grads)
 
     def optimizer_step(grads, n_examples):
         """Normalize accumulated grads, clip, update optimizer, advance gstep."""
@@ -2500,31 +2009,6 @@ def main() -> None:
         mx.eval(model.parameters())
         mx.eval(optimizer.state)
 
-    def prospective_optimizer_step(grads) -> None:
-        """Update only the detached lateral planner and its private state."""
-
-        nonlocal prospective_optimizer_steps
-        nonlocal prospective_optimizer_phase_step
-        nonlocal prospective_scheduler_phase_step
-        if prospective_planner is None or prospective_optimizer is None:
-            raise AssertionError("prospective optimizer is not initialized")
-        prospective_optimizer_steps += 1
-        prospective_optimizer_phase_step += 1
-        prospective_scheduler_phase_step += 1
-        grads = _to_fp32_grads(grads)
-        grads = clip_grads(grads, a.max_grad_norm)
-        if cfg.lr_schedule != "none":
-            prospective_optimizer.learning_rate = lr_at(
-                prospective_scheduler_phase_step,
-                prospective_scheduler_total_steps,
-                cfg.prospective_lr,
-                cfg.lr_schedule,
-                prospective_warmup_steps,
-                cfg.lr_min_ratio,
-            )
-        prospective_optimizer.update(prospective_planner, grads)
-        mx.eval(prospective_planner.parameters(), prospective_optimizer.state)
-
     # Compile stable shuffled-batch forward/backward; clipping stays outside.
     if compile_active:
         from functools import partial
@@ -2532,45 +2016,53 @@ def main() -> None:
         _state = [model.state, optimizer.state]
 
         @partial(mx.compile, inputs=_state, outputs=_state)
-        def compiled_step(ob, yb):
+        def compiled_step(ob, yb, aux_targets):
             """Compiled forward + backward; clipping runs after accumulation."""
-            loss, grads = grad_fn(model, ob, yb)
-            return loss, grads
+            result, grads = grad_fn(model, ob, yb, aux_targets)
+            return result, grads
 
         print("[bc-train-mlx] compiled train_step with state capture", flush=True)
 
-    # ---- prefetch helper (stream overlap: CPU loads next slab while GPU trains) ----
-    def _slab_generator(slab_indices, ep_seed):
-        """Yield (slab_i, si, sd, sg, perm) for each slab."""
-        for slab_i, si in enumerate(slab_indices):
-            s0, e0 = slab_bounds[si]
-            sd = {k: read_rows(obs_np[k], s0, e0) for k in keys}
-            sg = (
-                read_rows(group_np, s0, e0)
-                if (a.dedup and group_np is not None)
-                else None
-            )
-            perm = np.random.default_rng([a.seed, ep_seed, s0]).permutation(e0 - s0)
-            yield slab_i, si, s0, e0, sd, sg, perm
-
-    def _prefetch_slabs(slab_indices, ep_seed, q: queue.Queue):
-        """Background thread: load slabs ahead of the GPU."""
-        for item in _slab_generator(slab_indices, ep_seed):
-            q.put(item)
-        q.put(None)
+    # Streaming I/O overlap is now intrinsic to the pyarrow batch iterator
+    # (pyarrow.dataset.Scanner reads ahead internally); there is no more
+    # slab/thread/queue machinery to prefetch manually. `--prefetch` /
+    # cfg.prefetch is kept in the CLI/config schema only so old invocations
+    # and config JSON files don't break; it is otherwise a no-op here.
+    if a.prefetch:
+        print(
+            "[bc-train-mlx] --prefetch is deprecated and ignored: pyarrow "
+            "streaming reads ahead on its own",
+            flush=True,
+        )
 
     # ---- F.3: TBPTT batch generator ----
     def _load_temporal_batch(
         temporal_batch: list[_TBPTTChunk],
         arrays: dict,
+        labels: np.ndarray,
         *,
-        label_base: int,
+        label_base: int = 0,
+        aux_arrays: dict[str, np.ndarray] | None = None,
     ):
-        """Materialize one pre-planned temporal batch with lane-local row order."""
+        """Materialize one pre-planned temporal batch with lane-local row order.
+
+        ``arrays``/``labels`` are self-contained 0-indexed materializations
+        (train_np/y_train or val_np/y_val) -- not slices of one bigger
+        combined array -- so ``label_base`` stays 0 in this rewrite and is
+        kept only so the signature still documents the offset semantics.
+
+        ``aux_arrays`` (aux_train_np or aux_val_np), when given, is sliced
+        the same way as ``arrays`` and returned as a 5th element: one
+        aux-target dict per lane, row-aligned with that lane's labels.
+        ``None`` when ``aux_arrays`` is not given.
+        """
         lane_observations: list[dict[str, mx.array]] = []
         lane_labels: list[mx.array] = []
         lane_decision_lengths: list[list[int]] = []
         lane_rows: list[np.ndarray] = []
+        lane_aux_targets: list[dict[str, mx.array]] | None = (
+            [] if aux_arrays is not None else None
+        )
         for chunk in temporal_batch:
             chunk_arr = np.concatenate(chunk.decisions)
             lane_rows.append(chunk_arr)
@@ -2591,8 +2083,17 @@ def main() -> None:
                     attr, dtype=mx.float16
                 )
             lane_labels.append(
-                mx.array(y[label_base + chunk_arr].astype(np.int32))
+                mx.array(labels[label_base + chunk_arr].astype(np.int32))
             )
+            if aux_arrays is not None:
+                lane_aux_targets.append(
+                    {
+                        c: mx.array(
+                            np.asarray(aux_arrays[c][chunk_arr]).astype(np.float32)
+                        )
+                        for c in _AUX_COLUMNS
+                    }
+                )
             lane_decision_lengths.append(
                 [len(decision_rows) for decision_rows in chunk.decisions]
             )
@@ -2601,16 +2102,18 @@ def main() -> None:
             lane_labels,
             lane_decision_lengths,
             lane_rows,
+            lane_aux_targets,
         )
 
     def _tbptt_batches():
         """Yield the exact packed temporal batches used by the work plan."""
         for temporal_batch in _tbptt_plan:
-            lane_observations, lane_labels, lane_decision_lengths, _ = (
+            lane_observations, lane_labels, lane_decision_lengths, _, lane_aux_targets = (
                 _load_temporal_batch(
                     temporal_batch,
-                    obs_np,
-                    label_base=0,
+                    train_np,
+                    y_train,
+                    aux_arrays=aux_train_np if aux_active else None,
                 )
             )
             yield (
@@ -2618,22 +2121,25 @@ def main() -> None:
                 lane_observations,
                 lane_labels,
                 lane_decision_lengths,
+                lane_aux_targets,
             )
 
     # ---- training loop ----
     _running_loss: float = 0.0
+    _running_aux_loss: float = 0.0
     _running_n: int = 0
     _compile_pending: bool = compile_active
     _micro_count: int = 0
     _accum_grads = None
     _accum_examples: int = 0
     _accum_loss_sum: float = 0.0
+    _accum_aux_loss_sum: float = 0.0
     _tbptt_memories: dict[int, mx.array] = {}
 
     validation_batches = (
         len(_val_tbptt_plan)
         if _use_tbptt
-        else _ceil_div(nval, a.val_batch_size)
+        else _ceil_div(n_val, a.val_batch_size)
     )
     train_t0 = time.time()
 
@@ -2644,11 +2150,13 @@ def main() -> None:
         ep_step: int = 0  # optimizer steps in this epoch
         ep_micro: int = 0  # microbatches processed in this epoch
         _running_loss = 0.0
+        _running_aux_loss = 0.0
         _running_n = 0
         _micro_count = 0
         _accum_grads = None
         _accum_examples = 0
         _accum_loss_sum = 0.0
+        _accum_aux_loss_sum = 0.0
         _tbptt_memories = {}  # reset every episode-side lane at epoch start
         local_epoch = ep - start_epoch + 1
         print(
@@ -2658,7 +2166,7 @@ def main() -> None:
 
         # One phase-aware task per epoch. The bar is reset for validation and
         # checkpointing, so 100% always means the displayed phase is complete.
-        _progress_bar = Progress(
+        _progress_columns = [
             SpinnerColumn(),
             TextColumn(
                 "[bold blue]Epoch {task.fields[epoch]} "
@@ -2670,10 +2178,15 @@ def main() -> None:
             TextColumn("{task.fields[unit]}"),
             TextColumn("Opt: {task.fields[opt]}"),
             TextColumn("Loss: {task.fields[loss]}"),
+        ]
+        if aux_active:
+            _progress_columns.append(TextColumn("Aux: {task.fields[aux]}"))
+        _progress_columns += [
             TextColumn("LR: {task.fields[lr]}"),
             TimeElapsedColumn(),
             TimeRemainingColumn(),
-        )
+        ]
+        _progress_bar = Progress(*_progress_columns)
         _progress_bar.start()
         _progress_task = _progress_bar.add_task(
             "epoch",
@@ -2685,59 +2198,24 @@ def main() -> None:
             unit=f"micro 0/{microbatches_per_epoch:,}",
             opt=f"0/{optimizer_steps_per_epoch:,}",
             loss="--",
+            aux="--",
             lr=f"{float(optimizer.learning_rate):.2e}",
         )
 
-        # Flatten all batches from all slabs into a single generator
-        # so we can accumulate across slab boundaries
+        # Flatten all streamed pyarrow microbatches into a single generator so
+        # gradient accumulation can accumulate across I/O-batch boundaries.
         def _all_batches():
-            """Yield (ob, yb) from all slabs in this epoch."""
-            if mmapped:
-                perm_slabs = np.random.default_rng([a.seed, ep]).permutation(
-                    len(slab_bounds)
-                )
-                if a.prefetch:
-                    q: queue.Queue = queue.Queue(maxsize=1)
-                    t = threading.Thread(
-                        target=_prefetch_slabs, args=(perm_slabs, ep, q), daemon=True
-                    )
-                    t.start()
-                    slab_iter = iter(lambda: q.get(), None)
-                else:
-                    slab_iter = _slab_generator(perm_slabs, ep)
-                for slab_i, si, s0, e0, sd, sg, perm in slab_iter:
-                    slab_t: float = time.time()
-                    load_t = 0.0
-                    if not a.prefetch:
-                        print(
-                            f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} "
-                            f"(rows {s0:,}-{e0:,}) loading...",
-                            end="",
-                            flush=True,
-                        )
-                        load_t = time.time() - slab_t
-                        print(f" {load_t:.1f}s", flush=True)
-                    else:
-                        print(
-                            f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} "
-                            f"(rows {s0:,}-{e0:,}) prefetched",
-                            flush=True,
-                        )
-                    for ob, yb in batches(sd, sg, s0, perm, a.batch):
-                        yield ob, yb
-                    del sd, sg
-                    slab_loss = _running_loss / max(_running_n, 1)
-                    print(
-                        f"[bc-train-mlx]   slab {slab_i + 1}/{len(slab_bounds)} done "
-                        f"train_loss={slab_loss:.4f} ({time.time() - ep_t0:.0f}s total, "
-                        f"{load_t:.1f}s load)",
-                        flush=True,
-                    )
-            else:
-                g = np.random.default_rng([a.seed, ep])
-                order = g.permutation(len(ti))
-                for ob, yb in batches(obs_np, group_np, 0, order, a.batch):
-                    yield ob, yb
+            """Yield (ob, yb, aux_targets) streamed straight from the Parquet dataset."""
+            for chunk in _stream_train_microbatches(
+                pa_dataset,
+                train_columns,
+                train_filter,
+                enc_shapes,
+                int_keys,
+                a.batch,
+                seed_key=[a.seed, ep],
+            ):
+                yield _to_mx_batch(chunk)
 
         if _use_tbptt:
             print(
@@ -2759,6 +2237,7 @@ def main() -> None:
                     lane_observations,
                     lane_labels,
                     lane_decision_lengths,
+                    lane_aux_targets,
                 ) = _batch_tuple
                 lane_memory_in = [
                     (
@@ -2770,7 +2249,7 @@ def main() -> None:
                 ]
                 micro_n = sum(len(labels) for labels in lane_labels)
             else:
-                ob, yb = _batch_tuple  # standard path: 2-tuple
+                ob, yb, aux_targets = _batch_tuple  # standard path: 3-tuple
                 micro_n = len(yb)
 
             # Forward + backward this microbatch
@@ -2785,15 +2264,21 @@ def main() -> None:
             if a.accum_steps > 1:
                 # F.3: TBPTT path uses memory-aware forward
                 if _use_tbptt:
-                    loss, grads, mem_out = tbptt_loss_and_grad(
+                    loss, grads, mem_out, aux_mean = tbptt_loss_and_grad(
                         model,
                         lane_observations,
                         lane_labels,
                         lane_decision_lengths,
                         lane_memory_in,
+                        lane_aux_targets,
                     )
                     grads = _to_fp32_grads(grads)
-                    mx.eval(loss, grads, mem_out)
+                    if aux_active:
+                        mx.eval(loss, grads, mem_out, aux_mean)
+                        aux_val = float(aux_mean)
+                    else:
+                        mx.eval(loss, grads, mem_out)
+                        aux_val = 0.0
                     loss_val = float(loss)
                     detached_memories = mx.stop_gradient(mem_out)
                     mx.eval(detached_memories)
@@ -2802,7 +2287,7 @@ def main() -> None:
                             lane_index : lane_index + 1
                         ]
                 else:
-                    loss_val, grads = train_step_accum(ob, yb)
+                    loss_val, aux_val, grads = train_step_accum(ob, yb, aux_targets)
                 if not np.isfinite(loss_val):
                     raise FloatingPointError(
                         f"non-finite training loss at epoch={ep + 1}, "
@@ -2812,6 +2297,7 @@ def main() -> None:
                     _accum_grads = grads
                     _accum_examples = micro_n
                     _accum_loss_sum = loss_val
+                    _accum_aux_loss_sum = aux_val * micro_n
                 else:
                     _accum_grads = nn.utils.tree_map(
                         lambda a, b: (
@@ -2824,6 +2310,7 @@ def main() -> None:
                     )
                     _accum_examples += micro_n
                     _accum_loss_sum += loss_val
+                    _accum_aux_loss_sum += aux_val * micro_n
                 _micro_count += 1
 
                 # Accumulate in FP32 for numerical stability
@@ -2832,22 +2319,30 @@ def main() -> None:
                     ep_step += 1
                     optimizer_updated = True
                     _running_loss += _accum_loss_sum
+                    _running_aux_loss += _accum_aux_loss_sum
                     _running_n += _accum_examples
                     _accum_grads = None
                     _accum_examples = 0
                     _accum_loss_sum = 0.0
+                    _accum_aux_loss_sum = 0.0
             else:
                 # No accumulation: single microbatch = full step
                 if _use_tbptt:
-                    loss, grads, mem_out = tbptt_loss_and_grad(
+                    loss, grads, mem_out, aux_mean = tbptt_loss_and_grad(
                         model,
                         lane_observations,
                         lane_labels,
                         lane_decision_lengths,
                         lane_memory_in,
+                        lane_aux_targets,
                     )
                     grads = _to_fp32_grads(grads)
-                    mx.eval(loss, grads, mem_out)
+                    if aux_active:
+                        mx.eval(loss, grads, mem_out, aux_mean)
+                        aux_val = float(aux_mean)
+                    else:
+                        mx.eval(loss, grads, mem_out)
+                        aux_val = 0.0
                     loss_val = float(loss)
                     detached_memories = mx.stop_gradient(mem_out)
                     mx.eval(detached_memories)
@@ -2856,14 +2351,28 @@ def main() -> None:
                             lane_index : lane_index + 1
                         ]
                 elif compile_active:
-                    loss, grads = compiled_step(ob, yb)
+                    result, grads = compiled_step(ob, yb, aux_targets)
                     grads = _to_fp32_grads(grads)
-                    mx.eval(loss, grads)
+                    if aux_active:
+                        loss, aux_mean = result
+                        mx.eval(loss, grads, aux_mean)
+                        aux_val = float(aux_mean)
+                    else:
+                        loss = result
+                        mx.eval(loss, grads)
+                        aux_val = 0.0
                     loss_val = float(loss)
                 else:
-                    loss, grads = grad_fn(model, ob, yb)
+                    result, grads = grad_fn(model, ob, yb, aux_targets)
                     grads = _to_fp32_grads(grads)
-                    mx.eval(loss, grads)
+                    if aux_active:
+                        loss, aux_mean = result
+                        mx.eval(loss, grads, aux_mean)
+                        aux_val = float(aux_mean)
+                    else:
+                        loss = result
+                        mx.eval(loss, grads)
+                        aux_val = 0.0
                     loss_val = float(loss)
                 if not np.isfinite(loss_val):
                     raise FloatingPointError(
@@ -2874,6 +2383,7 @@ def main() -> None:
                 ep_step += 1
                 optimizer_updated = True
                 _running_loss += loss_val
+                _running_aux_loss += aux_val * micro_n
                 _running_n += micro_n
 
             ep_micro += 1
@@ -2885,8 +2395,10 @@ def main() -> None:
             # displayed loss never drops to a misleading 0.0000 between
             # optimizer updates.
             display_loss_sum = _running_loss + _accum_loss_sum
+            display_aux_loss_sum = _running_aux_loss + _accum_aux_loss_sum
             display_examples = _running_n + _accum_examples
             avg = display_loss_sum / max(display_examples, 1)
+            aux_avg = display_aux_loss_sum / max(display_examples, 1)
             elapsed_s = time.time() - ep_t0
             microbatches_left = max(0, microbatches_per_epoch - ep_micro)
             train_eta_s = (elapsed_s / max(ep_micro, 1)) * microbatches_left
@@ -2898,6 +2410,7 @@ def main() -> None:
                 unit=f"micro {ep_micro:,}/{microbatches_per_epoch:,}",
                 opt=f"{ep_step:,}/{optimizer_steps_per_epoch:,}",
                 loss=f"{avg:.4f}",
+                aux=f"{aux_avg:.4f}" if aux_active else "--",
                 lr=f"{float(optimizer.learning_rate):.2e}",
             )
 
@@ -2906,12 +2419,13 @@ def main() -> None:
                 and optimizer_updated
                 and ep_step % a.log_interval == 0
             ):
+                aux_log = f" aux={aux_avg:.4f}" if aux_active else ""
                 print(
                     f"[bc-train-mlx]   opt_step "
                     f"{ep_step:,}/{optimizer_steps_per_epoch:,} "
                     f"(run {gstep - run_start_gstep:,}/{run_optimizer_steps:,}) "
                     f"micro={ep_micro:,}/{microbatches_per_epoch:,} "
-                    f"loss={avg:.4f} lr={float(optimizer.learning_rate):.2e} "
+                    f"loss={avg:.4f}{aux_log} lr={float(optimizer.learning_rate):.2e} "
                     f"elapsed={elapsed_str} train_ETA={train_eta_str}",
                     flush=True,
                 )
@@ -2950,6 +2464,7 @@ def main() -> None:
             unit=f"batch 0/{validation_batches:,}",
             opt=f"{ep_step:,}/{optimizer_steps_per_epoch:,}",
             loss="--",
+            aux="--",
             lr="--",
         )
 
@@ -2963,6 +2478,8 @@ def main() -> None:
             validation_memories: dict[int, mx.array] = {}
             validation_rows: list[np.ndarray] = []
             validation_logits: list[np.ndarray] = []
+            aux_pred_val: dict[str, list[np.ndarray]] = defaultdict(list)
+            aux_target_val: dict[str, list[np.ndarray]] = defaultdict(list)
             for val_batch, temporal_batch in enumerate(
                 _val_tbptt_plan, start=1
             ):
@@ -2971,10 +2488,12 @@ def main() -> None:
                     lane_labels,
                     lane_decision_lengths,
                     lane_rows,
+                    lane_aux_targets,
                 ) = _load_temporal_batch(
                     temporal_batch,
                     val_np,
-                    label_base=v0,
+                    y_val,
+                    aux_arrays=aux_val_np if aux_active else None,
                 )
                 lane_memory_in = [
                     (
@@ -2984,15 +2503,25 @@ def main() -> None:
                     )
                     for chunk in temporal_batch
                 ]
-                _, memory_out, lane_logits = _batched_sequential_tbptt_loss(
+                tbptt_result = _batched_sequential_tbptt_loss(
                     model,
                     lane_observations,
                     lane_labels,
                     lane_decision_lengths,
                     lane_memory_in,
                     return_logits=True,
+                    lane_aux_targets=lane_aux_targets,
+                    aux_weights=aux_weights if aux_active else None,
+                    return_aux=aux_active,
                 )
-                mx.eval(memory_out, lane_logits)
+                if aux_active:
+                    _, memory_out, lane_logits, aux_dict_all, aux_targets_all = (
+                        tbptt_result
+                    )
+                    mx.eval(memory_out, lane_logits, aux_dict_all, aux_targets_all)
+                else:
+                    _, memory_out, lane_logits = tbptt_result
+                    mx.eval(memory_out, lane_logits)
                 detached_memories = mx.stop_gradient(memory_out)
                 mx.eval(detached_memories)
                 for lane_index, chunk in enumerate(temporal_batch):
@@ -3003,6 +2532,13 @@ def main() -> None:
                     validation_logits.append(
                         np.asarray(lane_logits[lane_index], dtype=np.float32)
                     )
+                if aux_active:
+                    for key, value in aux_dict_all.items():
+                        aux_pred_val[key].append(np.asarray(value, dtype=np.float32))
+                    for key, value in aux_targets_all.items():
+                        aux_target_val[key].append(
+                            np.asarray(value, dtype=np.float32)
+                        )
                 _progress_bar.update(
                     _progress_task,
                     completed=val_batch,
@@ -3012,26 +2548,39 @@ def main() -> None:
             row_order = np.concatenate(validation_rows)
             row_permutation = np.argsort(row_order)
             if not np.array_equal(
-                row_order[row_permutation], np.arange(nval)
+                row_order[row_permutation], np.arange(n_val)
             ):
                 raise RuntimeError(
                     "temporal validation did not cover every validation row exactly once"
                 )
             lg_np = np.concatenate(validation_logits, axis=0)[row_permutation]
-            yb_np = y[vi]
+            yb_np = y_val
+            aux_metrics = (
+                _aux_metrics(
+                    {k: np.concatenate(v) for k, v in aux_pred_val.items()},
+                    {k: np.concatenate(v) for k, v in aux_target_val.items()},
+                )
+                if aux_active
+                else None
+            )
         else:
             logits_parts: list[np.ndarray] = []
-            for val_batch, (ob, _) in enumerate(
-                batches(
-                    val_np,
-                    gv_np,
-                    v0,
-                    np.arange(nval),
-                    a.val_batch_size,
-                ),
-                start=1,
+            aux_pred_val = defaultdict(list)
+            aux_target_val = defaultdict(list)
+            for val_batch, (ob, _, aux_targets) in enumerate(
+                _val_batches(a.val_batch_size), start=1
             ):
-                lg, _, _ = model.logits_value(ob)
+                if aux_active:
+                    lg, _, _, aux_dict = model.logits_value_aux(ob)
+                    mx.eval(lg, aux_dict)
+                    for key, value in aux_dict.items():
+                        aux_pred_val[key].append(np.asarray(value, dtype=np.float32))
+                    for key, value in aux_targets.items():
+                        aux_target_val[key].append(
+                            np.asarray(value, dtype=np.float32)
+                        )
+                else:
+                    lg, _, _ = model.logits_value(ob)
                 logits_parts.append(np.asarray(lg, dtype=np.float32))
                 _progress_bar.update(
                     _progress_task,
@@ -3039,7 +2588,15 @@ def main() -> None:
                     unit=f"batch {val_batch:,}/{validation_batches:,}",
                 )
             lg_np = np.concatenate(logits_parts, axis=0)
-            yb_np = y[vi]
+            yb_np = y_val
+            aux_metrics = (
+                _aux_metrics(
+                    {k: np.concatenate(v) for k, v in aux_pred_val.items()},
+                    {k: np.concatenate(v) for k, v in aux_target_val.items()},
+                )
+                if aux_active
+                else None
+            )
 
         # Proper cross-entropy: -(logit[label] - logsumexp(logits))
         logsumexp = np.logaddexp.reduce(lg_np, axis=1)
@@ -3065,6 +2622,7 @@ def main() -> None:
             unit="aggregating",
             opt=f"{ep_step:,}/{optimizer_steps_per_epoch:,}",
             loss="--",
+            aux="--",
             lr="--",
         )
         pr = np.concatenate(preds)
@@ -3076,220 +2634,8 @@ def main() -> None:
         eq: float = acc
         if gv_np is not None:
             am_cat = np.concatenate(am_all)
-            yv_group = gv_np[np.arange(len(vi)), y[vi]]
-            eq = float((gv_np[np.arange(len(vi)), am_cat] == yv_group).mean())
-
-        prospective_epoch_loss = None
-        if prospective_planner is not None:
-            if (
-                prospective_index is None
-                or prospective_group_indices is None
-                or prospective_optimizer is None
-                or prospective_grad_fn is None
-            ):
-                raise AssertionError("prospective phase is incompletely initialized")
-            prospective_epoch_groups = np.random.default_rng(
-                [int(a.seed), int(ep), 0x50524F]
-            ).permutation(prospective_group_indices)
-            group_total = len(prospective_epoch_groups)
-            group_target_keys = tuple(
-                prospective_index.group_target_keys[int(group_index)]
-                for group_index in prospective_epoch_groups
-            )
-            prospective_context_plan, prospective_context_work = (
-                _prospective_context_work_plan(
-                    episode_meta_all,
-                    group_target_keys,
-                    row_limit=v0,
-                )
-            )
-            _progress_bar.reset(
-                _progress_task,
-                total=prospective_context_work,
-                completed=0,
-                epoch=ep + 1,
-                local_epoch=local_epoch,
-                total_epochs=run_epochs,
-                phase="prospective-context",
-                unit=f"context 0/{prospective_context_work:,}",
-                opt="--",
-                loss="--",
-                lr="--",
-            )
-
-            def _context_progress(completed_decisions: int) -> None:
-                _progress_bar.update(
-                    _progress_task,
-                    completed=completed_decisions,
-                    unit=(
-                        f"context {completed_decisions:,}/"
-                        f"{prospective_context_work:,}"
-                    ),
-                )
-
-            context_shape = (
-                group_total,
-                2 + int(model.scratch_tokens),
-                int(model.d),
-            )
-            cache_parent = Path(a.out).parent
-            cache_parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(
-                dir=cache_parent,
-                prefix=".prospective-context-",
-            ) as cache_dir:
-                context_cache_path = Path(cache_dir) / "epoch_context.fp16"
-                trunk_context = np.memmap(
-                    context_cache_path,
-                    mode="w+",
-                    dtype=np.float16,
-                    shape=context_shape,
-                )
-                _reconstruct_prospective_trunk_context(
-                    model,
-                    obs_np,
-                    int_keys,
-                    episode_meta_all,
-                    group_target_keys,
-                    row_limit=v0,
-                    work_plan=prospective_context_plan,
-                    context_destination=trunk_context,
-                    on_decision_complete=_context_progress,
-                )
-                trunk_context.flush()
-                _progress_bar.reset(
-                    _progress_task,
-                    total=prospective_steps_per_epoch,
-                    completed=0,
-                    epoch=ep + 1,
-                    local_epoch=local_epoch,
-                    total_epochs=run_epochs,
-                    phase="prospective-train",
-                    unit=f"batch 0/{prospective_steps_per_epoch:,}",
-                    opt=f"0/{prospective_steps_per_epoch:,}",
-                    loss="--",
-                    lr=f"{float(prospective_optimizer.learning_rate):.2e}",
-                )
-                prospective_planner.train()
-                phase_step = 0
-                processed_groups = 0
-                loss_sum = 0.0
-                component_sums = np.zeros(7, dtype=np.float64)
-                for (
-                    group_start,
-                    group_stop,
-                    physical_group_indices,
-                ) in _prospective_physical_group_batches(
-                    prospective_epoch_groups,
-                    int(cfg.prospective_batch_size),
-                ):
-                    prospective_batch = (
-                        materialize_real_prospective_planner_batch(
-                            prospective_index,
-                            physical_group_indices,
-                            config=_prospective_planner_config(cfg),
-                        )
-                    )
-                    if not np.all(
-                        prospective_batch.branch_valid.any(axis=1)
-                    ):
-                        raise ValueError(
-                            "every prospective group must contain at least "
-                            "one valid branch"
-                        )
-                    planner_targets_np = _prospective_target_arrays(
-                        prospective_index.nodes,
-                        prospective_batch.node_index,
-                    )
-                    planner_targets = {
-                        key: mx.array(value)
-                        for key, value in planner_targets_np.items()
-                    }
-                    prospective_coordinates, prospective_attention_mask = (
-                        _prospective_batch_geometry(
-                            prospective_batch,
-                            context_length=context_shape[1],
-                        )
-                    )
-                    loss_parts, grads = prospective_grad_fn(
-                        prospective_planner,
-                        mx.array(
-                            trunk_context[group_start:group_stop]
-                        ),
-                        mx.array(prospective_batch.branch_tokens),
-                        mx.array(prospective_coordinates),
-                        mx.array(prospective_attention_mask),
-                        mx.array(prospective_batch.branch_valid),
-                        mx.array(prospective_batch.parent_index),
-                        planner_targets,
-                    )
-                    loss = loss_parts[0]
-                    grads = _to_fp32_grads(grads)
-                    mx.eval(loss_parts, grads)
-                    loss_value = float(loss)
-                    component_values = np.asarray(
-                        [float(value) for value in loss_parts[1:]],
-                        dtype=np.float64,
-                    )
-                    if not np.isfinite(loss_value):
-                        _progress_bar.stop()
-                        raise FloatingPointError(
-                            "non-finite prospective loss at "
-                            f"epoch={ep + 1}, step={phase_step + 1}"
-                        )
-                    prospective_optimizer_step(grads)
-                    phase_step += 1
-                    processed_groups = group_stop
-                    groups_in_batch = group_stop - group_start
-                    loss_sum += loss_value * groups_in_batch
-                    component_sums += component_values * groups_in_batch
-                    prospective_epoch_loss = loss_sum / processed_groups
-                    _progress_bar.update(
-                        _progress_task,
-                        completed=phase_step,
-                        unit=(
-                            f"batch {phase_step:,}/"
-                            f"{prospective_steps_per_epoch:,} "
-                            f"(groups {processed_groups:,}/{group_total:,})"
-                        ),
-                        opt=(
-                            f"{phase_step:,}/"
-                            f"{prospective_steps_per_epoch:,}"
-                        ),
-                        loss=f"{prospective_epoch_loss:.4f}",
-                        lr=(
-                            f"{float(prospective_optimizer.learning_rate):.2e}"
-                        ),
-                    )
-                if phase_step != prospective_steps_per_epoch:
-                    _progress_bar.stop()
-                    raise RuntimeError(
-                        "prospective optimizer-step plan mismatch: "
-                        f"expected={prospective_steps_per_epoch}, "
-                        f"actual={phase_step}"
-                    )
-                component_means = component_sums / max(processed_groups, 1)
-                print(
-                    "[bc-train-mlx] prospective losses: "
-                    + " ".join(
-                        f"{name}={value:.5f}"
-                        for name, value in zip(
-                            (
-                                "policy",
-                                "return",
-                                "value",
-                                "ko",
-                                "prize",
-                                "terminal",
-                                "uncertainty",
-                            ),
-                            component_means,
-                        )
-                    ),
-                    flush=True,
-                )
-                del trunk_context
-            prospective_planner.eval()
+            yv_group = gv_np[np.arange(n_val), y_val]
+            eq = float((gv_np[np.arange(n_val), am_cat] == yv_group).mean())
 
         _progress_bar.reset(
             _progress_task,
@@ -3300,15 +2646,10 @@ def main() -> None:
             total_epochs=run_epochs,
             phase="checkpoint",
             unit="saving",
-            opt=(
-                f"{ep_step:,}/{optimizer_steps_per_epoch:,}"
-                if prospective_epoch_loss is None
-                else f"bc {ep_step:,}; prospective {prospective_steps_per_epoch:,}"
-            ),
-            loss=(
-                f"{_running_loss / max(_running_n, 1):.4f}"
-                if prospective_epoch_loss is None
-                else f"p={prospective_epoch_loss:.4f}"
+            opt=f"{ep_step:,}/{optimizer_steps_per_epoch:,}",
+            loss=f"{_running_loss / max(_running_n, 1):.4f}",
+            aux=(
+                f"{_running_aux_loss / max(_running_n, 1):.4f}" if aux_active else "--"
             ),
             lr=f"{float(optimizer.learning_rate):.2e}",
         )
@@ -3351,10 +2692,19 @@ def main() -> None:
             phase="done",
             unit="epoch complete",
         )
+        aux_metrics_log = ""
+        if aux_active and aux_metrics is not None:
+            aux_metrics_log = (
+                f" aux_ko_bce={aux_metrics['aux_ko_bce']:.4f} "
+                f"aux_prize_mse={aux_metrics['aux_prize_mse']:.4f} "
+                f"aux_terminal_bce={aux_metrics['aux_terminal_bce']:.4f} "
+                f"aux_return_mse={aux_metrics['aux_return_mse']:.4f}"
+            )
         print(
             f"[bc-train-mlx] epoch {ep + 1} complete: "
             f"val_acc={acc:.4f} equiv={eq:.4f} top3={t3:.4f} "
-            f"atk={atk:.4f} ko={ko:.4f} loss={vloss / max(tot, 1):.4f} "
+            f"atk={atk:.4f} ko={ko:.4f} loss={vloss / max(tot, 1):.4f}"
+            f"{aux_metrics_log} "
             f"t={_format_compact_duration(ep_time)} run_ETA={eta_str} "
             f"gstep={gstep:,}",
             flush=True,

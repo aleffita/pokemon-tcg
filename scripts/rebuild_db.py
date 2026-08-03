@@ -71,13 +71,19 @@ def _logical_value(value: Any) -> Any:
 
 
 def database_counts(connection: sqlite3.Connection) -> dict[str, int]:
-    """Return deterministic counts for every application table."""
+    """Return deterministic counts for every application table and view.
+
+    Views are included because schema 2.0.0 exposes ``card_elo``/``deck_elo``
+    as compatibility views over ``card_elo_daily``/``deck_elo_daily`` instead
+    of standalone tables; ``REQUIRED_NONEMPTY_TABLES`` still checks them.
+    """
 
     tables = [
         str(row[0])
         for row in connection.execute(
             "SELECT name FROM sqlite_master "
-            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            "WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' "
+            "ORDER BY name"
         )
     ]
     return {

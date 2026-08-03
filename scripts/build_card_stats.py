@@ -27,6 +27,10 @@ from rl.results_db import (
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Names under which our own submissions appear in Kaggle replay metadata.
+# Mirrors scripts/bc/build_bc_dataset.py:SELF_ALIASES.
+SELF_AGENT_ALIASES = frozenset({"FitaLabs", "Alef Oliveira"})
+
 
 def identify_or_create_deck(db: ResultsDB, card_ids: list[int]) -> int:
     """Resolve only an exactly equal deterministic deck composition."""
@@ -167,6 +171,7 @@ def process_zip(
             team_names = _reported_team_names(payload)
             outcomes = _outcomes(rewards)
             participants = []
+            agent_ids: list[int | None] = [None, None]
             for side in (0, 1):
                 deck_id = identify_or_create_deck(db, decks[side])
                 team_id = db.get_or_create_team(
@@ -182,6 +187,16 @@ def process_zip(
                     source="remote",
                     archive_date=observed_date,
                 )
+                # Only known agent names are registered. An unreported name
+                # would otherwise collapse unrelated opponents into a single
+                # "Unidentified team" agent row.
+                agent_name = team_names[side]
+                if agent_name:
+                    agent_ids[side] = db.upsert_agent(
+                        name=agent_name,
+                        team_id=team_id,
+                        is_self=agent_name in SELF_AGENT_ALIASES,
+                    )
                 participants.append(
                     MatchParticipant(
                         seat=side,
@@ -193,6 +208,7 @@ def process_zip(
                     )
                 )
 
+            day_id = db.register_day(observed_date)
             db.record_match(
                 source="remote",
                 external_episode_id=external_episode_id,
@@ -201,7 +217,12 @@ def process_zip(
                 archive_member=member_name,
                 n_steps=len(steps),
                 participants=participants,
+                our_agent_id=agent_ids[0],
+                opp_agent_id=agent_ids[1],
             )
+            for agent_id in agent_ids:
+                if agent_id is not None:
+                    db.touch_agent_seen(agent_id, day_id)
             processed += 1
     return processed
 

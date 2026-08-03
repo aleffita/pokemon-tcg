@@ -19,12 +19,13 @@ from rl import (
     MAX_OPTIONS, N_ACTIONS, OPT_STRUCT, OPT_PICKED, N_OPT_TYPES,
     MAX_ATTACK, N_SELECT_TYPES, N_SELECT_CTX, UNIT_ATTR, G,
 )
+from rl.encoder.enc_constants import N_META_BUCKETS, N_AGENT_BUCKETS, N_DECK_BUCKETS
 from rl.token_schema import (
     ARCH_VERSION, TOKEN_SCHEMA_VERSION,
     T_CLS, T_SELF_DECK, T_OPP_DECK, T_SELF_PRIZE, T_OPP_PRIZE,
     T_SELF_HAND, T_OPP_HAND, T_SELF_DISC, T_OPP_DISC, T_STADIUM,
     T_SELF_ACTIVE, T_SELF_BENCH, T_OPP_ACTIVE, T_OPP_BENCH,
-    T_OPT, T_EFFECT, T_SEL_TYPE, T_SEL_CTX, T_CARD_SYNTH,
+    T_OPT, T_EFFECT, T_SEL_TYPE, T_SEL_CTX, T_CARD_SYNTH, T_META_CTX,
     N_TTYPES,
 )
 
@@ -155,6 +156,18 @@ class TokenTransformerMLX(nn.Module):
         self.attack_emb: nn.Embedding = nn.Embedding(MAX_ATTACK, d_model)
         self.scalar_proj: nn.Linear = nn.Linear(G, d_model)
 
+        # --- Meta feature consumption (passive; encoder always emits these) ---
+        # Per-card meta buckets (elo deciles) are ADDITIVE to every card-list/unit
+        # token, sharing one embedding table across all streams. Global day/opponent
+        # features (day_index_norm, opponent_agent_bucket, opponent_deck_bucket) are
+        # absorbed into a dedicated META_CTX token (see T_META_CTX) rather than
+        # widening G (which would break existing checkpoints' scalar_proj shape).
+        self.meta_bucket_emb: nn.Embedding = nn.Embedding(N_META_BUCKETS, d_model)
+        self.agent_bucket_emb: nn.Embedding = nn.Embedding(N_AGENT_BUCKETS, d_model)
+        self.deck_bucket_emb: nn.Embedding = nn.Embedding(N_DECK_BUCKETS, d_model)
+        self.day_proj: nn.Linear = nn.Linear(1, d_model)
+        self.meta_ctx_base: mx.array = mx.zeros(d_model)
+
         # Transformer encoder
         self.encoder: TransformerEncoderMLX = TransformerEncoderMLX(
             d_model, nhead, ff_dim=4 * d_model, nlayers=nlayers
@@ -174,7 +187,33 @@ class TokenTransformerMLX(nn.Module):
                 -value_vmax, value_vmax, value_atoms, dtype=np.float32
             )
         else:
-            self.value_head: nn.Linear = nn.Linear(v_in, 1)
+            self.value_head = nn.Linear(v_in, 1)
+
+        # Aux heads (auxiliary supervision from prospective targets in parquet).
+        # Read from the same source as value_head to reuse a dedicated global token
+        # (value_tok when split_heads, otherwise CLS). Input dim is always d_model
+        # because both value_tok and cls_out have shape [B, d_model].
+        self.ko_head_aux: nn.Linear = nn.Linear(d_model, 1)
+        self.prize_head_aux: nn.Linear = nn.Linear(d_model, 1)
+        self.terminal_head_aux: nn.Linear = nn.Linear(d_model, 1)
+        self.return_head_aux: nn.Linear = nn.Linear(d_model, 1)
+
+        # Warm start structured heads from opt_head: every verb starts as the
+        # shared scorer, so rare verbs converge to the fallback instead of drifting
+        # from random init. Checkpoint resume overwrites this via load_weights.
+        if structured:
+            shared_w = self.opt_head.weight  # [1, d_model]
+            shared_b = self.opt_head.bias    # [1]
+            dtype = self.type_query.weight.dtype
+            self.type_query.weight = mx.array(
+                np.broadcast_to(np.asarray(shared_w), (N_OPT_TYPES, self.d))
+            ).astype(dtype)
+            self.type_bias.weight = mx.array(
+                np.broadcast_to(
+                    np.asarray(shared_b).reshape(1, 1), (N_OPT_TYPES, 1)
+                )
+            ).astype(self.type_bias.weight.dtype)
+
 
     # --- token builders ---
 
@@ -199,10 +238,13 @@ class TokenTransformerMLX(nn.Module):
         mask = (ids != 0).astype(emb.dtype)[..., None]
         return emb * mask
 
-    def _card_stream(self, ids: mx.array, t: int) -> mx.array:
-        """Card list tokens: card_emb(id) + type_emb + static features."""
+    def _card_stream(self, ids: mx.array, t: int, bucket_ids: mx.array) -> mx.array:
+        """Card list tokens: card_emb(id) + type_emb + static features + meta bucket."""
         B, K = ids.shape
-        return self._card_emb(ids) + self._type(B, K, t) + self._static(ids)
+        return (
+            self._card_emb(ids) + self._type(B, K, t) + self._static(ids)
+            + self.meta_bucket_emb(bucket_ids)
+        )
 
     def _unit_stream(
         self,
@@ -213,8 +255,12 @@ class TokenTransformerMLX(nn.Module):
         attr: mx.array,
         active_t: int,
         bench_t: int,
+        top_bucket: mx.array,
+        preevo_bucket: mx.array,
+        tool_bucket: mx.array,
+        energy_bucket: mx.array,
     ) -> mx.array:
-        """In-play unit tokens: top_card + pre-evos + tools + energies + attr + type."""
+        """In-play unit tokens: top_card + pre-evos + tools + energies + attr + type + meta buckets."""
         B, U = top_id.shape
         idbag = (
             self._card_emb(top_id)
@@ -222,12 +268,18 @@ class TokenTransformerMLX(nn.Module):
             + self._card_emb(tool_id).sum(axis=2)
             + self._card_emb(energy_id).sum(axis=2)
         )  # [B, U, d]
+        meta = (
+            self.meta_bucket_emb(top_bucket)
+            + self.meta_bucket_emb(preevo_bucket).sum(axis=2)
+            + self.meta_bucket_emb(tool_bucket).sum(axis=2)
+            + self.meta_bucket_emb(energy_bucket).sum(axis=2)
+        )  # [B, U, d]
         # Active slot gets active_t, rest get bench_t
         types_arr = [[bench_t] * U for _ in range(B)]
         for b in range(B):
             types_arr[b][0] = active_t
         types = mx.array(types_arr, dtype=mx.int32)
-        return idbag + self.unit_attr_proj(attr) + self.type_emb(types) + self._static(top_id)
+        return idbag + meta + self.unit_attr_proj(attr) + self.type_emb(types) + self._static(top_id)
 
     def _opt_stream(
         self,
@@ -341,6 +393,30 @@ class TokenTransformerMLX(nn.Module):
         toks.append(sel_ctx_tok)
         pads.append(mx.zeros((B, 1), dtype=mx.bool_))
 
+        # --- meta-context token (day + opponent identity; never padded) ---
+        # Tolerant: parquets built before Fase 5a don't carry meta features yet.
+        # When absent, seed with neutral defaults (day=0.5, agent bucket=4 [mid
+        # decile], deck bucket=10 [unknown]) so the model still gets one token
+        # but effectively no signal until the dataset is rebuilt with meta.
+        _day = o.get("day_index_norm")
+        if _day is None:
+            _day = mx.full((B, 1), 0.5, dtype=mx.float16)
+        _opp_agent = o.get("opponent_agent_bucket")
+        if _opp_agent is None:
+            _opp_agent = mx.full((B, 1), 4, dtype=mx.int32)
+        _opp_deck = o.get("opponent_deck_bucket")
+        if _opp_deck is None:
+            _opp_deck = mx.full((B, 1), 10, dtype=mx.int32)
+        meta_ctx_tok = (
+            mx.broadcast_to(self.meta_ctx_base.reshape(1, 1, self.d), (B, 1, self.d))
+            + self.day_proj(_day.reshape(B, 1, 1).astype(self.day_proj.weight.dtype))
+            + self.agent_bucket_emb(_opp_agent.reshape(B, 1))
+            + self.deck_bucket_emb(_opp_deck.reshape(B, 1))
+            + self._type(B, 1, T_META_CTX)
+        )
+        toks.append(meta_ctx_tok)
+        pads.append(mx.zeros((B, 1), dtype=mx.bool_))
+
         # --- card-list streams (deck, prize, hand, discard, stadium, effect) ---
         _CARD_STREAMS = [
             ("self_deck", T_SELF_DECK), ("opp_deck", T_OPP_DECK),
@@ -351,7 +427,13 @@ class TokenTransformerMLX(nn.Module):
             ("effect", T_EFFECT),
         ]
         for name, t in _CARD_STREAMS:
-            tok = self._card_stream(o[f"{name}_id"], t)
+            bucket_key = f"{name}_meta_bucket"
+            bucket = o.get(bucket_key)
+            if bucket is None:
+                # Tolerant: legacy dataset without meta buckets -> use neutral 4.
+                _ids_shape = o[f"{name}_id"].shape
+                bucket = mx.full(_ids_shape, 4, dtype=mx.int32)
+            tok = self._card_stream(o[f"{name}_id"], t, bucket)
             # Add special markers (deck flags, hand certainty)
             if name == "self_deck":
                 tok = tok + o["self_deck_flag"][..., None] * self.drawable_emb
@@ -365,10 +447,20 @@ class TokenTransformerMLX(nn.Module):
         # --- unit streams (active + bench, both sides) ---
         for side, (at, bt) in [("self", (T_SELF_ACTIVE, T_SELF_BENCH)),
                                ("opp", (T_OPP_ACTIVE, T_OPP_BENCH))]:
+            _sub_buckets = {}
+            for _sub in ("top", "preevo", "tool", "energy"):
+                _bk = f"{side}_unit_{_sub}_meta_bucket"
+                _sub_buckets[_sub] = o.get(_bk)
+                if _sub_buckets[_sub] is None:
+                    _sub_buckets[_sub] = mx.full(
+                        o[f"{side}_unit_{_sub}_id"].shape, 4, dtype=mx.int32
+                    )
             tok = self._unit_stream(
                 o[f"{side}_unit_top_id"], o[f"{side}_unit_preevo_id"],
                 o[f"{side}_unit_tool_id"], o[f"{side}_unit_energy_id"],
                 o[f"{side}_unit_attr"], at, bt,
+                _sub_buckets["top"], _sub_buckets["preevo"],
+                _sub_buckets["tool"], _sub_buckets["energy"],
             )
             toks.append(tok)
             pads.append(o[f"{side}_unit_mask"] < 0.5)
@@ -380,7 +472,7 @@ class TokenTransformerMLX(nn.Module):
         # --- D.2: state column compaction ---
         # Remove columns padded for ALL rows in the batch.
         # Keep: CLS(0), value_tok(1 if split_heads), submit_tok(2 if split_heads),
-        #        sel_type(3 or 1), sel_ctx(4 or 2), scratch positions.
+        #        sel_type(3 or 1), sel_ctx(4 or 2), meta_ctx(5 or 3), scratch positions.
         N_STATE = state_seq.shape[1]
         has_at_least_one_real = (~pad_state).any(axis=0)  # [N_STATE] MLX bool
 
@@ -392,8 +484,19 @@ class TokenTransformerMLX(nn.Module):
         if self.split_heads:
             keep_np[3] = True  # sel_type (shifted)
             keep_np[4] = True  # sel_ctx  (shifted)
+        _meta_ctx_idx = 5 if self.split_heads else 3
+        keep_np[_meta_ctx_idx] = True  # meta_ctx (never padded)
 
         n_kept = int(keep_np.sum())
+
+        # opt_src_pos/opt_tgt_pos are emitted by the encoder relative to the RAW
+        # pre-model token layout (enc_constants.OFF: cls, sel_type, sel_ctx, then
+        # card streams — no value/submit/meta_ctx tokens). The model inserts
+        # value_tok+submit_tok (split_heads only, +2) AND the meta_ctx token
+        # (always, +1) between sel_ctx and the first card stream, so every
+        # position from "self_deck" onward must be shifted by that same total
+        # before it indexes into this model's state_seq.
+        _opt_pos_shift = (2 if self.split_heads else 0) + 1
 
         if n_kept < N_STATE:
             # Build position remap: old_pos -> new_pos, -1 for removed
@@ -406,7 +509,7 @@ class TokenTransformerMLX(nn.Module):
             pad_state = mx.take(pad_state, mx.array(keep_indices), axis=1)
 
             # D.2: remap option source/target positions BEFORE applying split_heads shift
-            _pre_shift = 2 if self.split_heads else 0
+            _pre_shift = _opt_pos_shift
             src_pre = np.asarray(o["opt_src_pos"]).copy()
             tgt_pre = np.asarray(o["opt_tgt_pos"]).copy()
             valid_src = src_pre >= 0
@@ -428,8 +531,8 @@ class TokenTransformerMLX(nn.Module):
 
             state_pad = pad_state  # compacted state padding
         else:
-            # No compaction needed — apply split_heads shift as before
-            _shift = 2 if self.split_heads else 0
+            # No compaction needed — apply the split_heads + meta_ctx shift as before
+            _shift = _opt_pos_shift
             _src_pos = mx.where(o["opt_src_pos"] >= 0, o["opt_src_pos"] + _shift, o["opt_src_pos"])
             _tgt_pos = mx.where(o["opt_tgt_pos"] >= 0, o["opt_tgt_pos"] + _shift, o["opt_tgt_pos"])
             state_pad = pad_state
@@ -612,6 +715,97 @@ class TokenTransformerMLX(nn.Module):
         )
 
         return logits, value, scr_out
+
+    def aux_predictions(self, o: dict, memory_in: mx.array | None = None) -> dict[str, mx.array]:
+        """Compute the 4 auxiliary scalar predictions from the trunk.
+
+        Uses the same encode path and global-token source as logits_value's
+        value head (value_tok when split_heads, otherwise cls_out).
+
+        Returns:
+            dict with keys 'ko_logit', 'prize_pred', 'terminal_logit',
+            'return_pred', each [B]-shaped.
+        """
+        cls_out, _, _, extra, _ = self._encode(o, memory_in=memory_in)
+        aux_source = extra[0] if self.split_heads else cls_out
+        return {
+            "ko_logit": self.ko_head_aux(aux_source).squeeze(-1),
+            "prize_pred": self.prize_head_aux(aux_source).squeeze(-1),
+            "terminal_logit": self.terminal_head_aux(aux_source).squeeze(-1),
+            "return_pred": self.return_head_aux(aux_source).squeeze(-1),
+        }
+
+    def logits_value_aux(
+            self,
+            o: dict,
+            opt_len: int | None = None,
+            memory_in: mx.array | None = None,
+    ) -> tuple[mx.array, mx.array, mx.array, dict[str, mx.array]]:
+        """Fused forward: policy logits + value + memory_out + aux heads.
+
+        Runs a single _encode pass and derives policy/value/aux from it,
+        avoiding the redundant encode that calling logits_value() and
+        aux_predictions() separately would incur.
+
+        Returns:
+            (logits, value, memory_out, aux) — same logits/value/memory_out
+            contract as logits_value(), plus aux (see aux_predictions()).
+        """
+        cls_out, opt_out, pooled, extra, scr_out = self._encode(
+            o, opt_len=opt_len, memory_in=memory_in,
+        )
+        n = opt_out.shape[1]
+
+        if self.structured:
+            verb = o["opt_verb"][:, :n]
+            opt_logits = (
+                    (opt_out * self.type_query(verb)).sum(axis=-1)
+                    + self.type_bias(verb).squeeze(-1)
+                    + self.opt_head(opt_out).squeeze(-1)
+            )
+        else:
+            opt_logits = self.opt_head(opt_out).squeeze(-1)
+
+        if n < MAX_OPTIONS:
+            pad_size = MAX_OPTIONS - n
+            opt_logits = mx.pad(
+                opt_logits,
+                [(0, 0), (0, pad_size)],
+                constant_values=mx.array(-65504.0, dtype=opt_logits.dtype),
+            )
+
+        submit_src = extra[1] if self.split_heads else cls_out
+        submit_logit = self.submit_head(submit_src)
+
+        if self.split_heads:
+            v_in = extra[0]
+        else:
+            v_in = mx.concatenate([cls_out, pooled], axis=-1)
+        if self.value_categorical:
+            atom_logits = self.value_head(v_in)
+            probs = mx.softmax(atom_logits, axis=-1)
+            support = mx.array(self._atom_support_np).astype(atom_logits.dtype)
+            value = (probs * support).sum(axis=-1)
+        else:
+            value = self.value_head(v_in).squeeze(-1)
+
+        logits = mx.concatenate([opt_logits, submit_logit], axis=-1)
+        action_mask = o["action_mask"]
+        logits = mx.where(
+            action_mask < 0.5,
+            mx.array(-65504.0, dtype=logits.dtype),
+            logits,
+        )
+
+        aux_source = extra[0] if self.split_heads else cls_out
+        aux = {
+            "ko_logit": self.ko_head_aux(aux_source).squeeze(-1),
+            "prize_pred": self.prize_head_aux(aux_source).squeeze(-1),
+            "terminal_logit": self.terminal_head_aux(aux_source).squeeze(-1),
+            "return_pred": self.return_head_aux(aux_source).squeeze(-1),
+        }
+
+        return logits, value, scr_out, aux
 
     def get_value(self, o: dict, opt_len: int | None = None,
                   memory_in: mx.array | None = None) -> mx.array:

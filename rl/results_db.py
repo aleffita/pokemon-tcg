@@ -3,13 +3,20 @@
 The database is disposable.  This module deliberately contains no migration
 code: an existing database with another schema is rejected and must be rebuilt
 explicitly by its operator.
+
+Schema 2.0.0 replaces the single-snapshot ``card_elo``/``deck_elo`` tables
+with day-partitioned ``card_elo_daily``/``deck_elo_daily`` tables (plus a new
+``agent_elo_daily`` and ``meta_features_daily``), and introduces ``days``,
+``agents``, and ``datasets`` as first-class rows. ``card_elo``/``deck_elo``
+survive as read-only compatibility views over the latest day snapshot per
+``(entity, source)`` so existing read-only callers keep working unmodified.
 """
 from __future__ import annotations
 
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 import hashlib
 from pathlib import Path
 import re
@@ -18,7 +25,7 @@ from typing import Iterable, Iterator, Mapping, Sequence
 
 
 DB_PATH = Path(__file__).resolve().parent.parent / "model" / "results.db"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = "2.0.0"
 K = 32
 INITIAL_ELO = 600.0
 
@@ -76,14 +83,24 @@ def _extract_lb_score(label: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _sha256_file(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 SCHEMA_SQL = f"""
 CREATE TABLE schema_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-    schema_version INTEGER NOT NULL,
+    schema_version TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 INSERT INTO schema_metadata (singleton, schema_version)
-VALUES (1, {SCHEMA_VERSION});
+VALUES (1, '{SCHEMA_VERSION}');
 
 CREATE TABLE data_sources (
     code TEXT PRIMARY KEY,
@@ -174,9 +191,39 @@ CREATE TABLE submission_decks (
     UNIQUE (submission_id, deck_id)
 );
 
+CREATE TABLE days (
+    id INTEGER PRIMARY KEY,
+    date TEXT NOT NULL UNIQUE,
+    competition_day INTEGER,
+    is_complete INTEGER NOT NULL DEFAULT 0,
+    source_zip TEXT,
+    source_sha256 TEXT,
+    n_matches INTEGER NOT NULL DEFAULT 0,
+    imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX days_date ON days(date);
+
+CREATE TABLE agents (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    kaggle_username TEXT,
+    team_id INTEGER REFERENCES teams(id),
+    submission_ref TEXT,
+    is_self INTEGER NOT NULL DEFAULT 0,
+    first_seen_day INTEGER REFERENCES days(id),
+    last_seen_day INTEGER REFERENCES days(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (name, submission_ref)
+);
+CREATE INDEX agents_team ON agents(team_id);
+CREATE INDEX agents_is_self ON agents(is_self);
+
 CREATE TABLE matches (
     id INTEGER PRIMARY KEY,
     source TEXT NOT NULL REFERENCES data_sources(code),
+    day_id INTEGER REFERENCES days(id),
+    our_agent_id INTEGER REFERENCES agents(id),
+    opp_agent_id INTEGER REFERENCES agents(id),
     matchup_id INTEGER REFERENCES matchups(id),
     game_index INTEGER NOT NULL DEFAULT 0,
     our_agent TEXT,
@@ -203,6 +250,10 @@ ON matches(source, external_episode_id)
 WHERE external_episode_id IS NOT NULL;
 CREATE UNIQUE INDEX matches_source_observation
 ON matches(source, source_observation_digest);
+CREATE INDEX matches_day ON matches(day_id);
+CREATE INDEX matches_our_agent_id ON matches(our_agent_id);
+CREATE INDEX matches_opp_agent_id ON matches(opp_agent_id);
+CREATE INDEX matches_archive_date ON matches(archive_date);
 
 CREATE TABLE match_participants (
     id INTEGER PRIMARY KEY,
@@ -240,31 +291,74 @@ CREATE UNIQUE INDEX match_card_usage_legacy_seat
 ON match_card_usage(match_id, player_side, card_id)
 WHERE match_id IS NOT NULL;
 
-CREATE TABLE card_elo (
+CREATE TABLE card_elo_daily (
     card_id INTEGER NOT NULL REFERENCES cards(id),
+    day_id INTEGER NOT NULL REFERENCES days(id) ON DELETE CASCADE,
     source TEXT NOT NULL REFERENCES data_sources(code),
-    elo REAL NOT NULL DEFAULT {INITIAL_ELO},
+    elo REAL NOT NULL,
     games_played INTEGER NOT NULL DEFAULT 0,
+    exposure INTEGER NOT NULL DEFAULT 0,
     wins INTEGER NOT NULL DEFAULT 0,
     losses INTEGER NOT NULL DEFAULT 0,
     draws INTEGER NOT NULL DEFAULT 0,
-    win_rate REAL NOT NULL DEFAULT 0.0,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (card_id, source)
+    computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (card_id, day_id, source)
 );
+CREATE INDEX card_elo_daily_lookup ON card_elo_daily(day_id, source, card_id);
 
-CREATE TABLE deck_elo (
+CREATE TABLE deck_elo_daily (
     deck_id INTEGER NOT NULL REFERENCES decks(id),
+    day_id INTEGER NOT NULL REFERENCES days(id) ON DELETE CASCADE,
     source TEXT NOT NULL REFERENCES data_sources(code),
-    elo REAL NOT NULL DEFAULT {INITIAL_ELO},
+    elo REAL NOT NULL,
     games_played INTEGER NOT NULL DEFAULT 0,
     wins INTEGER NOT NULL DEFAULT 0,
     losses INTEGER NOT NULL DEFAULT 0,
     draws INTEGER NOT NULL DEFAULT 0,
-    win_rate REAL NOT NULL DEFAULT 0.0,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (deck_id, source)
+    computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (deck_id, day_id, source)
 );
+CREATE INDEX deck_elo_daily_lookup ON deck_elo_daily(day_id, source, deck_id);
+
+CREATE TABLE agent_elo_daily (
+    agent_id INTEGER NOT NULL REFERENCES agents(id),
+    day_id INTEGER NOT NULL REFERENCES days(id) ON DELETE CASCADE,
+    source TEXT NOT NULL REFERENCES data_sources(code),
+    elo REAL NOT NULL,
+    games_played INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    losses INTEGER NOT NULL DEFAULT 0,
+    draws INTEGER NOT NULL DEFAULT 0,
+    computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (agent_id, day_id, source)
+);
+CREATE INDEX agent_elo_daily_lookup ON agent_elo_daily(day_id, source, agent_id);
+
+CREATE TABLE meta_features_daily (
+    card_id INTEGER NOT NULL REFERENCES cards(id),
+    day_id INTEGER NOT NULL REFERENCES days(id) ON DELETE CASCADE,
+    source TEXT NOT NULL REFERENCES data_sources(code),
+    elo_bucket_10p INTEGER NOT NULL,
+    trend_7d REAL NOT NULL DEFAULT 0.0,
+    delta_from_yesterday REAL NOT NULL DEFAULT 0.0,
+    rank_in_meta INTEGER,
+    exposure_pct REAL NOT NULL DEFAULT 0.0,
+    computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (card_id, day_id, source)
+);
+CREATE INDEX meta_features_daily_lookup ON meta_features_daily(day_id, card_id);
+
+CREATE TABLE datasets (
+    id INTEGER PRIMARY KEY,
+    day_id INTEGER NOT NULL REFERENCES days(id) ON DELETE CASCADE,
+    path TEXT NOT NULL UNIQUE,
+    schema_version INTEGER NOT NULL,
+    rows INTEGER NOT NULL DEFAULT 0,
+    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+    aux_targets INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX datasets_day ON datasets(day_id);
 
 CREATE TABLE operation_receipts (
     idempotency_key TEXT PRIMARY KEY,
@@ -376,7 +470,6 @@ CREATE INDEX submission_decks_deck ON submission_decks(deck_id);
 CREATE INDEX match_participants_team ON match_participants(team_id);
 CREATE INDEX match_participants_submission ON match_participants(submission_id);
 CREATE INDEX match_participants_deck ON match_participants(deck_id);
-CREATE INDEX matches_archive_date ON matches(archive_date);
 CREATE INDEX match_card_usage_card ON match_card_usage(card_id);
 CREATE INDEX matchups_tournament ON matchups(tournament_id);
 CREATE INDEX match_steps_match ON match_steps(match_id);
@@ -384,6 +477,46 @@ CREATE INDEX step_options_step ON step_options(step_id);
 CREATE INDEX step_events_step ON step_events(step_id);
 CREATE INDEX board_snapshots_step ON board_snapshots(step_id);
 CREATE INDEX pokemon_on_field_snapshot ON pokemon_on_field(snapshot_id);
+
+CREATE VIEW card_elo AS
+SELECT
+    ced.card_id,
+    ced.source,
+    ced.elo,
+    ced.games_played,
+    ced.wins,
+    ced.losses,
+    ced.draws,
+    CAST(ced.wins AS REAL) / NULLIF(ced.games_played, 0) AS win_rate,
+    ced.computed_at AS updated_at
+FROM card_elo_daily ced
+INNER JOIN (
+    SELECT card_id, source, MAX(day_id) AS max_day_id
+    FROM card_elo_daily
+    GROUP BY card_id, source
+) latest ON latest.card_id = ced.card_id
+        AND latest.source = ced.source
+        AND latest.max_day_id = ced.day_id;
+
+CREATE VIEW deck_elo AS
+SELECT
+    ded.deck_id,
+    ded.source,
+    ded.elo,
+    ded.games_played,
+    ded.wins,
+    ded.losses,
+    ded.draws,
+    CAST(ded.wins AS REAL) / NULLIF(ded.games_played, 0) AS win_rate,
+    ded.computed_at AS updated_at
+FROM deck_elo_daily ded
+INNER JOIN (
+    SELECT deck_id, source, MAX(day_id) AS max_day_id
+    FROM deck_elo_daily
+    GROUP BY deck_id, source
+) latest ON latest.deck_id = ded.deck_id
+        AND latest.source = ded.source
+        AND latest.max_day_id = ded.day_id;
 """
 
 
@@ -432,8 +565,8 @@ class ResultsDB:
         row = self.conn.execute(
             "SELECT schema_version FROM schema_metadata WHERE singleton = 1"
         ).fetchone()
-        if row is None or int(row["schema_version"]) != SCHEMA_VERSION:
-            version = None if row is None else int(row["schema_version"])
+        if row is None or str(row["schema_version"]) != SCHEMA_VERSION:
+            version = None if row is None else row["schema_version"]
             raise DatabaseRebuildRequired(
                 f"{self.db_path} has schema {version}; expected {SCHEMA_VERSION}"
             )
@@ -752,6 +885,148 @@ class ResultsDB:
             )
         ]
 
+    def register_day(
+        self,
+        date: str,
+        source_zip: str | Path | None = None,
+        competition_day: int | None = None,
+    ) -> int:
+        """Insert-or-return the ``day_id`` for one calendar date.
+
+        ``source_zip`` sha256 is computed and stored only at first
+        registration for this date; later calls never overwrite it.
+        """
+
+        source_zip_str = str(source_zip) if source_zip is not None else None
+        source_sha256 = (
+            _sha256_file(Path(source_zip)) if source_zip is not None else None
+        )
+        with self.transaction():
+            self.conn.execute(
+                """
+                INSERT INTO days (date, competition_day, source_zip, source_sha256)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(date) DO NOTHING
+                """,
+                (date, competition_day, source_zip_str, source_sha256),
+            )
+            row = self.conn.execute(
+                "SELECT id FROM days WHERE date = ?", (date,)
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("day natural-key resolution failed")
+        return int(row["id"])
+
+    def _bump_day_match_count(self, day_id: int | None) -> None:
+        if day_id is None:
+            return
+        self.conn.execute(
+            "UPDATE days SET n_matches = n_matches + 1 WHERE id = ?",
+            (day_id,),
+        )
+
+    def upsert_agent(
+        self,
+        name: str,
+        submission_ref: str | None = None,
+        kaggle_username: str | None = None,
+        team_id: int | None = None,
+        is_self: bool = False,
+    ) -> int:
+        """Insert-or-return ``agent_id`` by ``(name, submission_ref)``.
+
+        Looked up with an explicit ``IS`` comparison rather than relying on
+        ``ON CONFLICT``: SQLite treats ``NULL`` as distinct in unique
+        constraints, so a plain conflict-based upsert would silently create
+        one new row per call whenever ``submission_ref`` is ``None``.
+        """
+
+        with self.transaction():
+            row = self.conn.execute(
+                "SELECT id FROM agents WHERE name = ? AND submission_ref IS ?",
+                (name, submission_ref),
+            ).fetchone()
+            if row is None:
+                cursor = self.conn.execute(
+                    """
+                    INSERT INTO agents (
+                        name, kaggle_username, team_id, submission_ref, is_self
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (name, kaggle_username, team_id, submission_ref, int(is_self)),
+                )
+                agent_id = int(cursor.lastrowid)
+            else:
+                agent_id = int(row["id"])
+        return agent_id
+
+    def touch_agent_seen(self, agent_id: int, day_id: int) -> None:
+        """Update ``first_seen_day`` (if null) and ``last_seen_day``."""
+
+        with self.transaction():
+            self.conn.execute(
+                """
+                UPDATE agents
+                SET first_seen_day = COALESCE(first_seen_day, ?),
+                    last_seen_day = ?
+                WHERE id = ?
+                """,
+                (day_id, day_id, agent_id),
+            )
+
+    def register_dataset(
+        self,
+        day_id: int,
+        path: str,
+        schema_version: int,
+        rows: int,
+        sha256: str,
+        aux_targets: bool = False,
+    ) -> int:
+        """Insert-or-return ``dataset_id`` by its unique ``path``."""
+
+        with self.transaction():
+            self.conn.execute(
+                """
+                INSERT INTO datasets (
+                    day_id, path, schema_version, rows, sha256, aux_targets
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO NOTHING
+                """,
+                (
+                    day_id,
+                    str(path),
+                    int(schema_version),
+                    int(rows),
+                    sha256,
+                    int(aux_targets),
+                ),
+            )
+            row = self.conn.execute(
+                "SELECT id FROM datasets WHERE path = ?", (str(path),)
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("dataset natural-key resolution failed")
+        return int(row["id"])
+
+    def list_datasets_by_days(self, day_ids: list[int]) -> list[dict]:
+        """Return dataset rows joined with ``days``, ordered by day date."""
+
+        if not day_ids:
+            return []
+        placeholders = ",".join("?" for _ in day_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT ds.*, d.date AS day_date, d.competition_day AS competition_day
+            FROM datasets ds
+            JOIN days d ON d.id = ds.day_id
+            WHERE ds.day_id IN ({placeholders})
+            ORDER BY d.date, ds.id
+            """,
+            tuple(day_ids),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def add_match(
         self,
         matchup_id: int,
@@ -781,19 +1056,22 @@ class ResultsDB:
                 str(result),
             )
         )
+        today = date.today().isoformat()
         with self.transaction():
-            self.conn.execute(
+            day_id = self.register_day(today)
+            cursor = self.conn.execute(
                 """
                 INSERT INTO matches (
-                    source, matchup_id, game_index, our_agent, our_deck_id,
-                    opp_agent, opp_deck_id, our_side, result,
+                    source, day_id, matchup_id, game_index, our_agent,
+                    our_deck_id, opp_agent, opp_deck_id, our_side, result,
                     source_observation_digest, archive_date, archive_member,
                     n_steps
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT DO NOTHING
                 """,
                 (
                     source,
+                    day_id,
                     matchup_id,
                     game_index,
                     our_agent,
@@ -803,11 +1081,13 @@ class ResultsDB:
                     our_side,
                     result,
                     observation_digest,
-                    date.today().isoformat(),
+                    today,
                     f"local:{matchup_id}:{game_index}",
                     n_steps,
                 ),
             )
+            if cursor.rowcount:
+                self._bump_day_match_count(day_id)
             row = self.conn.execute(
                 """
                 SELECT id, source, our_agent, our_deck_id, opp_agent,
@@ -1089,6 +1369,8 @@ class ResultsDB:
         archive_member: str,
         n_steps: int,
         participants: Sequence[MatchParticipant],
+        our_agent_id: int | None = None,
+        opp_agent_id: int | None = None,
     ) -> int:
         if len(source_observation_digest) != 64:
             raise ValueError("source_observation_digest must be full SHA-256")
@@ -1143,18 +1425,21 @@ class ResultsDB:
                         "external episode id has conflicting source bytes"
                     )
 
-            self.conn.execute(
+            day_id = self.register_day(archive_date)
+            cursor = self.conn.execute(
                 """
                 INSERT INTO matches (
-                    source, game_index, our_agent, our_deck_id, opp_agent,
-                    opp_deck_id, our_side, result, external_episode_id,
-                    source_observation_digest, archive_date, archive_member,
-                    n_steps
-                ) VALUES (?, 0, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+                    source, day_id, game_index, our_agent, our_deck_id,
+                    opp_agent, opp_deck_id, our_side, result,
+                    external_episode_id, source_observation_digest,
+                    archive_date, archive_member, n_steps,
+                    our_agent_id, opp_agent_id
+                ) VALUES (?, ?, 0, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source, source_observation_digest) DO NOTHING
                 """,
                 (
                     source,
+                    day_id,
                     team_names[0],
                     ordered_participants[0].deck_id,
                     team_names[1],
@@ -1165,8 +1450,12 @@ class ResultsDB:
                     archive_date,
                     archive_member,
                     int(n_steps),
+                    our_agent_id,
+                    opp_agent_id,
                 ),
             )
+            if cursor.rowcount:
+                self._bump_day_match_count(day_id)
             row = self.conn.execute(
                 "SELECT id FROM matches "
                 "WHERE source = ? AND source_observation_digest = ?",
@@ -1246,203 +1535,400 @@ class ResultsDB:
             )
         return match_id
 
+    def _resolve_latest_day_id(self, source: str) -> int:
+        """Return the day_id to stamp a fresh Elo/meta snapshot with.
+
+        Prefers the latest day actually observed among this source's
+        matches; falls back to the latest registered day overall when every
+        match of this source still has a null ``day_id`` (e.g. rows written
+        outside this module's match-creation helpers). Aborts loudly when no
+        day has ever been registered — there is no calendar context to stamp
+        the snapshot with.
+        """
+
+        row = self.conn.execute(
+            "SELECT MAX(day_id) AS max_day FROM matches WHERE source = ?",
+            (source,),
+        ).fetchone()
+        day_id = row["max_day"] if row is not None else None
+        if day_id is None:
+            fallback = self.conn.execute(
+                "SELECT MAX(id) AS max_day FROM days"
+            ).fetchone()
+            day_id = fallback["max_day"] if fallback is not None else None
+        if day_id is None:
+            raise RuntimeError(
+                f"cannot compute a daily snapshot for source={source!r}: no "
+                "matches carry a day_id and the days table is empty; call "
+                "register_day() before computing Elo"
+            )
+        return int(day_id)
+
     def compute_deck_elo(self, source: str = "remote") -> dict[int, float]:
+        """Rolling-forward deck Elo: snapshot ratings at each day boundary."""
         ratings: dict[int, float] = {}
         stats: dict[int, list[int]] = {}
-        matches = self.conn.execute(
-            "SELECT id FROM matches WHERE source = ? ORDER BY id", (source,)
-        ).fetchall()
-        for match in matches:
-            players = self.conn.execute(
-                """
-                SELECT deck_id, outcome
-                FROM match_participants
-                WHERE match_id = ?
-                ORDER BY seat
-                """,
-                (match["id"],),
-            ).fetchall()
-            if len(players) != 2:
-                legacy = self.conn.execute(
-                    """
-                    SELECT our_deck_id, opp_deck_id, result
-                    FROM matches
-                    WHERE id = ?
-                    """,
-                    (match["id"],),
-                ).fetchone()
-                if (
-                    legacy is not None
-                    and legacy["our_deck_id"] is not None
-                    and legacy["opp_deck_id"] is not None
-                    and legacy["result"] is not None
-                ):
-                    result = int(legacy["result"])
-                    players = [
-                        {
-                            "deck_id": int(legacy["our_deck_id"]),
-                            "outcome": result,
-                        },
-                        {
-                            "deck_id": int(legacy["opp_deck_id"]),
-                            "outcome": -result,
-                        },
-                    ]
-            if len(players) != 2:
-                continue
-            left, right = players
-            for row in players:
-                deck_id = int(row["deck_id"])
-                ratings.setdefault(deck_id, INITIAL_ELO)
-                stats.setdefault(deck_id, [0, 0, 0])
-                stats[deck_id][0 if row["outcome"] > 0 else 1 if row["outcome"] < 0 else 2] += 1
-            if int(left["deck_id"]) == int(right["deck_id"]):
-                continue
-            score = 1.0 if left["outcome"] > 0 else 0.0 if left["outcome"] < 0 else 0.5
-            left_id, right_id = int(left["deck_id"]), int(right["deck_id"])
-            expected = 1 / (1 + 10 ** ((ratings[right_id] - ratings[left_id]) / 400))
-            delta = K * (score - expected)
-            ratings[left_id] += delta
-            ratings[right_id] -= delta
-        with self.transaction():
-            self.conn.execute("DELETE FROM deck_elo WHERE source = ?", (source,))
+
+        def _snapshot(day_id: int | None) -> None:
+            if day_id is None:
+                return
+            self.conn.execute(
+                "DELETE FROM deck_elo_daily WHERE source = ? AND day_id = ?",
+                (source, day_id),
+            )
             for deck_id, elo in sorted(ratings.items()):
                 wins, losses, draws = stats[deck_id]
                 games = wins + losses + draws
                 self.conn.execute(
                     """
-                    INSERT INTO deck_elo (
-                        deck_id, source, elo, games_played, wins, losses,
-                        draws, win_rate
+                    INSERT INTO deck_elo_daily (
+                        deck_id, day_id, source, elo, games_played, wins,
+                        losses, draws
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        deck_id,
-                        source,
-                        elo,
-                        games,
-                        wins,
-                        losses,
-                        draws,
-                        wins / games if games else 0.0,
-                    ),
+                    (deck_id, day_id, source, elo, games, wins, losses, draws),
                 )
+
+        matches = self.conn.execute(
+            "SELECT id, day_id FROM matches WHERE source = ? ORDER BY day_id, id",
+            (source,),
+        ).fetchall()
+
+        current_day_id: int | None = None
+        with self.transaction():
+            for match in matches:
+                match_day_id = match["day_id"]
+                if current_day_id is not None and match_day_id != current_day_id:
+                    _snapshot(current_day_id)
+                current_day_id = match_day_id
+
+                players = self.conn.execute(
+                    """
+                    SELECT deck_id, outcome
+                    FROM match_participants
+                    WHERE match_id = ?
+                    ORDER BY seat
+                    """,
+                    (match["id"],),
+                ).fetchall()
+                if len(players) != 2:
+                    legacy = self.conn.execute(
+                        """
+                        SELECT our_deck_id, opp_deck_id, result
+                        FROM matches
+                        WHERE id = ?
+                        """,
+                        (match["id"],),
+                    ).fetchone()
+                    if (
+                        legacy is not None
+                        and legacy["our_deck_id"] is not None
+                        and legacy["opp_deck_id"] is not None
+                        and legacy["result"] is not None
+                    ):
+                        result = int(legacy["result"])
+                        players = [
+                            {"deck_id": int(legacy["our_deck_id"]), "outcome": result},
+                            {"deck_id": int(legacy["opp_deck_id"]), "outcome": -result},
+                        ]
+                if len(players) != 2:
+                    continue
+                left, right = players
+                for row in players:
+                    deck_id = int(row["deck_id"])
+                    ratings.setdefault(deck_id, INITIAL_ELO)
+                    stats.setdefault(deck_id, [0, 0, 0])
+                    stats[deck_id][0 if row["outcome"] > 0 else 1 if row["outcome"] < 0 else 2] += 1
+                if int(left["deck_id"]) == int(right["deck_id"]):
+                    continue
+                score = 1.0 if left["outcome"] > 0 else 0.0 if left["outcome"] < 0 else 0.5
+                left_id, right_id = int(left["deck_id"]), int(right["deck_id"])
+                expected = 1 / (1 + 10 ** ((ratings[right_id] - ratings[left_id]) / 400))
+                delta = K * (score - expected)
+                ratings[left_id] += delta
+                ratings[right_id] -= delta
+
+            if current_day_id is not None:
+                _snapshot(current_day_id)
         return ratings
 
     def compute_card_elo(self, source: str = "remote") -> dict[int, float]:
+        """Rolling-forward card Elo: snapshot ratings at each day boundary."""
         ratings: dict[int, float] = {}
         stats: dict[int, list[int]] = {}
-        matches = self.conn.execute(
-            """
-            SELECT id, result, our_side
-            FROM matches
-            WHERE source = ?
-            ORDER BY id
-            """,
-            (source,),
-        ).fetchall()
-        for match in matches:
-            normalized_players = self.conn.execute(
-                """
-                SELECT id, seat, outcome
-                FROM match_participants
-                WHERE match_id = ?
-                ORDER BY seat
-                """,
-                (match["id"],),
-            ).fetchall()
-            card_sets: list[list[sqlite3.Row]] = []
-            outcomes: list[int] = []
-            if len(normalized_players) == 2:
-                for player in normalized_players:
-                    card_sets.append(
-                        self.conn.execute(
-                            """
-                            SELECT card_id, quantity
-                            FROM match_card_usage
-                            WHERE participant_id = ?
-                            ORDER BY card_id
-                            """,
-                            (player["id"],),
-                        ).fetchall()
-                    )
-                    outcomes.append(int(player["outcome"]))
-            elif match["result"] is not None:
-                our_side = (
-                    int(match["our_side"])
-                    if match["our_side"] in (0, 1)
-                    else 0
-                )
-                result = int(match["result"])
-                for side in (0, 1):
-                    card_sets.append(
-                        self.conn.execute(
-                            """
-                            SELECT card_id, quantity
-                            FROM match_card_usage
-                            WHERE match_id = ? AND player_side = ?
-                            ORDER BY card_id
-                            """,
-                            (match["id"], side),
-                        ).fetchall()
-                    )
-                    outcomes.append(
-                        result if side == our_side else -result
-                    )
-            if len(card_sets) != 2:
-                continue
-            for cards, outcome in zip(card_sets, outcomes):
-                for card in cards:
-                    card_id = int(card["card_id"])
-                    ratings.setdefault(card_id, INITIAL_ELO)
-                    stats.setdefault(card_id, [0, 0, 0])
-                    stats[card_id][
-                        0 if outcome > 0 else 1 if outcome < 0 else 2
-                    ] += 1
-            if not card_sets[0] or not card_sets[1]:
-                continue
-            left_mean = sum(
-                ratings[int(row["card_id"])] for row in card_sets[0]
-            ) / len(card_sets[0])
-            right_mean = sum(
-                ratings[int(row["card_id"])] for row in card_sets[1]
-            ) / len(card_sets[1])
-            score = (
-                1.0 if outcomes[0] > 0 else 0.0 if outcomes[0] < 0 else 0.5
+
+        def _snapshot(day_id: int | None) -> None:
+            if day_id is None:
+                return
+            self.conn.execute(
+                "DELETE FROM card_elo_daily WHERE source = ? AND day_id = ?",
+                (source, day_id),
             )
-            expected = 1 / (
-                1 + 10 ** ((right_mean - left_mean) / 400)
-            )
-            delta = K * (score - expected)
-            for sign, cards in ((1.0, card_sets[0]), (-1.0, card_sets[1])):
-                for card in cards:
-                    ratings[int(card["card_id"])] += (
-                        sign * delta * int(card["quantity"]) / 4
-                    )
-        with self.transaction():
-            self.conn.execute("DELETE FROM card_elo WHERE source = ?", (source,))
             for card_id, elo in sorted(ratings.items()):
                 wins, losses, draws = stats[card_id]
                 games = wins + losses + draws
+                # exposure mirrors games_played 1:1 under this algorithm.
                 self.conn.execute(
                     """
-                    INSERT INTO card_elo (
-                        card_id, source, elo, games_played, wins, losses,
-                        draws, win_rate
+                    INSERT INTO card_elo_daily (
+                        card_id, day_id, source, elo, games_played, exposure,
+                        wins, losses, draws
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (card_id, day_id, source, elo, games, games, wins, losses, draws),
+                )
+
+        matches = self.conn.execute(
+            """
+            SELECT id, day_id, result, our_side
+            FROM matches
+            WHERE source = ?
+            ORDER BY day_id, id
+            """,
+            (source,),
+        ).fetchall()
+
+        current_day_id: int | None = None
+        with self.transaction():
+            for match in matches:
+                match_day_id = match["day_id"]
+                if current_day_id is not None and match_day_id != current_day_id:
+                    _snapshot(current_day_id)
+                current_day_id = match_day_id
+
+                normalized_players = self.conn.execute(
+                    """
+                    SELECT id, seat, outcome
+                    FROM match_participants
+                    WHERE match_id = ?
+                    ORDER BY seat
+                    """,
+                    (match["id"],),
+                ).fetchall()
+                card_sets: list[list[sqlite3.Row]] = []
+                outcomes: list[int] = []
+                if len(normalized_players) == 2:
+                    for player in normalized_players:
+                        card_sets.append(
+                            self.conn.execute(
+                                """
+                                SELECT card_id, quantity
+                                FROM match_card_usage
+                                WHERE participant_id = ?
+                                ORDER BY card_id
+                                """,
+                                (player["id"],),
+                            ).fetchall()
+                        )
+                        outcomes.append(int(player["outcome"]))
+                elif match["result"] is not None:
+                    our_side = int(match["our_side"]) if match["our_side"] in (0, 1) else 0
+                    result = int(match["result"])
+                    for side in (0, 1):
+                        card_sets.append(
+                            self.conn.execute(
+                                """
+                                SELECT card_id, quantity
+                                FROM match_card_usage
+                                WHERE match_id = ? AND player_side = ?
+                                ORDER BY card_id
+                                """,
+                                (match["id"], side),
+                            ).fetchall()
+                        )
+                        outcomes.append(result if side == our_side else -result)
+                if len(card_sets) != 2:
+                    continue
+                for cards, outcome in zip(card_sets, outcomes):
+                    for card in cards:
+                        card_id = int(card["card_id"])
+                        ratings.setdefault(card_id, INITIAL_ELO)
+                        stats.setdefault(card_id, [0, 0, 0])
+                        stats[card_id][0 if outcome > 0 else 1 if outcome < 0 else 2] += 1
+                if not card_sets[0] or not card_sets[1]:
+                    continue
+                left_mean = sum(ratings[int(r["card_id"])] for r in card_sets[0]) / len(card_sets[0])
+                right_mean = sum(ratings[int(r["card_id"])] for r in card_sets[1]) / len(card_sets[1])
+                score = 1.0 if outcomes[0] > 0 else 0.0 if outcomes[0] < 0 else 0.5
+                expected = 1 / (1 + 10 ** ((right_mean - left_mean) / 400))
+                delta = K * (score - expected)
+                for sign, cards in ((1.0, card_sets[0]), (-1.0, card_sets[1])):
+                    for card in cards:
+                        ratings[int(card["card_id"])] += sign * delta * int(card["quantity"]) / 4
+
+            if current_day_id is not None:
+                _snapshot(current_day_id)
+        return ratings
+
+    def compute_agent_elo(self, source: str = "remote") -> dict[int, float]:
+        """Compute per-day agent Elo from ``matches.our_agent_id``/``opp_agent_id``.
+
+        Matches created through the current ``add_match``/``record_match``
+        helpers do not populate agent linkage on their own; callers that want
+        agent Elo must first identify agents with ``upsert_agent`` and stamp
+        the corresponding ``matches`` rows themselves.
+        """
+
+        ratings: dict[int, float] = {}
+        stats: dict[int, list[int]] = {}
+
+        def _snapshot(day_id: int | None) -> None:
+            if day_id is None:
+                return
+            self.conn.execute(
+                "DELETE FROM agent_elo_daily WHERE source = ? AND day_id = ?",
+                (source, day_id),
+            )
+            for agent_id, elo in sorted(ratings.items()):
+                wins, losses, draws = stats[agent_id]
+                games = wins + losses + draws
+                self.conn.execute(
+                    """
+                    INSERT INTO agent_elo_daily (
+                        agent_id, day_id, source, elo, games_played, wins,
+                        losses, draws
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        card_id,
-                        source,
-                        elo,
-                        games,
-                        wins,
-                        losses,
-                        draws,
-                        wins / games if games else 0.0,
-                    ),
+                    (agent_id, day_id, source, elo, games, wins, losses, draws),
                 )
+
+        matches = self.conn.execute(
+            """
+            SELECT id, day_id, our_agent_id, opp_agent_id, result
+            FROM matches
+            WHERE source = ?
+              AND our_agent_id IS NOT NULL
+              AND opp_agent_id IS NOT NULL
+              AND result IS NOT NULL
+            ORDER BY day_id, id
+            """,
+            (source,),
+        ).fetchall()
+
+        current_day_id: int | None = None
+        with self.transaction():
+            for match in matches:
+                match_day_id = match["day_id"]
+                if current_day_id is not None and match_day_id != current_day_id:
+                    _snapshot(current_day_id)
+                current_day_id = match_day_id
+
+                left_id = int(match["our_agent_id"])
+                right_id = int(match["opp_agent_id"])
+                result = int(match["result"])
+                for agent_id in (left_id, right_id):
+                    ratings.setdefault(agent_id, INITIAL_ELO)
+                    stats.setdefault(agent_id, [0, 0, 0])
+                if left_id == right_id:
+                    continue
+                stats[left_id][0 if result > 0 else 1 if result < 0 else 2] += 1
+                stats[right_id][0 if -result > 0 else 1 if -result < 0 else 2] += 1
+                score = 1.0 if result > 0 else 0.0 if result < 0 else 0.5
+                expected = 1 / (1 + 10 ** ((ratings[right_id] - ratings[left_id]) / 400))
+                delta = K * (score - expected)
+                ratings[left_id] += delta
+                ratings[right_id] -= delta
+
+            if current_day_id is not None:
+                _snapshot(current_day_id)
         return ratings
+
+    def compute_daily_elos(self, source: str) -> None:
+        """Recompute every ``*_elo_daily`` table for ``source`` in one pass.
+
+        Each sub-computation already deletes its own ``(source, day_id)``
+        slice before inserting, so calling this repeatedly for the same day
+        is idempotent.
+        """
+
+        self.compute_card_elo(source=source)
+        self.compute_deck_elo(source=source)
+        self.compute_agent_elo(source=source)
+
+    def refresh_meta_features(self, source: str) -> None:
+        """Rebuild ``meta_features_daily`` from ``card_elo_daily`` for ``source``.
+
+        ``elo_bucket_10p`` is a 0-based decile (0 = strongest 10% of that
+        day's field). ``trend_7d``/``delta_from_yesterday`` compare against
+        the same card's elo on an earlier *calendar* day (not the previous
+        stored snapshot), so they read 0.0 whenever that earlier day was
+        never snapshotted for this source.
+        """
+
+        with self.transaction():
+            self.conn.execute(
+                "DELETE FROM meta_features_daily WHERE source = ?", (source,)
+            )
+            rows = self.conn.execute(
+                """
+                SELECT ced.card_id, ced.day_id, ced.elo, ced.exposure,
+                       d.date AS day_date
+                FROM card_elo_daily ced
+                JOIN days d ON d.id = ced.day_id
+                WHERE ced.source = ?
+                ORDER BY d.date, ced.card_id
+                """,
+                (source,),
+            ).fetchall()
+            if not rows:
+                return
+
+            by_day: dict[int, list[sqlite3.Row]] = {}
+            elo_by_card_date: dict[tuple[int, str], float] = {}
+            for row in rows:
+                by_day.setdefault(int(row["day_id"]), []).append(row)
+                elo_by_card_date[(int(row["card_id"]), str(row["day_date"]))] = (
+                    float(row["elo"])
+                )
+
+            for day_id, day_rows in by_day.items():
+                ordered = sorted(day_rows, key=lambda r: -float(r["elo"]))
+                n = len(ordered)
+                total_exposure = sum(int(r["exposure"]) for r in day_rows)
+                for rank, row in enumerate(ordered, start=1):
+                    card_id = int(row["card_id"])
+                    day_date_str = str(row["day_date"])
+                    elo = float(row["elo"])
+                    exposure = int(row["exposure"])
+                    decile = min(9, (rank - 1) * 10 // n) if n else 0
+                    current_date = date.fromisoformat(day_date_str)
+                    prev_key = (
+                        card_id,
+                        (current_date - timedelta(days=1)).isoformat(),
+                    )
+                    week_ago_key = (
+                        card_id,
+                        (current_date - timedelta(days=7)).isoformat(),
+                    )
+                    prev_elo = elo_by_card_date.get(prev_key)
+                    week_ago_elo = elo_by_card_date.get(week_ago_key)
+                    delta_from_yesterday = (
+                        elo - prev_elo if prev_elo is not None else 0.0
+                    )
+                    trend_7d = (
+                        elo - week_ago_elo if week_ago_elo is not None else 0.0
+                    )
+                    exposure_pct = (
+                        exposure / total_exposure if total_exposure else 0.0
+                    )
+                    self.conn.execute(
+                        """
+                        INSERT INTO meta_features_daily (
+                            card_id, day_id, source, elo_bucket_10p, trend_7d,
+                            delta_from_yesterday, rank_in_meta, exposure_pct
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            card_id,
+                            day_id,
+                            source,
+                            decile,
+                            trend_7d,
+                            delta_from_yesterday,
+                            rank,
+                            exposure_pct,
+                        ),
+                    )
 
     def get_card_elo(
         self, card_id: int, source: str = "remote"

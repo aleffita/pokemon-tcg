@@ -75,9 +75,6 @@ def test_checkpoint_config_is_authoritative() -> None:
     assert cfg["has_learned_init"] is True
     assert inference_cfg["bc_would_ko"] is False
     assert inference_cfg["provenance"] == "legacy-checkpoint-default"
-    assert inference_cfg["prospective_planner"]["enabled"] is False
-    assert inference_cfg["prospective_planner"]["config"] is None
-    assert inference_cfg["prospective_planner"]["runtime"] is None
     print("  PASS: checkpoint arch_config is loaded independently of JSON")
 
 
@@ -144,11 +141,6 @@ def test_portable_fp16_checkpoint_round_trip_is_strict() -> None:
         assert "inference_config" in payload
         assert "training_config" in payload
         assert payload["inference_config"] == saved_cfg["inference_config"]
-        assert payload["prospective_planner"] is None
-        assert (
-            loaded_cfg["inference_config"]["prospective_planner"]["enabled"]
-            is False
-        )
         key = next(iter(payload["state_dict"]))
         payload["state_dict"][f"{key}.unexpected"] = payload["state_dict"][key]
         broken = os.path.join(out, "broken.pt")

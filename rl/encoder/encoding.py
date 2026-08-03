@@ -82,6 +82,7 @@ from .enc_constants import (        # noqa: F401,E402
     N_ENERGY_BINS, UNIT_ATTR, N_PREEVO, N_TOOLS, N_ENERGY_CARDS,
     DECK_SIZE, N_PRIZE, MAX_DISCARD, N_STADIUM, G,
     TOKEN_LAYOUT, OFF, N_STATE_TOKENS,
+    N_META_BUCKETS, N_AGENT_BUCKETS, N_DECK_BUCKETS, MAX_COMPETITION_DAYS,
 )
 from . import effect_data           # frozen attack/ability/trainer effect-category multi-hots (part of the encoding)
 
@@ -97,6 +98,18 @@ except Exception:                   # not compiled (e.g. local/dev) -> use the P
 # select indices, token positions (may be -1 == none), OptionType id, attackId (indexes attack_emb).
 _NON_CARD_INT_KEYS = frozenset({
     "select_type", "select_context", "opt_src_pos", "opt_tgt_pos", "opt_verb", "opt_attack_id",
+    # Meta bucket keys — bucket indices, not card ids
+    "opponent_agent_bucket", "opponent_deck_bucket",
+    "self_deck_meta_bucket", "opp_deck_meta_bucket",
+    "self_hand_meta_bucket", "opp_hand_meta_bucket",
+    "self_discard_meta_bucket", "opp_discard_meta_bucket",
+    "stadium_meta_bucket",
+    "self_prize_meta_bucket", "opp_prize_meta_bucket",
+    "effect_meta_bucket",
+    "self_unit_top_meta_bucket", "self_unit_preevo_meta_bucket",
+    "self_unit_tool_meta_bucket", "self_unit_energy_meta_bucket",
+    "opp_unit_top_meta_bucket", "opp_unit_preevo_meta_bucket",
+    "opp_unit_tool_meta_bucket", "opp_unit_energy_meta_bucket",
 })
 
 
@@ -923,6 +936,18 @@ class TokenEncoder:
             "opt_src_card", "opt_tgt_card",
             "opt_verb",                       # OptionType id (clamp-skipped; not a card id)
             "opt_attack_id",                  # attackId (clamp-skipped; indexes attack_emb, not card_emb)
+            # Meta features (bucket indices, not card ids -> clamp-skipped)
+            "opponent_agent_bucket", "opponent_deck_bucket",
+            "self_deck_meta_bucket", "opp_deck_meta_bucket",
+            "self_hand_meta_bucket", "opp_hand_meta_bucket",
+            "self_discard_meta_bucket", "opp_discard_meta_bucket",
+            "stadium_meta_bucket",
+            "self_prize_meta_bucket", "opp_prize_meta_bucket",
+            "effect_meta_bucket",
+            "self_unit_top_meta_bucket", "self_unit_preevo_meta_bucket",
+            "self_unit_tool_meta_bucket", "self_unit_energy_meta_bucket",
+            "opp_unit_top_meta_bucket", "opp_unit_preevo_meta_bucket",
+            "opp_unit_tool_meta_bucket", "opp_unit_energy_meta_bucket",
         }
 
     # ---- helpers ----------------------------------------------------------
@@ -1321,6 +1346,55 @@ class TokenEncoder:
 
         # ---- legal-action mask (reused contract) ----
         out["action_mask"] = build_mask(sel, picked)
+
+        # ---- Meta features (passive: neutral defaults when no DB / no id) ----
+        # Emitted regardless of whether the model consumes them today; buckets are
+        # deciles (0..9 for cards/agents, 0..10 for decks with 10 == unknown).
+        from rl.encoder.meta_lookup import get_meta_lookup
+        _meta = get_meta_lookup()
+
+        _current = obs.get("current") if isinstance(obs.get("current"), dict) else {}
+        _date_str = _current.get("date") or _current.get("archive_date")
+        if _date_str is None and tracker is not None:
+            _date_str = getattr(tracker, "day_date", None)
+        _day_id = _meta.resolve_day_id(_date_str) if _date_str else None
+        if _day_id is None:
+            _day_id = _meta.latest_day_id()
+
+        out["day_index_norm"] = np.array(
+            [_meta.day_index_norm(_day_id)], dtype=np.float32
+        )
+        out["opponent_agent_bucket"] = np.array(
+            [_meta.agent_bucket(_current.get("opponent_agent_id"), _day_id)],
+            dtype=np.int64,
+        )
+        _deck_bucket = _meta.deck_bucket(_current.get("opponent_deck_id"), _day_id)
+        # Map "unknown deck" (-1) → 10 so the model sees a non-negative bucket index.
+        if _deck_bucket < 0:
+            _deck_bucket = N_META_BUCKETS  # 10 = unknown slot
+        out["opponent_deck_bucket"] = np.array([_deck_bucket], dtype=np.int64)
+
+        for _stream in (
+            "self_deck", "opp_deck", "self_hand", "opp_hand",
+            "self_discard", "opp_discard", "stadium",
+            "self_prize", "opp_prize", "effect",
+        ):
+            _id_key = f"{_stream}_id"
+            if _id_key in out:
+                out[f"{_stream}_meta_bucket"] = _meta.card_bucket_array(
+                    out[_id_key], _day_id
+                ).astype(np.int64)
+        for _side in ("self", "opp"):
+            for _id_key in (
+                f"{_side}_unit_top_id",
+                f"{_side}_unit_preevo_id",
+                f"{_side}_unit_tool_id",
+                f"{_side}_unit_energy_id",
+            ):
+                if _id_key in out:
+                    out[_id_key.replace("_id", "_meta_bucket")] = (
+                        _meta.card_bucket_array(out[_id_key], _day_id).astype(np.int64)
+                    )
 
         # clamp every CARD id into [0, UNK]: a card absent from EN_Card_Data.csv
         # (id >= vocab_size) maps to the learnable UNK row instead of crashing the

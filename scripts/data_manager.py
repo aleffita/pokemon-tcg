@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import os
+import shutil
 import sys
 import time
 from datetime import datetime, timedelta
@@ -111,6 +112,84 @@ def list_datasets(api, prefix: str) -> list[str]:
     return dates
 
 
+def show_catalog(db_path: str, replay_zip_dir: str) -> None:
+    """Render the built-parquet dataset catalog from SQLite."""
+    from pathlib import Path as _P
+    if not _P(db_path).exists():
+        console.print(f"[yellow]No catalog DB at {db_path}. Run tcg-rebuild-db first.[/]")
+        return
+    from rl.results_db import ResultsDB
+    db = ResultsDB(db_path)
+    try:
+        rows = db.conn.execute(
+            """
+            SELECT d.id AS day_id, d.date, d.competition_day, d.n_matches,
+                   d.source_zip, d.source_sha256,
+                   ds.id AS dataset_id, ds.path, ds.rows AS parquet_rows,
+                   ds.schema_version, ds.aux_targets, ds.sha256 AS parquet_sha256,
+                   ds.created_at
+            FROM days d
+            LEFT JOIN datasets ds ON ds.day_id = d.id
+            ORDER BY d.date
+            """
+        ).fetchall()
+    finally:
+        db.close()
+
+    table = Table(title="Dataset Catalog (days ∙ parquets)")
+    table.add_column("D#", justify="right")
+    table.add_column("Date", style="cyan", no_wrap=True)
+    table.add_column("Matches", justify="right", style="magenta")
+    table.add_column("Zip", style="dim")
+    table.add_column("Parquet", style="green")
+    table.add_column("Rows", justify="right")
+    table.add_column("Aux", justify="center")
+    table.add_column("Schema", justify="center")
+
+    total_matches = 0
+    total_rows = 0
+    parquets_present = 0
+    parquets_registered = 0
+
+    for r in rows:
+        comp_day = f"D{r['competition_day']}" if r['competition_day'] else "?"
+        matches = int(r['n_matches'] or 0)
+        total_matches += matches
+        zip_status = "[green]✓[/]" if r['source_zip'] else "[dim]—[/]"
+
+        if r['dataset_id'] is None:
+            parquet_status = "[dim]—[/]"
+            rows_str = "—"
+            aux_str = "—"
+            schema_str = "—"
+        else:
+            parquets_registered += 1
+            parquet_path = r['path']
+            if _P(parquet_path).exists():
+                parquets_present += 1
+                size_mb = _P(parquet_path).stat().st_size / (1024 * 1024)
+                parquet_status = f"[green]✓[/] {size_mb:.0f}MB"
+            else:
+                parquet_status = f"[red]missing[/]"
+            rows_str = f"{int(r['parquet_rows'] or 0):,}"
+            total_rows += int(r['parquet_rows'] or 0)
+            aux_str = "[green]✓[/]" if r['aux_targets'] else "[dim]—[/]"
+            schema_str = f"v{r['schema_version']}"
+
+        table.add_row(comp_day, r['date'], f"{matches:,}", zip_status,
+                      parquet_status, rows_str, aux_str, schema_str)
+
+    console.print(table)
+    console.print()
+    console.print(
+        f"[bold]Summary:[/] {len(rows)} days · "
+        f"{total_matches:,} matches · "
+        f"{parquets_registered} parquets registered "
+        f"({parquets_present} present) · "
+        f"{total_rows:,} training rows"
+    )
+
+
 def show_dataset_table(dates: list[str], replay_zip_dir: str) -> None:
     """Render a table of available datasets with local status."""
     table = Table(title="Available Kaggle Replay Datasets")
@@ -148,6 +227,22 @@ def download_dataset(api, prefix: str, date_str: str, replay_zip_dir: str, force
 
     lp.parent.mkdir(parents=True, exist_ok=True)
 
+    # Download into a private per-date staging directory. Kaggle's
+    # dataset_download_file() does not reliably save under the requested
+    # local filename (it may keep the archive's own internal name, e.g.
+    # "archive.zip"), so callers have historically had to fall back to
+    # "whichever .zip is biggest in the target directory". Doing that scan
+    # against the shared replay_zip_dir is unsafe: once more than one dated
+    # zip already lives there, the fallback can pick a *pre-existing* file
+    # instead of the freshly downloaded one and rename it, silently
+    # discarding the real download and mislabeling old data under the new
+    # date. Scoping the scan to an empty, date-exclusive staging directory
+    # makes that ambiguity impossible.
+    staging_dir = lp.parent / f".download_{date_str}"
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir(parents=True)
+
     console.print(f"  [cyan]Downloading[/] {slug} ...")
 
     try:
@@ -174,7 +269,7 @@ def download_dataset(api, prefix: str, date_str: str, replay_zip_dir: str, force
                     api.dataset_download_file(
                         dataset=slug,
                         file_name=None,  # download the full dataset
-                        path=str(lp.parent),
+                        path=str(staging_dir),
                         force=True,
                         quiet=True,
                     )
@@ -184,15 +279,13 @@ def download_dataset(api, prefix: str, date_str: str, replay_zip_dir: str, force
             thread = threading.Thread(target=_do_download, daemon=True)
             thread.start()
 
-            # Poll file size until thread finishes
+            # Poll file size until thread finishes. The staging dir is
+            # exclusive to this download, so any *.zip* file inside it is
+            # unambiguously the one currently being fetched.
             last_size = 0
             while thread.is_alive():
-                if lp.is_file():
-                    current = lp.stat().st_size
-                else:
-                    # Check for partial .zip.download file
-                    partials = list(lp.parent.glob(f"{date_str}.zip*"))
-                    current = max((p.stat().st_size for p in partials), default=0)
+                partials = list(staging_dir.glob("*.zip*"))
+                current = max((p.stat().st_size for p in partials), default=0)
 
                 if current > last_size:
                     progress.update(task_id, completed=current, total=max(current, 1))
@@ -205,25 +298,29 @@ def download_dataset(api, prefix: str, date_str: str, replay_zip_dir: str, force
                 console.print(
                     f"  [bold red]Failed:[/] {download_error[0]}"
                 )
+                shutil.rmtree(staging_dir, ignore_errors=True)
                 return False
 
-            # Final size check
-            if lp.is_file():
-                final_size = lp.stat().st_size
-                progress.update(task_id, completed=final_size, total=final_size)
-            else:
-                # Some Kaggle versions extract automatically; check for a
-                # subfolder or any zip that appeared
-                candidates = list(lp.parent.glob("*.zip"))
-                if candidates:
-                    biggest = max(candidates, key=lambda p: p.stat().st_size)
-                    if biggest != lp:
-                        biggest.rename(lp)
-                    final_size = lp.stat().st_size
-                    progress.update(task_id, completed=final_size, total=final_size)
-                else:
-                    console.print(f"  [bold red]Error:[/] No zip file found after download")
-                    return False
+            # The staging dir only ever contains files from this download,
+            # so picking the single .zip in it is safe (no cross-date
+            # collision is possible).
+            candidates = list(staging_dir.glob("*.zip"))
+            if not candidates:
+                console.print(f"  [bold red]Error:[/] No zip file found after download")
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                return False
+            if len(candidates) > 1:
+                console.print(
+                    f"  [bold red]Error:[/] {len(candidates)} zip files found for "
+                    f"{date_str}, expected exactly 1: {[c.name for c in candidates]}"
+                )
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                return False
+            downloaded = candidates[0]
+            downloaded.replace(lp)
+            final_size = lp.stat().st_size
+            progress.update(task_id, completed=final_size, total=final_size)
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
         # Post-download verification
         if final_size < MIN_SIZE_BYTES:
@@ -238,6 +335,7 @@ def download_dataset(api, prefix: str, date_str: str, replay_zip_dir: str, force
 
     except Exception as exc:
         console.print(f"  [bold red]Download error:[/] {exc}")
+        shutil.rmtree(staging_dir, ignore_errors=True)
         return False
 
 
@@ -264,8 +362,22 @@ def main():
     group.add_argument("--range", nargs=2, metavar=("START", "END"), help="Download a date range (inclusive)")
     group.add_argument("--all", action="store_true", dest="all_", help="Download all available days")
     group.add_argument("--list", action="store_true", help="List available datasets (no download)")
+    group.add_argument(
+        "--catalog",
+        action="store_true",
+        help=(
+            "Show the built-parquet dataset catalog from SQLite "
+            "(days table + registered parquets + row/aux stats)"
+        ),
+    )
     parser.add_argument("--force", action="store_true", help="Re-download even if file exists")
     parser.add_argument("--config", metavar="PATH", default=None, help="Path to config.json")
+    parser.add_argument(
+        "--db",
+        metavar="PATH",
+        default="model/results.db",
+        help="Path to results.db (used by --catalog)",
+    )
     args = parser.parse_args()
 
     # Load project config
@@ -292,6 +404,10 @@ def main():
     # Determine which dates to operate on
     if args.list:
         show_dataset_table(dates, replay_zip_dir)
+        sys.exit(0)
+
+    if args.catalog:
+        show_catalog(args.db, replay_zip_dir)
         sys.exit(0)
 
     if args.date:

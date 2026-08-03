@@ -82,3 +82,11 @@ for _name, _sz in TOKEN_LAYOUT:
     OFF[_name] = _pos
     _pos += _sz
 N_STATE_TOKENS = _pos          # number of non-option tokens (option positions index into these)
+
+# ---- meta-game features (passive; see rl/encoder/meta_lookup.py) -----------
+# Neutral/default until a meta-loop pipeline populates model/results.db + threads
+# day/opponent identity through obs -- see CLAUDE.md "meta features" handoff.
+N_META_BUCKETS = 10             # elo deciles 0..9 (0 == top decile / strongest)
+N_AGENT_BUCKETS = N_META_BUCKETS
+N_DECK_BUCKETS = N_META_BUCKETS + 1   # +1 for "unknown deck" (MetaLookup's -1 -> N_DECK_BUCKETS-1 == 10)
+MAX_COMPETITION_DAYS = 60       # ~30-day knowledge track, generous headroom

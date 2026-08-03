@@ -19,6 +19,9 @@ dependencies = [
     # interpreter. Newer numpy/pandas require 3.12+.
     "numpy>=2.4",
     "pandas>=2.2",
+    # Columnar storage for the BC dataset writer (scripts/bc/build_bc_from_zips.py):
+    # one zstd-compressed Parquet file per day instead of dozens of .npy shards.
+    "pyarrow>=17.0.0",
     "pymupdf>=1.28.0",
     "pyrefly>=0.60.0",
     "rich>=15.0.0",
@@ -30,7 +33,6 @@ dependencies = [
 tcg-train       = "scripts.bc.bc_train_mlx:main"
 tcg-build-bc    = "scripts.bc.build_bc_from_zips:main"
 tcg-build-daily = "scripts.bc.build_bc_dataset:main"
-tcg-build-prospective = "scripts.bc.build_prospective_groups:main"
 tcg-evaluate    = "scripts.evaluate:main"
 tcg-tournament  = "scripts.tournament:main"
 # Build the submission bundle; add --upload to send it to Kaggle.

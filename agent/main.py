@@ -4,6 +4,15 @@ PyTorch-only inference with autoregressive multi-select.
 Loads a strict FP16 PyTorch mirror of the MLX training checkpoint.
 Keeps per-side GameTracker + AbilityTracker for stateful encoding.
 
+Inference mode is selected via PTCG_INFERENCE_MODE env var:
+  baseline  — autoregressive multi-select (default)
+  b1        — Linha 2 B1: K latent TRM-style refinements before deciding
+  b2        — Linha 2 B2: K deterministic latent perturbations, mean logits
+
+Extra env vars:
+  PTCG_LATENT_K        — iterations / perturbations for b1/b2 (default 3)
+  PTCG_PERTURB_EPS     — perturbation magnitude for b2 (default 0.05)
+
 Usage:
   Used by evaluate.py, run_battle.py, and the Kaggle submission harness.
   The engine calls agent(obs) once per decision point.
@@ -35,11 +44,7 @@ def _find_dir(filename: str = "deck.csv") -> str:
     return os.getcwd()
 
 
-# On Kaggle, agent dir = /kaggle_simulations/agent (deck.csv + rl/ all flat).
-# Locally, agent dir = .../agent/ and project root is its parent.
 _AGENT_DIR = _find_dir("deck.csv")
-# If we found deck.csv in a dir that ALSO has rl/, we're on Kaggle (flat layout).
-# Otherwise, the project root is the parent (local dev layout).
 if os.path.isdir(os.path.join(_AGENT_DIR, "rl")):
     _PROJECT_ROOT = _AGENT_DIR
 else:
@@ -56,9 +61,16 @@ from rl.encoder.encoding import TokenEncoder, GameTracker, AbilityTracker, SUBMI
 
 _DECK_PATH = os.path.join(_AGENT_DIR, "deck.csv")
 
+# ---- inference mode ----
+_INFERENCE_MODE = os.environ.get("PTCG_INFERENCE_MODE", "baseline").strip().lower()
+_VALID_MODES = {"baseline", "b1", "b2"}
+if _INFERENCE_MODE not in _VALID_MODES:
+    print(f"[bc-agent] WARNING: unknown PTCG_INFERENCE_MODE={_INFERENCE_MODE!r}; falling back to baseline")
+    _INFERENCE_MODE = "baseline"
+_LATENT_K = int(os.environ.get("PTCG_LATENT_K", "3"))
+_PERTURB_EPS = float(os.environ.get("PTCG_PERTURB_EPS", "0.05"))
+
 # ---- model checkpoint search ----
-# Prefer the pre-converted FP16 artifact in submissions. Local development can
-# still load the MLX trainer checkpoint through the strict converter.
 _MODEL_PATH = None
 for candidate in [
     os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_torch_fp16.pt"),
@@ -72,47 +84,29 @@ for candidate in [
         _MODEL_PATH = candidate
         break
 
-# ---- load once at import ----
 if _MODEL_PATH is None:
     print("[bc-agent] WARNING: no checkpoint found, using random policy")
 _CARD_TABLE = get_card_table()
 _ENCODER = TokenEncoder(_CARD_TABLE)
 
 def _load_model():
-    """Load a strict FP16 PyTorch inference model.
-
-    Loading is strict: a shape/parameter mismatch raises rather than falling
-    back to a partial model, so a broken checkpoint is loud, not silent.
-    """
     if _MODEL_PATH is None:
         return None, {}, {
-            "version": 1,
-            "seed": 0,
-            "bc_would_ko": False,
-            "bc_wk_nvar": 10,
+            "version": 1, "seed": 0, "bc_would_ko": False, "bc_wk_nvar": 10,
             "provenance": "no-checkpoint",
-            "prospective_planner": {
-                "enabled": False,
-                "config": None,
-                "runtime": None,
-                "trained_optimizer_steps": 0,
-                "provenance": "no-checkpoint",
-            },
         }
     net, metadata = load_inference_checkpoint(_MODEL_PATH, _CARD_TABLE)
     runtime_cfg = metadata["inference_config"]
-    prospective_cfg = runtime_cfg["prospective_planner"]
     print(f"[bc-agent] loaded PyTorch FP16 model {_MODEL_PATH} "
           f"(nlayers={metadata['nlayers']}, "
           f"scratch={metadata['scratch_registers']}, "
           f"would_ko={runtime_cfg['bc_would_ko']}, "
-          f"prospective={prospective_cfg['enabled']})")
+          f"mode={_INFERENCE_MODE})")
     return net, metadata, runtime_cfg
 
 
 _LOADED_MODEL, _MODEL_METADATA, _RUNTIME_DATA = _load_model()
 _RUNTIME_CFG = SimpleNamespace(**_RUNTIME_DATA)
-_PROSPECTIVE_MODEL = _MODEL_METADATA.get("prospective_planner_model")
 
 # ---- deck ----
 def load_deck(path: str = _DECK_PATH) -> list[int]:
@@ -123,18 +117,12 @@ DECK: list[int] = load_deck()
 
 
 def reload_deck(path: str = _DECK_PATH) -> list[int]:
-    """Re-read deck.csv into DECK and return it.
-
-    On Kaggle the deck never changes, so DECK is read once at import. Local
-    tooling that swaps deck.csv between runs (the tournament deck sweep) must
-    call this, or every swept deck plays the composition present at import.
-    """
     global DECK
     DECK = load_deck(path)
     return DECK
 
-# ---- per-side state (reset when deck is submitted) ----
-_TRACKERS: dict[int, dict] = {}  # side -> {"tracker": GameTracker, "ability": AbilityTracker, "deck": list}
+# ---- per-side state ----
+_TRACKERS: dict[int, dict] = {}
 
 
 def _get_tracker(side: int):
@@ -143,17 +131,17 @@ def _get_tracker(side: int):
             "tracker": GameTracker(),
             "ability": AbilityTracker(),
             "deck": None,
-            "memory": None,  # F.1: persistent scratch register state
+            "memory": None,
             "would_ko_rng": None,
             "decision_index": 0,
-            "stale": True,   # needs a reset before its first decision
+            "stale": True,
         }
     st = _TRACKERS[side]
     if st["stale"]:
         st["tracker"].reset()
         st["ability"].reset()
         st["deck"] = list(DECK)
-        st["memory"] = None  # F.1: clean memory at match start
+        st["memory"] = None
         st["would_ko_rng"] = random.Random(int(_RUNTIME_CFG.seed) + int(side))
         st["decision_index"] = 0
         st["stale"] = False
@@ -161,7 +149,6 @@ def _get_tracker(side: int):
 
 
 def _build_tensors(encoded: dict, int_keys: set) -> dict:
-    """Convert encoded arrays to PyTorch tensors with FP16 numeric features."""
     ob = {}
     for k, v in encoded.items():
         arr = np.asarray(v)
@@ -173,35 +160,88 @@ def _build_tensors(encoded: dict, int_keys: set) -> dict:
 
 
 def _logits_to_numpy(logits) -> np.ndarray:
-    """Flatten PyTorch logits to a float32 NumPy vector."""
     return logits.detach().to(torch.float32).numpy().flatten()
 
 
-def _autoregressive_select(
-    model,
+# ---------- forward variants per mode ----------
+
+def _forward_baseline(ob, memory_in):
+    """Standard single forward pass."""
+    with torch.inference_mode():
+        logits, _, memory_out = _LOADED_MODEL.logits_value(ob, memory_in=memory_in)
+    return logits, memory_out
+
+
+def _forward_b1(ob, memory_in):
+    """B1: K TRM-style latent refinements. Same obs, evolve memory K-1 times, then read policy."""
+    memory = memory_in
+    with torch.inference_mode():
+        for _ in range(max(0, _LATENT_K - 1)):
+            _, _, memory = _LOADED_MODEL.logits_value(ob, memory_in=memory)
+        logits, _, memory_out = _LOADED_MODEL.logits_value(ob, memory_in=memory)
+    return logits, memory_out
+
+
+def _forward_b2(ob, memory_in):
+    """B2: K deterministic perturbations of memory, mean of logits, middle perturbation memory committed."""
+    if memory_in is None:
+        base = _LOADED_MODEL.learned_init.detach().unsqueeze(0).to(torch.float16)
+    else:
+        base = memory_in.detach().to(torch.float16)
+    shape = tuple(base.shape)
+    logits_stack = []
+    mem_stack = []
+    with torch.inference_mode():
+        for k in range(_LATENT_K):
+            rng = np.random.default_rng(seed=1000 + k)
+            noise_np = (rng.standard_normal(shape) * _PERTURB_EPS).astype(np.float16)
+            noise = torch.from_numpy(noise_np)
+            perturbed = base + noise
+            logits_k, _, mem_k = _LOADED_MODEL.logits_value(ob, memory_in=perturbed)
+            logits_stack.append(logits_k.to(torch.float32))
+            mem_stack.append(mem_k)
+    mean_logits = torch.stack(logits_stack, dim=0).mean(dim=0).to(torch.float16)
+    committed_memory = mem_stack[_LATENT_K // 2]
+    return mean_logits, committed_memory
+
+
+# ---------- autoregressive select with pluggable forward ----------
+
+def _select_action_from_logits(logits_np, picked_set, action_mask, n, min_count, results):
+    """Shared post-processing: mask picked, choose action, handle SUBMIT/illegal."""
+    logits_np = logits_np.copy()
+    logits_np[action_mask < 0.5] = -1e9
+    for p in picked_set:
+        if p < len(logits_np):
+            logits_np[p] = -1e9
+    action = int(np.argmax(logits_np))
+    if action == SUBMIT_ACTION and len(results) >= min_count:
+        return SUBMIT_ACTION, logits_np
+    if action == SUBMIT_ACTION or logits_np[action] <= -1e9:
+        fallback = [i for i in range(n) if i not in picked_set]
+        if not fallback:
+            return None, logits_np
+        legal = [i for i in fallback if i < len(action_mask) and action_mask[i] >= 0.5]
+        pool = legal or fallback
+        action = max(pool, key=lambda i: logits_np[i] if i < len(logits_np) else -1e9)
+    return action, logits_np
+
+
+def _autoregressive_select_mode(
     encode_step,
-    int_keys: set,
-    options: list,
-    min_count: int,
-    max_count: int,
-    memory_in=None,
-) -> tuple[list[int], Any]:
-    """Autoregressive multi-select: pick options one at a time, masking already-picked.
-
-    For each substep:
-      1. Encode with current picked set
-      2. Forward pass through model
-      3. Mask illegal + already-picked options
-      4. Select best (argmax)
-      5. If SUBMIT and enough picks -> break
-      6. Add to picked set
-
-    Returns (list of selected option indices, memory_out).
-    """
+    int_keys,
+    options,
+    min_count,
+    max_count,
+    memory_in,
+    obs_for_encode,
+    deck,
+    match_time,
+):
+    """Autoregressive multi-select with mode-aware forward and optional sidecar mixing."""
     n = len(options)
     if n == 0:
         return [], memory_in
-
     if _LOADED_MODEL is None:
         count = max(min_count, min(max_count, n))
         return list(range(count)), memory_in
@@ -211,52 +251,32 @@ def _autoregressive_select(
     memory_out = memory_in
 
     for _substep in range(max_count):
-        # Re-encode the same decision with the actual buffered picks. This
-        # updates action_mask, OPT_PICKED and SUBMIT exactly like BC rows.
         encoded = encode_step(set(picked_set))
         ob = _build_tensors(encoded, int_keys)
-
-        # Every substep belongs to one engine decision. They all read the same
-        # incoming recurrent state; only the final substep's state is committed
-        # to the next decision.
-        with torch.inference_mode():
-            logits, _, memory_out = model.logits_value(ob, memory_in=memory_in)
-        logits_np = _logits_to_numpy(logits)
-
-        # Mask illegal options
         action_mask = np.asarray(encoded["action_mask"]).flatten()
-        logits_np[action_mask < 0.5] = -1e9
 
-        # Mask already-picked options
-        for p in picked_set:
-            if p < len(logits_np):
-                logits_np[p] = -1e9
+        if _INFERENCE_MODE == "b1":
+            logits, memory_out = _forward_b1(ob, memory_in)
+            logits_np = _logits_to_numpy(logits)
+        elif _INFERENCE_MODE == "b2":
+            logits, memory_out = _forward_b2(ob, memory_in)
+            logits_np = _logits_to_numpy(logits)
+        else:  # baseline
+            logits, memory_out = _forward_baseline(ob, memory_in)
+            logits_np = _logits_to_numpy(logits)
 
-        # Select best legal option
-        action = int(np.argmax(logits_np))
-
-        # SUBMIT is only accepted when min_count is satisfied
-        if action == SUBMIT_ACTION and len(results) >= min_count:
+        action, _ = _select_action_from_logits(
+            logits_np, picked_set, action_mask, n, min_count, results,
+        )
+        if action == SUBMIT_ACTION:
             break
-
-        # SUBMIT chosen too early, or everything masked: take the best real
-        # option instead of stopping. Breaking here returns fewer than
-        # min_count picks, which the engine rejects as an INVALID action.
-        if action == SUBMIT_ACTION or logits_np[action] <= -1e9:
-            fallback = [i for i in range(n) if i not in picked_set]
-            if not fallback:
-                break
-            legal = [i for i in fallback if i < len(action_mask) and action_mask[i] >= 0.5]
-            pool = legal or fallback
-            action = max(pool, key=lambda i: logits_np[i] if i < len(logits_np) else -1e9)
-
+        if action is None:
+            break
         picked_set.add(action)
         results.append(action)
-
         if len(results) >= max_count:
             break
 
-    # Never hand back fewer picks than the engine demands.
     if len(results) < min_count:
         for i in range(n):
             if len(results) >= min_count:
@@ -269,34 +289,22 @@ def _autoregressive_select(
 
 
 def choose(select: dict[str, Any], current: dict | None, logs: list | None = None) -> list[int]:
-    """Pick option indices using the BC model with autoregressive multi-select.
-
-    Args:
-        select: the select dict from the engine (options, minCount, maxCount)
-        current: the current game state
-        logs: complete observation logs from the engine (E.2: never discard)
-    """
     options = select.get("option") or []
     n = len(options)
     if n == 0:
         return []
-
     min_count = select.get("minCount", 0)
     max_count = select.get("maxCount", 1)
-
-    # If no model loaded, fallback to baseline (first N legal options)
     if _LOADED_MODEL is None:
         count = max(min_count, min(max_count, n))
         return list(range(count))
 
-    # Get side and trackers
     side = current.get("yourIndex", 0) if current else 0
     st = _get_tracker(side)
     tracker = st["tracker"]
     ability = st["ability"]
     deck = st["deck"]
 
-    # E.2: Pass complete logs (never discard observation information)
     obs_for_encode = {"select": select, "current": current, "logs": logs or []}
     try:
         tracker.update(obs_for_encode)
@@ -304,118 +312,44 @@ def choose(select: dict[str, Any], current: dict | None, logs: list | None = Non
     except Exception:
         pass
 
-    # The same prospective feature used by dataset construction is computed
-    # once per real decision, before all autoregressive substeps.
     if _RUNTIME_CFG.bc_would_ko:
         try:
             from rl.search_agent import annotate_would_ko
             annotate_would_ko(
-                obs_for_encode,
-                deck,
-                _ENCODER,
+                obs_for_encode, deck, _ENCODER,
                 n_var=int(_RUNTIME_CFG.bc_wk_nvar),
                 rng=st["would_ko_rng"],
             )
         except Exception:
-            # Inference remains legal if the engine cannot simulate an
-            # incomplete observation; the encoder then emits the neutral trio.
             pass
 
     def encode_step(picked: set[int]) -> dict:
         return _ENCODER.encode(
-            obs_for_encode,
-            picked=picked,
-            self_deck=deck,
-            tracker=tracker,
-            ability_slots=ability.slots,
+            obs_for_encode, picked=picked, self_deck=deck,
+            tracker=tracker, ability_slots=ability.slots,
         )
 
     int_keys = _ENCODER.int_keys
-
-    # F.1: Pass memory and store memory_out
     memory_in = st["memory"]
     match_time = int(st["decision_index"])
     st["decision_index"] = match_time + 1
 
-    # A trained, checkpoint-enabled prospective planner may select one complete
-    # legal action (including multi-select combinations). Search failure is a
-    # local fallback condition: the existing Transformer/TBPTT path below is
-    # unchanged. The trunk advances exactly once when the planner succeeds.
-    prospective_cfg = _RUNTIME_DATA["prospective_planner"]
-    if prospective_cfg["enabled"] and _PROSPECTIVE_MODEL is not None:
-        try:
-            from rl.prospective_runtime import (
-                ProspectiveRuntimeConfig,
-                build_runtime_prospective_tree,
-                rerank_with_prospective_planner,
-            )
-            from rl.prospective_schema import ProspectivePlannerConfig
-
-            encoded_context = encode_step(set())
-            context_observation = _build_tensors(encoded_context, int_keys)
-            with torch.inference_mode():
-                cls_out, _, pooled, _, planner_memory_out = (
-                    _LOADED_MODEL._encode(
-                        context_observation,
-                        memory_in=memory_in,
-                    )
-                )
-                trunk_context = torch.cat(
-                    (
-                        cls_out[:, None, :],
-                        pooled[:, None, :],
-                        planner_memory_out,
-                    ),
-                    dim=1,
-                )[0].detach().cpu().numpy()
-            tree = build_runtime_prospective_tree(
-                obs_for_encode,
-                list(deck),
-                _ENCODER,
-                trunk_context,
-                planner_config=ProspectivePlannerConfig(
-                    **prospective_cfg["config"]
-                ),
-                runtime_config=ProspectiveRuntimeConfig.from_dict(
-                    prospective_cfg["runtime"]
-                ),
-                match_time=match_time,
-            )
-            reranked = (
-                rerank_with_prospective_planner(_PROSPECTIVE_MODEL, tree)
-                if tree is not None
-                else None
-            )
-            if reranked is not None:
-                results = list(reranked.action)
-                if not (
-                    min_count <= len(results) <= max_count
-                    and len(set(results)) == len(results)
-                    and all(0 <= index < n for index in results)
-                ):
-                    raise ValueError("prospective planner returned an illegal action")
-                # The exact memory produced while constructing the trained
-                # [CLS, pooled, scratch] planner context is committed once.
-                st["memory"] = planner_memory_out
-                ability.record(select, results)
-                return results
-        except Exception:
-            # Planner search is strictly additive. Any unavailable engine
-            # state, rejected determinization, or malformed result retains the
-            # checkpoint-compatible Transformer behavior.
-            pass
-
     try:
-        results, memory_out = _autoregressive_select(
-            _LOADED_MODEL, encode_step, int_keys, options, min_count, max_count,
+        results, memory_out = _autoregressive_select_mode(
+            encode_step=encode_step,
+            int_keys=int_keys,
+            options=options,
+            min_count=min_count,
+            max_count=max_count,
             memory_in=memory_in,
+            obs_for_encode=obs_for_encode,
+            deck=deck,
+            match_time=match_time,
         )
-        st["memory"] = memory_out  # F.1: persist memory for next decision
+        st["memory"] = memory_out
     except Exception:
         results = []
 
-    # Last line of defence before the engine: an action short of min_count is
-    # INVALID and forfeits the game, so fall back to the first legal indices.
     if len(results) < min_count:
         results = list(range(max(min_count, min(max_count, n))))
 
@@ -426,37 +360,20 @@ def choose(select: dict[str, Any], current: dict | None, logs: list | None = Non
 def _agent_impl(obs: dict[str, Any]) -> list[int]:
     select = obs.get("select")
     current = obs.get("current")
-
-    # Deck submission (new match). The observation carries no side here, so
-    # only mark state stale: _get_tracker resets each side lazily, on its first
-    # decision. Eagerly clearing both sides is wrong whenever one process
-    # serves both players (local self-play), because the second player's deck
-    # submission would wipe the first player's live memory mid-match.
     if select is None:
         for st in _TRACKERS.values():
             st["stale"] = True
         return list(DECK)
-
-    # E.2: Pass complete logs from observation to choose()
     logs = obs.get("logs", [])
     return choose(select, current, logs=logs)
 
 
-# Must stay the last callable defined in this module: the Kaggle harness picks
-# whichever callable is defined last (kaggle_environments/agent.py).
 def agent(obs: dict[str, Any]) -> list[int]:
-    """Engine entry point. Returns deck or chosen option indices.
-
-    Wraps the implementation so no exception can escape: the harness turns a
-    raised exception into an INVALID action, which forfeits the game outright.
-    The traceback goes to stdout, where the episode's agent logs capture it.
-    """
     try:
         return _agent_impl(obs)
     except Exception:
         import traceback
         traceback.print_exc()
-
         select = obs.get("select") if hasattr(obs, "get") else getattr(obs, "select", None)
         if select is None:
             return list(DECK)

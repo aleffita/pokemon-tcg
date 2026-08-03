@@ -77,13 +77,25 @@ class TrainConfig:
     adamw_betas: list[float] = field(default_factory=lambda: [0.9, 0.999])
     adamw_eps: float = 1e-8
     adamw_weight_decay: float = 0.01
+    # Higher weight decay applied only to structured verb heads (type_query,
+    # type_bias). Rare verbs receive strong pull-to-zero so their per-verb
+    # scoring collapses toward the shared opt_head fallback when data is scarce.
+    structured_weight_decay: float = 0.1
 
     # Data
     data_dir: str = "data/bc_data"
     replay_zip_dir: str = "data/bc_replay_zip"
+    # Deprecated: the Parquet streaming loader (bc_train_mlx.py) has no notion
+    # of a fixed-size in-memory slab anymore -- each pyarrow batch is its own
+    # I/O unit. Kept only so old config JSON files with this key still load.
     slab_rows: int = 32768
     val_frac: float = 0.1
     val_batch_size: int = 128
+    # Training days resolved from the SQLite results catalog (model/results.db,
+    # table `datasets`), one Parquet file per day. Empty + --all-days at the CLI
+    # means "every day registered in the catalog". See --days/--last-n-days/
+    # --all-days in scripts/bc/bc_train_mlx.py.
+    training_days: list[str] = field(default_factory=list)
 
     # Output
     checkpoint_dir: str = "model/checkpoint"
@@ -116,36 +128,13 @@ class TrainConfig:
     # F.3: TBPTT (0 = disabled, 8/16/32 for sequential training)
     tbptt_chunk: int = 0
 
-    # Lateral prospective planner. The builder materializes a real rollout
-    # sidecar; the trainer consumes it only when explicitly enabled.
-    prospective_enabled: bool = False
-    prospective_sidecar_name: str = "prospective_v2"
-    prospective_max_groups: int = 0
-    prospective_max_branches: int = 64
-    prospective_trials: int = 1
-    prospective_horizon: int = 2
-    prospective_gamma: float = 1.0
-    prospective_workers: int = 6
-
-    # Prospective planner architecture/training. d_model is shared with the
-    # trunk so detached causal context can be passed without another bridge.
-    prospective_batch_size: int = 128
-    prospective_nhead: int = 4
-    prospective_nlayers: int = 2
-    prospective_ff_dim: int = 512
-    prospective_rope_base: float = 10000.0
-    prospective_uncertainty_floor: float = 1e-6
-    prospective_lr: float = 2.457e-4
-    prospective_scheduler_total_steps: int = 0
-    prospective_clip_ratio: float = 0.2
-    prospective_kl_coefficient: float = 0.0
-    prospective_policy_weight: float = 1.0
-    prospective_return_weight: float = 1.0
-    prospective_value_weight: float = 1.0
-    prospective_ko_weight: float = 1.0
-    prospective_prize_weight: float = 1.0
-    prospective_terminal_weight: float = 1.0
-    prospective_uncertainty_weight: float = 1.0
+    # Auxiliary head loss weights (0.0 = disabled). Aux targets come from the
+    # parquet dataset (aux_ko, aux_prize_delta, aux_terminal, aux_return, aux_valid).
+    # Weighted MSE (return, prize) + BCE (ko, terminal) added to the CE loss.
+    aux_ko_weight: float = 0.5
+    aux_prize_weight: float = 0.5
+    aux_terminal_weight: float = 0.5
+    aux_return_weight: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

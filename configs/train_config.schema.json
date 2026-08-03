@@ -258,147 +258,28 @@
       "minimum": 0,
       "maximum": 256
     },
-    "prospective_enabled": {
-      "type": "boolean",
-      "default": false,
-      "description": "Enable the isolated prospective planner phase. Requires a real, versioned rollout sidecar; legacy checkpoints without planner state remain disabled."
-    },
-    "prospective_sidecar_name": {
-      "type": "string",
-      "default": "prospective_v2",
-      "pattern": "^[A-Za-z0-9._-]+$",
-      "description": "Dataset-relative directory containing prospective_nodes.npy and prospective_manifest.json."
-    },
-    "prospective_max_groups": {
-      "type": "integer",
-      "default": 0,
-      "minimum": 0,
-      "description": "Maximum real rollout groups emitted by the builder. 0 means all available groups."
-    },
-    "prospective_max_branches": {
-      "type": "integer",
-      "default": 4,
-      "minimum": 1,
-      "maximum": 192,
-      "description": "Maximum legal root branches explored per prospective group. All actions are retained within budget; larger spaces use deterministic full-domain coverage shared by builder and runtime."
-    },
-    "prospective_trials": {
-      "type": "integer",
-      "default": 1,
-      "minimum": 1,
-      "maximum": 100,
-      "description": "Real simulator trials per prospective group."
-    },
-    "prospective_horizon": {
-      "type": "integer",
-      "default": 2,
-      "minimum": 1,
-      "maximum": 64,
-      "description": "Maximum simulated action depth for the prospective tree."
-    },
-    "prospective_gamma": {
+    "aux_ko_weight": {
       "type": "number",
-      "default": 1.0,
-      "minimum": 0.0,
-      "maximum": 1.0,
-      "description": "Discount used by the sidecar to compute scalar_return."
-    },
-    "prospective_workers": {
-      "type": "integer",
-      "default": 6,
-      "minimum": 1,
-      "description": "Independent CPU processes used to materialize prospective rollout groups. This changes throughput only, never rollout ordering or semantics."
-    },
-    "prospective_batch_size": {
-      "type": "integer",
-      "default": 128,
-      "minimum": 1,
-      "description": "Real rollout trees per physical prospective optimizer step. Smoke validation uses 128, but full runs may configure larger batches."
-    },
-    "prospective_nhead": {
-      "type": "integer",
-      "default": 4,
-      "minimum": 1,
-      "maximum": 16
-    },
-    "prospective_nlayers": {
-      "type": "integer",
-      "default": 2,
-      "minimum": 1,
-      "maximum": 12
-    },
-    "prospective_ff_dim": {
-      "type": "integer",
-      "default": 512,
-      "minimum": 64,
-      "maximum": 4096
-    },
-    "prospective_rope_base": {
-      "type": "number",
-      "default": 10000.0,
-      "exclusiveMinimum": 1.0
-    },
-    "prospective_uncertainty_floor": {
-      "type": "number",
-      "default": 1e-6,
-      "exclusiveMinimum": 0.0
-    },
-    "prospective_lr": {
-      "type": "number",
-      "default": 0.0002457,
-      "exclusiveMinimum": 0.0,
-      "maximum": 1.0
-    },
-    "prospective_scheduler_total_steps": {
-      "type": "integer",
-      "default": 0,
-      "minimum": 0,
-      "description": "Explicit prospective scheduler horizon. 0 uses this invocation's real prospective optimizer-step count."
-    },
-    "prospective_clip_ratio": {
-      "type": "number",
-      "default": 0.2,
-      "minimum": 0.0,
-      "maximum": 1.0
-    },
-    "prospective_kl_coefficient": {
-      "type": "number",
-      "default": 0.0,
+      "default": 0.5,
+      "description": "Weight of the ko_head_aux BCE loss added to the CE loss. 0 = disabled. Target: parquet column aux_ko, masked by aux_valid.",
       "minimum": 0.0
     },
-    "prospective_policy_weight": {
+    "aux_prize_weight": {
       "type": "number",
-      "default": 1.0,
+      "default": 0.5,
+      "description": "Weight of the prize_head_aux MSE loss added to the CE loss. 0 = disabled. Target: parquet column aux_prize_delta, masked by aux_valid.",
       "minimum": 0.0
     },
-    "prospective_return_weight": {
+    "aux_terminal_weight": {
       "type": "number",
-      "default": 1.0,
+      "default": 0.5,
+      "description": "Weight of the terminal_head_aux BCE loss added to the CE loss. 0 = disabled. Target: parquet column aux_terminal, masked by aux_valid.",
       "minimum": 0.0
     },
-    "prospective_value_weight": {
+    "aux_return_weight": {
       "type": "number",
       "default": 1.0,
-      "minimum": 0.0
-    },
-    "prospective_ko_weight": {
-      "type": "number",
-      "default": 1.0,
-      "minimum": 0.0
-    },
-    "prospective_prize_weight": {
-      "type": "number",
-      "default": 1.0,
-      "minimum": 0.0
-    },
-    "prospective_terminal_weight": {
-      "type": "number",
-      "default": 1.0,
-      "minimum": 0.0
-    },
-    "prospective_uncertainty_weight": {
-      "type": "number",
-      "default": 1.0,
+      "description": "Weight of the return_head_aux MSE loss added to the CE loss. 0 = disabled. Target: parquet column aux_return, masked by aux_valid.",
       "minimum": 0.0
     },
     "data_dir": {

@@ -17,123 +17,54 @@ import torch
 from rl.encoder import effect_data
 from rl.encoder.card_features import CardTable
 from rl.encoder.encoding import MAX_OPTIONS, OPT_PICKED
+from rl.encoder.enc_constants import N_META_BUCKETS, N_AGENT_BUCKETS, N_DECK_BUCKETS
 from rl.policy import TokenTransformer, build_token_net
-from rl.prospective_input_adapter import PROSPECTIVE_INPUT_ADAPTER_VERSION
-from rl.prospective_input_adapter import (
-    ACTION_ATTR_AGGREGATE_VERSION,
-    ACTION_SET_FEATURE_VERSION,
-    BRANCH_FEATURE_LAYOUT_VERSION,
-)
-from rl.prospective_planner_torch import (
-    ProspectivePlannerTorch,
-    convert_mlx_prospective_payload,
-    extract_mlx_prospective_payload,
-    load_prospective_torch_payload,
-    prospective_torch_checkpoint_payload,
-)
-from rl.prospective_schema import (
-    PROSPECTIVE_COORD_SCHEMA_VERSION,
-    PROSPECTIVE_PLANNER_VERSION,
-    ProspectivePlannerConfig,
-)
-from rl.token_schema import ARCH_VERSION, TOKEN_SCHEMA_VERSION
+from rl.token_schema import ARCH_VERSION, TOKEN_SCHEMA_VERSION, T_META_CTX, N_TTYPES
 
 TORCH_INFERENCE_FORMAT = "ptcg-torch-fp16-v1"
 
+# Auxiliary scalar heads (ko/prize/terminal/return) are training-only additions
+# on top of the frozen inference contract. A checkpoint saved before they
+# existed is still a valid inference artifact — the arena path never calls
+# aux_predictions() — so their absence is tolerated (with a loud warning),
+# unlike any other missing parameter.
+_AUX_HEAD_PREFIXES: tuple[str, ...] = (
+    "ko_head_aux.", "prize_head_aux.", "terminal_head_aux.", "return_head_aux.",
+)
 
-def _disabled_prospective_config(*, provenance: str) -> dict[str, Any]:
-    return {
-        "enabled": False,
-        "planner_version": PROSPECTIVE_PLANNER_VERSION,
-        "coord_schema_version": PROSPECTIVE_COORD_SCHEMA_VERSION,
-        "input_adapter_version": PROSPECTIVE_INPUT_ADAPTER_VERSION,
-        "action_attr_aggregate_version": ACTION_ATTR_AGGREGATE_VERSION,
-        "action_set_feature_version": ACTION_SET_FEATURE_VERSION,
-        "branch_feature_layout_version": BRANCH_FEATURE_LAYOUT_VERSION,
-        "config": None,
-        "runtime": None,
-        "trained_optimizer_steps": 0,
-        "provenance": provenance,
-    }
+# Meta-feature consumption (day/opponent globals + per-card meta buckets) is a
+# passive addition on top of the frozen inference contract, same status as the
+# aux heads above: a checkpoint saved before these params existed still loads,
+# with the new embeddings left at their random init (loud warning, not silent).
+_META_HEAD_PREFIXES: tuple[str, ...] = (
+    "meta_bucket_emb.", "agent_bucket_emb.", "deck_bucket_emb.", "day_proj.",
+    "meta_ctx_base",
+)
+
+_TOLERATED_MISSING_PREFIXES: tuple[str, ...] = _AUX_HEAD_PREFIXES + _META_HEAD_PREFIXES
 
 
-def _normalize_prospective_inference_config(
-    value: Any,
-    *,
-    provenance: str,
-) -> dict[str, Any]:
-    if value is None:
-        return _disabled_prospective_config(provenance=provenance)
-    if not isinstance(value, dict):
-        raise ValueError("inference prospective_planner must be an object")
-    enabled = bool(value.get("enabled", False))
-    if not enabled:
-        return _disabled_prospective_config(
-            provenance=str(value.get("provenance", provenance))
-        )
-    if value.get("planner_version") != PROSPECTIVE_PLANNER_VERSION:
-        raise ValueError("inference prospective planner version is unsupported")
-    if value.get("coord_schema_version") != PROSPECTIVE_COORD_SCHEMA_VERSION:
-        raise ValueError("inference prospective coordinate schema is unsupported")
-    if value.get("input_adapter_version") != PROSPECTIVE_INPUT_ADAPTER_VERSION:
-        raise ValueError("inference prospective input adapter is unsupported")
+def _load_type_emb_with_new_rows(
+    checkpoint_tensor: torch.Tensor, current_weight: torch.Tensor
+) -> torch.Tensor:
+    """Old checkpoints have fewer ``type_emb`` rows than the live model (e.g.
+    before T_META_CTX was added, growing token_schema.N_TTYPES). Copy the
+    checkpoint's known rows into the current (random-init) table in place;
+    trailing new rows keep their random init rather than raising a hard
+    shape-mismatch error."""
+    if tuple(checkpoint_tensor.shape) == tuple(current_weight.shape):
+        return checkpoint_tensor
     if (
-        value.get("action_attr_aggregate_version")
-        != ACTION_ATTR_AGGREGATE_VERSION
+        checkpoint_tensor.shape[1:] == current_weight.shape[1:]
+        and checkpoint_tensor.shape[0] < current_weight.shape[0]
     ):
-        raise ValueError("inference action attribute aggregate is unsupported")
-    if (
-        value.get("action_set_feature_version")
-        != ACTION_SET_FEATURE_VERSION
-    ):
-        raise ValueError("inference action set feature is unsupported")
-    if (
-        int(value.get("branch_feature_layout_version", -1))
-        != BRANCH_FEATURE_LAYOUT_VERSION
-    ):
-        raise ValueError("inference branch feature layout is unsupported")
-    planner_config_raw = value.get("config")
-    if not isinstance(planner_config_raw, dict):
-        raise ValueError("enabled prospective planner has no config")
-    planner_config = ProspectivePlannerConfig(**planner_config_raw)
-    planner_config.validate()
-    runtime = value.get("runtime")
-    if not isinstance(runtime, dict):
-        raise ValueError("enabled prospective planner has no runtime config")
-    normalized_runtime = {
-        "trials": int(runtime.get("trials", 0)),
-        "horizon": int(runtime.get("horizon", 0)),
-        "max_branches": int(runtime.get("max_branches", 0)),
-        "gamma": float(runtime.get("gamma", -1.0)),
-        "seed": int(runtime.get("seed", 0)),
-    }
-    if (
-        normalized_runtime["trials"] <= 0
-        or normalized_runtime["horizon"] <= 0
-        or normalized_runtime["max_branches"] <= 0
-        or not 0.0 <= normalized_runtime["gamma"] <= 1.0
-    ):
-        raise ValueError("prospective runtime config has invalid bounds")
-    if normalized_runtime["max_branches"] > MAX_OPTIONS:
-        raise ValueError("prospective max_branches exceeds encoder capacity")
-    trained_optimizer_steps = int(value.get("trained_optimizer_steps", 0))
-    if trained_optimizer_steps <= 0:
-        raise ValueError(
-            "enabled prospective planner has no completed optimizer step"
-        )
-    return {
-        "enabled": True,
-        "planner_version": PROSPECTIVE_PLANNER_VERSION,
-        "coord_schema_version": PROSPECTIVE_COORD_SCHEMA_VERSION,
-        "input_adapter_version": PROSPECTIVE_INPUT_ADAPTER_VERSION,
-        "action_attr_aggregate_version": ACTION_ATTR_AGGREGATE_VERSION,
-        "action_set_feature_version": ACTION_SET_FEATURE_VERSION,
-        "branch_feature_layout_version": BRANCH_FEATURE_LAYOUT_VERSION,
-        "config": planner_config.to_dict(),
-        "runtime": normalized_runtime,
-        "trained_optimizer_steps": trained_optimizer_steps,
-        "provenance": str(value.get("provenance", provenance)),
-    }
+        padded = current_weight.clone()
+        padded[: checkpoint_tensor.shape[0]] = checkpoint_tensor.to(padded.dtype)
+        return padded
+    raise ValueError(
+        f"type_emb.weight shape {tuple(checkpoint_tensor.shape)} is incompatible "
+        f"with model {tuple(current_weight.shape)}"
+    )
 
 
 def _sha256_file(path: str | Path) -> str:
@@ -210,10 +141,10 @@ def checkpoint_arch_config(state: dict[str, Any]) -> dict[str, Any]:
 def checkpoint_inference_config(state: dict[str, Any]) -> dict[str, Any]:
     """Read the runtime contract embedded in a trainer/export checkpoint.
 
-    Older checkpoints predate this contract. They are treated as models that
-    were trained without prospective would-KO features; this is the only safe
-    legacy default because enabling a new input feature at inference would
-    create train/inference drift.
+    Older checkpoints predate this contract and are treated as legacy
+    defaults. A checkpoint may still carry a stale sidecar-planner key from
+    a discontinued lateral model; that key is ignored here (no processing,
+    no validation) rather than raising.
     """
     cfg = state.get("inference_config")
     if cfg is None:
@@ -223,9 +154,6 @@ def checkpoint_inference_config(state: dict[str, Any]) -> dict[str, Any]:
             "bc_would_ko": False,
             "bc_wk_nvar": 10,
             "provenance": "legacy-checkpoint-default",
-            "prospective_planner": _disabled_prospective_config(
-                provenance="legacy-checkpoint-default"
-            ),
         }
     if not isinstance(cfg, dict):
         raise ValueError("checkpoint inference_config must be an object")
@@ -245,80 +173,7 @@ def checkpoint_inference_config(state: dict[str, Any]) -> dict[str, Any]:
         "bc_would_ko": bool(cfg["bc_would_ko"]),
         "bc_wk_nvar": int(cfg["bc_wk_nvar"]),
         "provenance": str(cfg.get("provenance", "trainer-checkpoint")),
-        "prospective_planner": _normalize_prospective_inference_config(
-            cfg.get("prospective_planner"),
-            provenance=(
-                "checkpoint-disabled"
-                if "prospective_planner" in cfg
-                else "legacy-checkpoint-default"
-            ),
-        ),
     }
-
-
-def _load_mlx_prospective_planner(
-    state: dict[str, Any],
-    inference_config: dict[str, Any],
-) -> tuple[ProspectivePlannerTorch | None, ProspectivePlannerConfig | None]:
-    payload = extract_mlx_prospective_payload(state)
-    enabled = bool(inference_config["prospective_planner"]["enabled"])
-    if payload is None:
-        if enabled:
-            raise ValueError(
-                "checkpoint enables prospective inference without planner state"
-            )
-        return None, None
-    model, config = convert_mlx_prospective_payload(payload)
-    if (
-        payload.get("input_adapter_version")
-        != PROSPECTIVE_INPUT_ADAPTER_VERSION
-    ):
-        raise ValueError("prospective planner input adapter is incompatible")
-    inference_planner = inference_config["prospective_planner"]
-    if enabled and inference_planner["config"] != config.to_dict():
-        raise ValueError(
-            "prospective planner model and inference config disagree"
-        )
-    if enabled:
-        trained_steps = int(payload.get("optimizer_steps", 0))
-        if trained_steps <= 0:
-            raise ValueError("enabled MLX prospective planner is untrained")
-        if trained_steps != int(inference_planner["trained_optimizer_steps"]):
-            raise ValueError(
-                "prospective optimizer step disagrees with inference config"
-            )
-    return model, config
-
-
-def _load_torch_prospective_planner(
-    payload: dict[str, Any],
-    inference_config: dict[str, Any],
-) -> tuple[ProspectivePlannerTorch | None, ProspectivePlannerConfig | None]:
-    planner_payload = payload.get("prospective_planner")
-    enabled = bool(inference_config["prospective_planner"]["enabled"])
-    if planner_payload is None:
-        if enabled:
-            raise ValueError(
-                "artifact enables prospective inference without planner state"
-            )
-        return None, None
-    if not isinstance(planner_payload, dict):
-        raise ValueError("artifact prospective_planner must be an object")
-    model, config = load_prospective_torch_payload(planner_payload)
-    inference_planner = inference_config["prospective_planner"]
-    if enabled and inference_planner["config"] != config.to_dict():
-        raise ValueError(
-            "prospective planner artifact and inference config disagree"
-        )
-    if enabled:
-        trained_steps = int(planner_payload.get("trained_optimizer_steps", 0))
-        if trained_steps <= 0:
-            raise ValueError("enabled Torch prospective planner is untrained")
-        if trained_steps != int(inference_planner["trained_optimizer_steps"]):
-            raise ValueError(
-                "artifact prospective optimizer step disagrees with config"
-            )
-    return model, config
 
 
 class TokenTransformerTorchInference(TokenTransformer):
@@ -365,6 +220,32 @@ class TokenTransformerTorchInference(TokenTransformer):
             value_vmax=float(cfg.get("value_vmax", 1.0)),
             opt_struct=2 + 4 + 5 + 3 + 1 + effect_data.N_ATTACK_FX,
         )
+        # Aux heads mirror (MLX writes these into the checkpoint; inference must
+        # have them present for state_dict loading, even if it doesn't use them
+        # at Kaggle runtime — the trainer wants them, the arena doesn't call them).
+        self.ko_head_aux = torch.nn.Linear(self.d, 1).to(torch.float16)
+        self.prize_head_aux = torch.nn.Linear(self.d, 1).to(torch.float16)
+        self.terminal_head_aux = torch.nn.Linear(self.d, 1).to(torch.float16)
+        self.return_head_aux = torch.nn.Linear(self.d, 1).to(torch.float16)
+
+        # rl.policy.TokenTransformer (the base __init__ just ran) hardcodes its
+        # OWN local _N_TTYPES=19 constant, which predates T_META_CTX=19. Resize
+        # type_emb to the current token_schema.N_TTYPES so the new meta-context
+        # token type has a row; old-checkpoint loaders pad the smaller table's
+        # rows into this one instead of raising a shape mismatch.
+        if self.type_emb.weight.shape[0] != N_TTYPES:
+            self.type_emb = torch.nn.Embedding(N_TTYPES, self.d).to(torch.float16)
+
+        # Meta feature consumption mirror (see TokenTransformerMLX): per-card meta
+        # buckets share one embedding table across every card/unit stream; the
+        # global day/opponent features are absorbed into a dedicated META_CTX
+        # token rather than widening G (which would break scalar_proj's shape).
+        self.meta_bucket_emb = torch.nn.Embedding(N_META_BUCKETS, self.d).to(torch.float16)
+        self.agent_bucket_emb = torch.nn.Embedding(N_AGENT_BUCKETS, self.d).to(torch.float16)
+        self.deck_bucket_emb = torch.nn.Embedding(N_DECK_BUCKETS, self.d).to(torch.float16)
+        self.day_proj = torch.nn.Linear(1, self.d).to(torch.float16)
+        self.meta_ctx_base = torch.nn.Parameter(torch.zeros(self.d, dtype=torch.float16))
+
         # ``super`` rebuilt the same architecture. Keep the configured tables
         # and replace only the recurrent workspace dimensions.
         n_scratch = int(cfg["scratch_registers"])
@@ -396,17 +277,23 @@ class TokenTransformerTorchInference(TokenTransformer):
             return torch.zeros(*ids.shape, self.d, dtype=self.card_emb.weight.dtype, device=ids.device)
         return self.static_proj(self.card_feat[ids])
 
-    def _card_stream(self, ids, t, device):
+    def _card_stream(self, ids, t, device, bucket_ids):
         b, k = ids.shape
-        return self._card_emb(ids) + self._type(b, k, t, device) + self._static(ids)
+        return (
+            self._card_emb(ids) + self._type(b, k, t, device) + self._static(ids)
+            + self.meta_bucket_emb(bucket_ids)
+        )
 
-    def _unit_stream(self, top_id, preevo_id, tool_id, energy_id, attr, active_t, bench_t, device):
+    def _unit_stream(self, top_id, preevo_id, tool_id, energy_id, attr, active_t, bench_t, device,
+                      top_bucket, preevo_bucket, tool_bucket, energy_bucket):
         b, u = top_id.shape
         idbag = (self._card_emb(top_id) + self._card_emb(preevo_id).sum(2)
                  + self._card_emb(tool_id).sum(2) + self._card_emb(energy_id).sum(2))
+        meta = (self.meta_bucket_emb(top_bucket) + self.meta_bucket_emb(preevo_bucket).sum(2)
+                + self.meta_bucket_emb(tool_bucket).sum(2) + self.meta_bucket_emb(energy_bucket).sum(2))
         types = torch.full((b, u), bench_t, dtype=torch.long, device=device)
         types[:, 0] = active_t
-        return idbag + self.unit_attr_proj(attr) + self.type_emb(types) + self._static(top_id)
+        return idbag + meta + self.unit_attr_proj(attr) + self.type_emb(types) + self._static(top_id)
 
     def _resolve(self, pos, card, state_seq):
         b, k = pos.shape
@@ -439,19 +326,53 @@ class TokenTransformerTorchInference(TokenTransformer):
         toks.append(self.sel_type_emb(o["select_type"].squeeze(-1)).unsqueeze(1) + self._type(b, 1, 16, dev)); nopad()
         toks.append(self.sel_ctx_emb(o["select_context"].squeeze(-1)).unsqueeze(1) + self._type(b, 1, 17, dev)); nopad()
 
+        # --- meta-context token (day + opponent identity; never padded, mandatory) ---
+        try:
+            _day = o["day_index_norm"]
+            _opp_agent = o["opponent_agent_bucket"]
+            _opp_deck = o["opponent_deck_bucket"]
+        except KeyError as exc:
+            raise KeyError(
+                "obs is missing required meta feature "
+                f"{exc.args[0]!r}; the encoder must always emit day_index_norm/"
+                "opponent_agent_bucket/opponent_deck_bucket (see rl/encoder/meta_lookup.py)"
+            ) from exc
+        toks.append(
+            self.meta_ctx_base.expand(b, 1, self.d)
+            + self.day_proj(_day.reshape(b, 1, 1))
+            + self.agent_bucket_emb(_opp_agent.reshape(b, 1))
+            + self.deck_bucket_emb(_opp_deck.reshape(b, 1))
+            + self._type(b, 1, T_META_CTX, dev)
+        ); nopad()
+
         streams = (("self_deck", 1), ("opp_deck", 2), ("self_prize", 3), ("opp_prize", 4),
                    ("self_hand", 5), ("opp_hand", 6), ("self_discard", 7), ("opp_discard", 8),
                    ("stadium", 9), ("effect", 15))
         for name, typ in streams:
-            tok = self._card_stream(o[f"{name}_id"], typ, dev)
+            bucket_key = f"{name}_meta_bucket"
+            if bucket_key not in o:
+                raise KeyError(
+                    f"obs is missing required meta bucket feature {bucket_key!r} "
+                    "(the encoder must always emit a *_meta_bucket array per card stream)"
+                )
+            tok = self._card_stream(o[f"{name}_id"], typ, dev, o[bucket_key])
             if name == "self_deck": tok = tok + o["self_deck_flag"].unsqueeze(-1) * self.drawable_emb
             if name == "opp_deck": tok = tok + o["opp_deck_flag"].unsqueeze(-1) * self.opp_drawable_emb
             if name == "opp_hand": tok = tok + o["opp_hand_flag"].unsqueeze(-1) * self.hand_certain_emb
             toks.append(tok); pads.append(o[f"{name}_mask"] < 0.5)
         for side, active, bench in (("self", 10, 11), ("opp", 12, 13)):
+            for sub in ("top", "preevo", "tool", "energy"):
+                bk = f"{side}_unit_{sub}_meta_bucket"
+                if bk not in o:
+                    raise KeyError(
+                        f"obs is missing required meta bucket feature {bk!r} "
+                        "(the encoder must always emit a *_meta_bucket array per unit sub-stream)"
+                    )
             toks.append(self._unit_stream(o[f"{side}_unit_top_id"], o[f"{side}_unit_preevo_id"],
                                           o[f"{side}_unit_tool_id"], o[f"{side}_unit_energy_id"],
-                                          o[f"{side}_unit_attr"], active, bench, dev))
+                                          o[f"{side}_unit_attr"], active, bench, dev,
+                                          o[f"{side}_unit_top_meta_bucket"], o[f"{side}_unit_preevo_meta_bucket"],
+                                          o[f"{side}_unit_tool_meta_bucket"], o[f"{side}_unit_energy_meta_bucket"]))
             pads.append(o[f"{side}_unit_mask"] < 0.5)
 
         state_seq = torch.cat(toks, 1)
@@ -461,6 +382,9 @@ class TokenTransformerTorchInference(TokenTransformer):
         keep[:3] = True  # CLS/select type/select context are always present
         if self.split_heads:
             keep[3:5] = True  # dedicated value/submit precede select type/context
+        # meta_ctx token: index 3 (base) or 5 (split_heads); inserted right after
+        # sel_ctx, before the first card stream. Never padded.
+        keep[5 if self.split_heads else 3] = True
         keep_idx = torch.nonzero(keep, as_tuple=False).squeeze(1)
         # Keep the same exact source/target address space as the MLX encoder:
         # absolute option positions are remapped only after state compaction.
@@ -471,7 +395,11 @@ class TokenTransformerTorchInference(TokenTransformer):
             remap[keep_idx] = torch.arange(keep_idx.numel(), device=dev)
         state_seq = state_seq.index_select(1, keep_idx)
         pad_state = pad_state.index_select(1, keep_idx)
-        shift = 2 if self.split_heads else 0
+        # opt_src_pos/opt_tgt_pos are relative to the RAW encoder layout (no
+        # value/submit/meta_ctx tokens); shift by however many extra header
+        # tokens this model inserts before the first card stream (see the MLX
+        # mirror's _opt_pos_shift for the identical accounting).
+        shift = (2 if self.split_heads else 0) + 1
         src = o["opt_src_pos"]
         tgt = o["opt_tgt_pos"]
         src = torch.where(src >= 0, src + shift, src)
@@ -528,6 +456,18 @@ class TokenTransformerTorchInference(TokenTransformer):
         # preserves the ordering/masking contract without overflowing.
         return logits.masked_fill(o["action_mask"] < 0.5, -65504.0), value, memory_out
 
+    def aux_predictions(self, o, memory_in=None) -> dict:
+        """Aux head mirror of TokenTransformerMLX.aux_predictions. Training-only;
+        the Kaggle arena inference path (agent/main.py) never calls this."""
+        cls_out, _, _, extra, _ = self._encode(o, memory_in=memory_in)
+        aux_source = extra[0] if self.split_heads else cls_out
+        return {
+            "ko_logit": self.ko_head_aux(aux_source).squeeze(-1),
+            "prize_pred": self.prize_head_aux(aux_source).squeeze(-1),
+            "terminal_logit": self.terminal_head_aux(aux_source).squeeze(-1),
+            "return_pred": self.return_head_aux(aux_source).squeeze(-1),
+        }
+
 
 def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.float16):
     """Load an MLX checkpoint into a strict FP16 PyTorch inference model."""
@@ -538,16 +478,11 @@ def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.
         state, card_table
     )
     inference_config = checkpoint_inference_config(state)
-    prospective_model, prospective_config = _load_mlx_prospective_planner(
-        state, inference_config
-    )
     metadata = {
         **arch_cfg,
         "inference_config": inference_config,
         "training_config": dict(state.get("run_config", {})),
         "static_feature_contract": static_contract,
-        "prospective_planner_model": prospective_model,
-        "prospective_planner_config": prospective_config,
     }
     model = TokenTransformerTorchInference(
         card_table, arch_cfg, static_features
@@ -556,6 +491,8 @@ def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.
     source = _flatten_checkpoint(state["model"])
     converted: dict[str, torch.Tensor] = {}
     used_source: set[str] = set()
+    tolerated_missing: set[str] = set()
+    tolerated_resized: set[str] = set()
     for key, expected in target.items():
         if key == "card_feat":
             continue
@@ -599,11 +536,18 @@ def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.
             if tensor is not None:
                 used_source.add(source_key)
         if tensor is None:
+            if key.startswith(_TOLERATED_MISSING_PREFIXES):
+                tolerated_missing.add(key)
+                continue
             raise ValueError(f"checkpoint missing parameter for {key}")
         if tuple(tensor.shape) != tuple(expected.shape):
-            raise ValueError(f"shape mismatch for {key}: checkpoint {tuple(tensor.shape)} != model {tuple(expected.shape)}")
+            if key == "type_emb.weight":
+                tensor = _load_type_emb_with_new_rows(tensor, target[key])
+                tolerated_resized.add(key)
+            else:
+                raise ValueError(f"shape mismatch for {key}: checkpoint {tuple(tensor.shape)} != model {tuple(expected.shape)}")
         converted[key] = tensor.to(dtype=dtype)
-    missing_model = set(target) - set(converted)
+    missing_model = set(target) - set(converted) - tolerated_missing
     if missing_model:
         raise ValueError(f"checkpoint conversion omitted model parameters: {sorted(missing_model)}")
     unexpected_source = set(source) - used_source
@@ -612,7 +556,14 @@ def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.
             "MLX checkpoint contains unmapped parameters: "
             f"{sorted(unexpected_source)}"
         )
-    model.load_state_dict(converted, strict=True)
+    if tolerated_missing or tolerated_resized:
+        print(
+            "WARNING: MLX checkpoint predates some parameters (auxiliary heads "
+            "and/or meta-feature embeddings); reinitializing with random weights, "
+            f"untrained: {sorted(tolerated_missing)}; "
+            f"resized (new rows random-init): {sorted(tolerated_resized)}"
+        )
+    model.load_state_dict(converted, strict=False)
     model = model.to(dtype=dtype)
     model.eval()
     return model, metadata
@@ -643,8 +594,6 @@ def save_torch_inference_checkpoint(
             if key not in (
                 "inference_config",
                 "training_config",
-                "prospective_planner_model",
-                "prospective_planner_config",
             )
         },
         "inference_config": metadata["inference_config"],
@@ -656,18 +605,6 @@ def save_torch_inference_checkpoint(
         ),
         "static_feature_contract": metadata["static_feature_contract"],
         "state_dict": state_dict,
-        "prospective_planner": (
-            prospective_torch_checkpoint_payload(
-                metadata["prospective_planner_model"],
-                trained_optimizer_steps=int(
-                    metadata["inference_config"]["prospective_planner"][
-                        "trained_optimizer_steps"
-                    ]
-                ),
-            )
-            if metadata["prospective_planner_model"] is not None
-            else None
-        ),
     }
     torch.save(payload, torch_path)
     return metadata
@@ -691,31 +628,58 @@ def load_torch_inference_checkpoint(
         payload, card_table
     )
     inference_config = checkpoint_inference_config(payload)
-    prospective_model, prospective_config = _load_torch_prospective_planner(
-        payload, inference_config
-    )
     metadata = {
         **arch_cfg,
         "inference_config": inference_config,
         "training_config": dict(payload.get("training_config", {})),
         "static_feature_contract": static_contract,
-        "prospective_planner_model": prospective_model,
-        "prospective_planner_config": prospective_config,
     }
     state_dict = payload.get("state_dict")
     if not isinstance(state_dict, dict):
         raise ValueError("PyTorch inference checkpoint has no state_dict")
+    state_dict = dict(state_dict)
 
     model = TokenTransformerTorchInference(
         card_table, arch_cfg, static_features
     ).to(dtype=torch.float16)
     expected = model.state_dict()
+
+    # Old checkpoints have a smaller type_emb (fewer token types, e.g. before
+    # T_META_CTX). Pad in place before the missing/unexpected/shape checks so
+    # this reads as a normal (if resized) present key, not a hard mismatch.
+    if "type_emb.weight" in state_dict and "type_emb.weight" in expected:
+        ckpt_type_emb = state_dict["type_emb.weight"]
+        cur_type_emb = expected["type_emb.weight"]
+        if tuple(ckpt_type_emb.shape) != tuple(cur_type_emb.shape):
+            state_dict["type_emb.weight"] = _load_type_emb_with_new_rows(ckpt_type_emb, cur_type_emb)
+            print(
+                f"WARNING: checkpoint type_emb has {ckpt_type_emb.shape[0]} rows, "
+                f"model expects {cur_type_emb.shape[0]} (new token types, e.g. "
+                "T_META_CTX); padding new rows with random init"
+            )
+
     missing = set(expected) - set(state_dict)
     unexpected = set(state_dict) - set(expected)
-    if missing or unexpected:
+    if unexpected:
         raise ValueError(
             f"PyTorch inference state mismatch: missing={sorted(missing)}, "
             f"unexpected={sorted(unexpected)}"
+        )
+    non_tolerated_missing = {key for key in missing if not key.startswith(_TOLERATED_MISSING_PREFIXES)}
+    if non_tolerated_missing:
+        raise ValueError(
+            f"PyTorch inference state mismatch: missing={sorted(missing)}, "
+            f"unexpected={sorted(unexpected)}"
+        )
+    if missing:
+        # Pre-aux-head / pre-meta-feature checkpoint: both are training-only-ish
+        # additive params (the arena inference path never trains them), so a
+        # missing set that is *exactly* aux heads and/or meta embeddings is not
+        # a contract violation — just a reinitialization.
+        print(
+            "WARNING: checkpoint predates auxiliary heads and/or meta-feature "
+            "embeddings (prospective ko/prize/terminal/return, day/opponent/"
+            f"card-bucket embeddings); reinitializing with random weights, untrained: {sorted(missing)}"
         )
     for key, tensor in state_dict.items():
         if not isinstance(tensor, torch.Tensor):
@@ -727,7 +691,11 @@ def load_torch_inference_checkpoint(
             )
         if tensor.is_floating_point() and tensor.dtype != torch.float16:
             raise ValueError(f"state_dict[{key!r}] is {tensor.dtype}, expected torch.float16")
-    model.load_state_dict(state_dict, strict=True)
+    load_result = model.load_state_dict(state_dict, strict=False)
+    if set(load_result.unexpected_keys):
+        raise ValueError(f"unexpected keys during load: {sorted(load_result.unexpected_keys)}")
+    if set(load_result.missing_keys) != missing:
+        raise ValueError(f"unexpected missing keys during load: {sorted(load_result.missing_keys)}")
     model.eval()
     return model, metadata
 

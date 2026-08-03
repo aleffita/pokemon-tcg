@@ -35,4 +35,8 @@ T_SEL_CTX = 17      # select-context signal token
 
 T_CARD_SYNTH = 18   # synthesized card token (attached energy/tool, deck-search pick)
 
-N_TTYPES = 19       # total number of distinct token types (0..18 inclusive)
+T_META_CTX = 19     # meta-context token: day_index_norm + opponent_agent_bucket +
+                     # opponent_deck_bucket (global, passive meta-game features; see
+                     # rl/encoder/meta_lookup.py and enc_constants.N_META_BUCKETS)
+
+N_TTYPES = 20       # total number of distinct token types (0..19 inclusive)
