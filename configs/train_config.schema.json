@@ -223,12 +223,21 @@
       "description": "AdamW decoupled weight decay.",
       "minimum": 0.0
     },
-    "slab_rows": {
-      "type": "integer",
-      "default": 32768,
-      "description": "Number of rows per memory-mapped slab (I/O unit). 32k rows × ~14KB/row ≈ 450MB. With prefetch, 2 slabs ≈ 900MB. Reduce for smoke tests (500) or low-memory machines.",
-      "minimum": 100,
-      "maximum": 1000000
+    "structured_weight_decay": {
+      "type": "number",
+      "default": 0.1,
+      "description": "Weight decay applied only to structured verb heads (type_query, type_bias). Higher than the shared AdamW decay so rare verbs collapse toward the shared opt_head fallback when data is scarce.",
+      "minimum": 0.0
+    },
+    "training_days": {
+      "type": "array",
+      "default": [],
+      "description": "Explicit list of ISO dates (YYYY-MM-DD) resolved from the SQLite results catalog (model/results.db, table `days`), one Parquet file per day. Empty means CLI must supply --days / --last-n-days / --all-days.",
+      "items": {
+        "type": "string",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+      },
+      "uniqueItems": true
     },
     "val_frac": {
       "type": "number",

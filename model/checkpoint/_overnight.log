@@ -1,0 +1,4 @@
+[bc-train-mlx] aux losses active — ko=0.5, prize=0.5, terminal=0.5, return=0.5
+[bc-train-mlx] device=Device(gpu, 0)
+[bc-train-mlx] training days: 2026-07-14(811,393 rows), 2026-07-15(807,809 rows), 2026-07-16(788,369 rows), 2026-07-17(781,260 rows), 2026-07-18(809,448 rows), 2026-07-19(773,720 rows), 2026-07-20(786,049 rows), 2026-07-21(801,865 rows), 2026-07-22(803,412 rows), 2026-07-23(801,750 rows), 2026-07-24(797,914 rows), 2026-07-25(807,497 rows), 2026-07-26(809,114 rows), 2026-07-27(809,193 rows), 2026-07-28(813,079 rows), 2026-07-29(811,539 rows), 2026-07-30(812,765 rows), 2026-07-31(810,573 rows), 2026-08-01(813,124 rows)
+[bc-train-mlx] episode split: 78,043 train / 8,671 val episodes (val_frac=0.1, seed=13)
