@@ -24,8 +24,15 @@ dependencies = [
     "pyarrow>=17.0.0",
     "pymupdf>=1.28.0",
     "pyrefly>=0.60.0",
+    # Cross-platform host-memory probe used by _ParquetRowGroupCache to
+    # evict under system pressure. On darwin/M-series virtual_memory().percent
+    # tracks the same metric Activity Monitor's "Memory Pressure" band uses.
+    "psutil>=6.0.0",
     "rich>=15.0.0",
     "streamlit>=1.60.0",
+    # Live training metrics: bc_train_mlx writes to `runs/<timestamp>/` and
+    # the user runs `uv run tensorboard --logdir runs` in a second shell.
+    "tensorboard>=2.19.0",
     "torch>=2.13.0",
 ]
 

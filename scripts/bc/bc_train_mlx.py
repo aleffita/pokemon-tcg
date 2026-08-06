@@ -22,8 +22,10 @@ import hashlib
 import json
 import os
 import shutil
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -958,29 +960,67 @@ class _ParquetRowGroupCache:
         columns: list[str],
         shapes: dict[str, tuple],
         int_keys: set[str],
-        capacity: int = 3,
     ) -> None:
-        if capacity <= 0:
-            raise ValueError("row_group cache capacity must be positive")
         import pyarrow.parquet as pq  # local to avoid startup cost when unused
         self._pq = pq
         self._file_paths = file_paths
+        # ParquetFile handles: opened lazily and thread-safe for concurrent
+        # read_row_group() calls (pyarrow's C++ core takes its own locks).
+        # Wrapping ``_open`` in ``_lock`` still needed because the dict
+        # ``self._pq_files`` is populated in check-then-insert.
         self._pq_files: dict[int, "pq.ParquetFile"] = {}
         self._columns = list(columns)
         self._shapes = shapes
         self._int_keys = int_keys
-        self._capacity = capacity
-        # OrderedDict preserves insertion order for LRU eviction.
+        # OrderedDict preserves insertion order for LRU eviction. The cache
+        # grows on-demand and evicts strictly under host-memory pressure --
+        # no arbitrary capacity, no preload phase. Same design as an LLM's
+        # KV cache: keep everything we can afford, drop the coldest when
+        # the OS is about to swap.
         from collections import OrderedDict
         self._cache: OrderedDict[
             tuple[int, int], dict[str, np.ndarray]
         ] = OrderedDict()
+        # Fine-grained lock: guards _cache and _pq_files structure mutations.
+        # pyarrow decode itself releases the GIL and is thread-safe per file,
+        # so the lock is held only during the O(1) hash / list ops -- the
+        # slow decode runs unlocked so a prefetch thread and the main thread
+        # can genuinely overlap I/O with GPU work.
+        self._lock = threading.Lock()
+        # Instrumentation. All counters guarded by the same lock so the
+        # end-of-training report is consistent even with the prefetch
+        # thread hitting _touch concurrently.
+        self._hits = 0
+        self._misses = 0
+        self._evictions = 0
+        self._bytes_loaded = 0
+        try:
+            import psutil as _psutil  # noqa: F401 -- probe availability
+            self._pressure_probe = True
+        except ImportError:
+            self._pressure_probe = False
+
+    # macOS starts compressing / swapping around 85% of system memory used
+    # (Activity Monitor's "yellow" memory-pressure band). Below that we are
+    # safe to keep growing the cache; above it, evict the coldest row_groups
+    # until we drop back under. This is a system-level threshold, not a
+    # user-tunable knob -- if a different runtime (CUDA on A100, x86 host
+    # with distinct VRAM/RAM budgets) needs different accounting, add a
+    # device probe here and query it instead.
+    _HIGH_WATERMARK_PCT = 85.0
+
+    def _under_pressure(self) -> bool:
+        if not self._pressure_probe:
+            return False
+        import psutil
+        return psutil.virtual_memory().percent >= self._HIGH_WATERMARK_PCT
 
     def _open(self, file_idx: int):
-        pf = self._pq_files.get(file_idx)
-        if pf is None:
-            pf = self._pq.ParquetFile(self._file_paths[file_idx])
-            self._pq_files[file_idx] = pf
+        with self._lock:
+            pf = self._pq_files.get(file_idx)
+            if pf is None:
+                pf = self._pq.ParquetFile(self._file_paths[file_idx])
+                self._pq_files[file_idx] = pf
         return pf
 
     def _load_rg(
@@ -988,6 +1028,8 @@ class _ParquetRowGroupCache:
     ) -> dict[str, np.ndarray]:
         pf = self._open(file_idx)
         table = pf.read_row_group(row_group_idx, columns=self._columns)
+        # Best-effort byte accounting: sum the decoded numpy buffer sizes below.
+        rg_bytes = 0
         # read_row_group returns a Table with one batch per column-chunk. Turn
         # each column into its final numpy layout via the shared helper.
         rg_dict: dict[str, np.ndarray] = {}
@@ -1010,18 +1052,52 @@ class _ParquetRowGroupCache:
         rb = record_batch[0]
         for c in self._columns:
             rg_dict[c] = _read_batch_column(rb, c, self._shapes, self._int_keys)
+            rg_bytes += int(rg_dict[c].nbytes)
+        with self._lock:
+            self._bytes_loaded += rg_bytes
         return rg_dict
 
     def _touch(self, key: tuple[int, int]) -> dict[str, np.ndarray]:
-        rg = self._cache.get(key)
-        if rg is None:
-            rg = self._load_rg(*key)
-            self._cache[key] = rg
-            while len(self._cache) > self._capacity:
+        # Fast path: cached row_group under the lock (dict ops are cheap).
+        with self._lock:
+            rg = self._cache.get(key)
+            if rg is not None:
+                self._cache.move_to_end(key)
+                self._hits += 1
+                return rg
+        # Slow path: decode outside the lock so the prefetch thread does not
+        # block the main thread's own cache reads while pyarrow is running.
+        rg_loaded = self._load_rg(*key)
+        with self._lock:
+            # Another thread may have finished the same key concurrently
+            # (prefetch + main both requesting the same row_group). Prefer
+            # the entry that was already cached to keep the LRU consistent.
+            existing = self._cache.get(key)
+            if existing is not None:
+                self._cache.move_to_end(key)
+                self._hits += 1
+                return existing
+            self._cache[key] = rg_loaded
+            self._misses += 1
+            # Pressure-driven eviction: drop the LRU tail one row_group at a
+            # time until the host is no longer above _HIGH_WATERMARK_PCT.
+            # A cold row_group evicted now is cheap to re-decode later; a
+            # swap event costs orders of magnitude more.
+            while self._under_pressure() and len(self._cache) > 1:
                 self._cache.popitem(last=False)
-        else:
-            self._cache.move_to_end(key)
-        return rg
+                self._evictions += 1
+        return rg_loaded
+
+    def report(self) -> dict[str, int]:
+        """Snapshot of cache statistics for end-of-training logs."""
+        with self._lock:
+            return {
+                "hits": self._hits,
+                "misses": self._misses,
+                "evictions": self._evictions,
+                "bytes_loaded": self._bytes_loaded,
+                "resident_row_groups": len(self._cache),
+            }
 
     def read_rows(
         self,
@@ -1164,9 +1240,19 @@ def _resolve_day_ids(args, cfg, db: "ResultsDB") -> list[int]:
         rows = db.conn.execute("SELECT id FROM days ORDER BY date").fetchall()
         return [int(row["id"]) for row in rows]
     if args.last_n_days:
+        n = int(args.last_n_days)
         rows = db.conn.execute(
-            "SELECT id FROM days ORDER BY date DESC LIMIT ?", (args.last_n_days,)
+            "SELECT id, date FROM days ORDER BY date DESC LIMIT ?", (n,)
         ).fetchall()
+        if len(rows) < n:
+            print(
+                f"[bc-train-mlx] --last-n-days {n}: only {len(rows)} day(s) "
+                f"registered in the catalog; using them all",
+                flush=True,
+            )
+        # Return in chronological (oldest first) order so training walks the
+        # meta forward in time, matching the intent of ``--days`` when the
+        # user types the list in ISO order.
         return [int(row["id"]) for row in reversed(rows)]
     dates: list[str] = []
     if args.days:
@@ -1357,6 +1443,22 @@ def main() -> None:
         "--max-rows", type=int, default=None, help="Max training rows (0=all)"
     )
     p.add_argument(
+        "--max-rows-per-day",
+        type=int,
+        default=None,
+        help="Cap training rows PER DAY (episode-boundary rounded, 0=off)",
+    )
+    p.add_argument(
+        "--top-elo",
+        type=int,
+        default=None,
+        help=(
+            "Filter to episodes played by top-N agents by daily remote elo "
+            "(source=remote). Both player_name and opponent_name must be "
+            "in the top-N set for that day. 0=off"
+        ),
+    )
+    p.add_argument(
         "--bc-would-ko",
         type=_bool_arg,
         default=None,
@@ -1526,6 +1628,9 @@ def main() -> None:
     )
     a.slab_rows = a.slab_rows if a.slab_rows is not None else cfg.slab_rows
     a.max_rows = a.max_rows if a.max_rows is not None else cfg.max_rows
+    # Trainer-only CLI knobs (no config counterparts). Default 0 = disabled.
+    a.max_rows_per_day = int(a.max_rows_per_day) if a.max_rows_per_day else 0
+    a.top_elo = int(a.top_elo) if a.top_elo else 0
     a.checkpoint_every_epochs = (
         a.checkpoint_every_epochs
         if a.checkpoint_every_epochs is not None
@@ -1678,22 +1783,126 @@ def main() -> None:
     # so max_rows caps by whole episode (kept in first-appearance/day order)
     # rather than by exact row count -- fine for its only real use, smoke
     # tests.
-    eid_chunks = [
-        batch.column("episode_id").to_numpy(zero_copy_only=False)
-        for batch in pa_dataset.to_batches(columns=["episode_id"])
-        if batch.num_rows > 0
-    ]
-    if not eid_chunks:
+    # Scan (episode_id, day_id, player_name, opponent_name) per row so that
+    # both --top-elo and --max-rows-per-day can be applied at the episode
+    # level BEFORE the train/val split. player_name / opponent_name are
+    # sidecar-emitted string columns already present in every parquet built
+    # by build_bc_from_zips.py.
+    scan_cols = ["episode_id", "day_id"]
+    if a.top_elo and a.top_elo > 0:
+        scan_cols.extend(["player_name", "opponent_name"])
+    scan_chunks: dict[str, list[np.ndarray]] = {c: [] for c in scan_cols}
+    for batch in pa_dataset.to_batches(columns=scan_cols):
+        if batch.num_rows == 0:
+            continue
+        for c in scan_cols:
+            scan_chunks[c].append(batch.column(c).to_numpy(zero_copy_only=False))
+    if not scan_chunks["episode_id"]:
         raise SystemExit("selected training days contain no rows")
-    all_eids = np.concatenate(eid_chunks)
+    all_eids = np.concatenate(scan_chunks["episode_id"])
+    all_day_ids = np.concatenate(scan_chunks["day_id"])
+    all_player = (
+        np.concatenate(scan_chunks["player_name"])
+        if "player_name" in scan_chunks and scan_chunks["player_name"]
+        else None
+    )
+    all_opponent = (
+        np.concatenate(scan_chunks["opponent_name"])
+        if "opponent_name" in scan_chunks and scan_chunks["opponent_name"]
+        else None
+    )
     unique_eids, first_index, counts = np.unique(
         all_eids, return_index=True, return_counts=True
     )
     appearance_order = np.argsort(first_index)
     unique_eids = unique_eids[appearance_order]
     counts = counts[appearance_order]
+    first_index = first_index[appearance_order]
+    # One canonical (day_id, player_name, opponent_name) tuple per episode --
+    # every row of an episode carries the same values, so first_index is the
+    # cheapest representative.
+    ep_day_ids = all_day_ids[first_index]
+    ep_player = all_player[first_index] if all_player is not None else None
+    ep_opponent = all_opponent[first_index] if all_opponent is not None else None
 
-    if a.max_rows and a.max_rows > 0:
+    # --top-elo filter: keep only episodes where BOTH sides are top-N on their
+    # calendar day. Names are joined off the SQLite catalog (agent_elo_daily
+    # + agents), source='remote' (the only source populated during rebuild).
+    if a.top_elo and a.top_elo > 0:
+        if ep_player is None:
+            raise SystemExit(
+                "--top-elo requires player_name/opponent_name columns "
+                "in the parquet; rebuild the dataset"
+            )
+        import sqlite3 as _sqlite3_top
+        _top_conn = _sqlite3_top.connect(str(a.db))
+        _top_conn.row_factory = _sqlite3_top.Row
+        top_names_by_day: dict[int, set[str]] = {}
+        try:
+            for row in _top_conn.execute(
+                "SELECT day_id, name FROM ("
+                "  SELECT aed.day_id, a.name, aed.elo, "
+                "         ROW_NUMBER() OVER (PARTITION BY aed.day_id ORDER BY aed.elo DESC) AS rk "
+                "  FROM agent_elo_daily aed "
+                "  JOIN agents a ON a.id = aed.agent_id "
+                "  WHERE aed.source = 'remote'"
+                ") WHERE rk <= ?",
+                (int(a.top_elo),),
+            ):
+                top_names_by_day.setdefault(int(row["day_id"]), set()).add(
+                    str(row["name"])
+                )
+        finally:
+            _top_conn.close()
+        keep = np.zeros(len(unique_eids), dtype=bool)
+        for i, day_id in enumerate(ep_day_ids):
+            allowed = top_names_by_day.get(int(day_id))
+            if not allowed:
+                continue
+            if str(ep_player[i]) in allowed and str(ep_opponent[i]) in allowed:
+                keep[i] = True
+        kept = int(keep.sum())
+        total = len(unique_eids)
+        print(
+            f"[bc-train-mlx] --top-elo {a.top_elo}: kept {kept:,}/{total:,} "
+            f"episode(s) played by top-{a.top_elo} agents on both sides",
+            flush=True,
+        )
+        unique_eids = unique_eids[keep]
+        counts = counts[keep]
+        ep_day_ids = ep_day_ids[keep]
+        if not len(unique_eids):
+            raise SystemExit(
+                "--top-elo filter left no episodes; lower N or check "
+                "agent_elo_daily coverage"
+            )
+
+    # --max-rows-per-day: cap per calendar day (episode-boundary rounded) so
+    # multi-day suites train on the same per-day budget regardless of the
+    # replay volume. Ordering is stable (day_id ASC, appearance order within
+    # a day) to keep runs comparable.
+    if a.max_rows_per_day and a.max_rows_per_day > 0:
+        order = np.lexsort((np.arange(len(unique_eids)), ep_day_ids))
+        selected_positions: list[int] = []
+        rows_by_day: dict[int, int] = {}
+        for pos in order:
+            day_id = int(ep_day_ids[pos])
+            if rows_by_day.get(day_id, 0) >= a.max_rows_per_day:
+                continue
+            selected_positions.append(int(pos))
+            rows_by_day[day_id] = rows_by_day.get(day_id, 0) + int(counts[pos])
+        selected_positions.sort()
+        selected_positions_arr = np.asarray(selected_positions, dtype=np.int64)
+        selected_eids = unique_eids[selected_positions_arr]
+        selected_counts = counts[selected_positions_arr]
+        total = int(selected_counts.sum())
+        print(
+            f"[bc-train-mlx] --max-rows-per-day {a.max_rows_per_day}: "
+            f"kept {len(selected_eids):,} episode(s) across "
+            f"{len(rows_by_day)} day(s), {total:,} rows",
+            flush=True,
+        )
+    elif a.max_rows and a.max_rows > 0:
         cum = np.cumsum(counts)
         cutoff = min(int(np.searchsorted(cum, a.max_rows) + 1), len(unique_eids))
         selected_eids = unique_eids[:cutoff]
@@ -1798,8 +2007,11 @@ def main() -> None:
             shapes=enc_shapes,
             int_keys=int_keys,
         )
-        # train_np / y_train / aux_train_np are no longer materialized up
-        # front; _load_temporal_batch pulls each chunk's rows on demand.
+        # No preload phase. The cache grows on-demand as _load_temporal_batch
+        # touches row_groups and only evicts under host-memory pressure --
+        # see _ParquetRowGroupCache._touch. Warm-up cost is the first pass
+        # over the dataset; every subsequent pass is fully disk-free unless
+        # the OS actually starts to swap.
         train_np = None
         y_train = None
         aux_train_np = None
@@ -2269,17 +2481,20 @@ def main() -> None:
 
     # --- graph-safe gradient clipping (C.3) ---
     def clip_grads(grads, max_norm):
-        """Clip gradients in MLX graph (no float() calls)."""
-        if max_norm <= 0:
-            return grads
+        """Clip gradients in MLX graph (no float() calls). Returns
+        ``(clipped_grads, grad_norm_pre_clip)`` -- caller decides whether to
+        use the norm (currently only tensorboard emits it)."""
         flat = [g.reshape(-1) for _, g in nn.utils.tree_flatten(grads) if g is not None]
         if not flat:
-            return grads
+            return grads, 0.0
         gn = mx.sqrt(sum(mx.sum(g**2) for g in flat))
+        if max_norm <= 0:
+            mx.eval(gn)
+            return grads, float(gn)
         scale = mx.where(gn > max_norm, max_norm / mx.maximum(gn, 1e-6), 1.0)
         grads = nn.utils.tree_map(lambda g: (g * scale) if g is not None else g, grads)
-        mx.eval(grads)
-        return grads
+        mx.eval(grads, gn)
+        return grads, float(gn)
 
     # --- train step with gradient accumulation (C.2) ---
     def train_step_accum(ob: dict, yb: mx.array, aux_targets: dict | None):
@@ -2296,6 +2511,11 @@ def main() -> None:
         loss_val = float(loss)
         return loss_val, aux_val, _to_fp32_grads(grads)
 
+    # Exposed to the training loop so per-step tensorboard scalars can log
+    # the un-clipped gradient magnitude every optimizer step, without a
+    # second graph traversal.
+    _last_step_metrics: dict = {}
+
     def optimizer_step(grads, n_examples):
         """Normalize accumulated grads, clip, update optimizer, advance gstep."""
         nonlocal gstep, optimizer_phase_step, scheduler_phase_step
@@ -2309,7 +2529,7 @@ def main() -> None:
             lambda g: (g / n_examples) if g is not None else g, grads
         )
         # Clip (C.3: graph-safe, no float())
-        grads = clip_grads(grads, a.max_grad_norm)
+        grads, grad_norm = clip_grads(grads, a.max_grad_norm)
         # LR schedule on optimizer step (C.4)
         if a.lr_schedule != "none":
             optimizer.learning_rate = lr_at(
@@ -2323,6 +2543,10 @@ def main() -> None:
         optimizer.update(model, grads)
         mx.eval(model.parameters())
         mx.eval(optimizer.state)
+        _last_step_metrics["grad_norm"] = grad_norm
+        _last_step_metrics["lr"] = float(optimizer.learning_rate)
+        _last_step_metrics["scheduler_phase_step"] = int(scheduler_phase_step)
+        _last_step_metrics["n_examples"] = int(n_examples)
 
     # Compile stable shuffled-batch forward/backward; clipping stays outside.
     if compile_active:
@@ -2468,24 +2692,67 @@ def main() -> None:
         )
 
     def _tbptt_batches():
-        """Yield the exact packed temporal batches used by the work plan."""
-        for temporal_batch in _tbptt_plan:
-            lane_observations, lane_labels, lane_decision_lengths, _, lane_aux_targets = (
-                _load_temporal_batch(
-                    temporal_batch,
-                    arrays=None,
-                    labels=None,
-                    aux_arrays=None,
-                    source="tbptt-cache",
-                )
-            )
-            yield (
+        """Yield the exact packed temporal batches used by the work plan,
+        with one-step lookahead: while MLX is running forward+backward on
+        step N the pool submits ``_load_temporal_batch`` for step N+1, so
+        the row_group decode (pyarrow C++ → releases the GIL) overlaps with
+        GPU compute. Cache capacity is 6 row_groups so the prefetched entry
+        does not evict what step N is still reading.
+        """
+        def _load_one(temporal_batch):
+            return _load_temporal_batch(
                 temporal_batch,
-                lane_observations,
-                lane_labels,
-                lane_decision_lengths,
-                lane_aux_targets,
+                arrays=None,
+                labels=None,
+                aux_arrays=None,
+                source="tbptt-cache",
             )
+
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="tbptt-prefetch") as pool:
+            if not _tbptt_plan:
+                return
+            current_future = pool.submit(_load_one, _tbptt_plan[0])
+            for i, temporal_batch in enumerate(_tbptt_plan):
+                # Kick off the next load before waiting on the current one.
+                next_future = (
+                    pool.submit(_load_one, _tbptt_plan[i + 1])
+                    if i + 1 < len(_tbptt_plan)
+                    else None
+                )
+                lane_observations, lane_labels, lane_decision_lengths, _, lane_aux_targets = (
+                    current_future.result()
+                )
+                yield (
+                    temporal_batch,
+                    lane_observations,
+                    lane_labels,
+                    lane_decision_lengths,
+                    lane_aux_targets,
+                )
+                current_future = next_future
+
+    # ---- tensorboard writer -------------------------------------------------
+    # Emits scalars into a per-run directory under ``runs/``. In a second
+    # shell the user runs ``uv run tensorboard --logdir runs`` and opens
+    # the local web UI while training is still writing. The writer is
+    # created lazily so a missing tensorboard package (e.g. slimmed Kaggle
+    # image) does not break training.
+    _tb_writer = None
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+        _tb_run_name = (
+            os.path.splitext(os.path.basename(a.out))[0] + "_" + str(int(time.time()))
+        )
+        _tb_run_dir = os.path.join("runs", _tb_run_name)
+        os.makedirs(_tb_run_dir, exist_ok=True)
+        _tb_writer = SummaryWriter(log_dir=_tb_run_dir)
+        print(
+            f"[tb] tensorboard logdir: {_tb_run_dir} "
+            "(open with: uv run tensorboard --logdir runs)",
+            flush=True,
+        )
+    except ImportError:
+        print("[tb] tensorboard not installed, metrics logging disabled", flush=True)
 
     # ---- training loop ----
     _running_loss: float = 0.0
@@ -2498,6 +2765,71 @@ def main() -> None:
     _accum_loss_sum: float = 0.0
     _accum_aux_loss_sum: float = 0.0
     _tbptt_memories: dict[int, mx.array] = {}
+    _tb_last_step_ts = time.perf_counter()
+
+    def _tb_log_step(loss_val: float, aux_val: float, micro_n: int):
+        """One per-optimizer-step scalar bundle written to tensorboard.
+
+        Writes the loss (running-mean numerator over accumulation window
+        divided by n_examples so the y-axis is comparable across accum_steps),
+        aux loss, gradient norm (pre-clip), current LR, memory footprint,
+        cache hit-rate to date, and the wall-clock step time. Keyed by
+        ``gstep`` so multiple runs align.
+        """
+        nonlocal _tb_last_step_ts
+        if _tb_writer is None:
+            return
+        now = time.perf_counter()
+        step_time_ms = (now - _tb_last_step_ts) * 1000.0
+        _tb_last_step_ts = now
+        try:
+            _tb_writer.add_scalar("train/loss", float(loss_val) / max(micro_n, 1), gstep)
+            if aux_active:
+                _tb_writer.add_scalar("train/aux_loss", float(aux_val), gstep)
+            gm = _last_step_metrics.get("grad_norm")
+            if gm is not None and np.isfinite(gm):
+                _tb_writer.add_scalar("train/grad_norm", float(gm), gstep)
+            _tb_writer.add_scalar(
+                "train/lr", float(_last_step_metrics.get("lr", 0.0)), gstep
+            )
+            _tb_writer.add_scalar(
+                "train/examples_per_step",
+                int(_last_step_metrics.get("n_examples", micro_n)),
+                gstep,
+            )
+            _tb_writer.add_scalar("train/step_time_ms", float(step_time_ms), gstep)
+            _tb_writer.add_scalar(
+                "train/scheduler_phase_step",
+                int(_last_step_metrics.get("scheduler_phase_step", 0)),
+                gstep,
+            )
+            try:
+                _tb_writer.add_scalar(
+                    "sys/mlx_peak_memory_gib",
+                    float(mx.get_peak_memory()) / (1024**3),
+                    gstep,
+                )
+            except Exception:
+                pass
+            try:
+                import psutil as _psutil_step
+                _tb_writer.add_scalar(
+                    "sys/host_memory_percent",
+                    float(_psutil_step.virtual_memory().percent),
+                    gstep,
+                )
+            except Exception:
+                pass
+            if _tbptt_row_group_cache is not None:
+                _cs = _tbptt_row_group_cache.report()
+                _tot = _cs["hits"] + _cs["misses"]
+                _rate = (_cs["hits"] / _tot * 100.0) if _tot else 0.0
+                _tb_writer.add_scalar("cache/hit_rate_pct", float(_rate), gstep)
+                _tb_writer.add_scalar("cache/resident_row_groups", int(_cs["resident_row_groups"]), gstep)
+                _tb_writer.add_scalar("cache/evictions", int(_cs["evictions"]), gstep)
+        except Exception:
+            # Never let TB logging break training.
+            pass
 
     validation_batches = (
         len(_val_tbptt_plan)
@@ -2684,6 +3016,7 @@ def main() -> None:
                     _running_loss += _accum_loss_sum
                     _running_aux_loss += _accum_aux_loss_sum
                     _running_n += _accum_examples
+                    _tb_log_step(_accum_loss_sum, _accum_aux_loss_sum / max(_accum_examples, 1), _accum_examples)
                     _accum_grads = None
                     _accum_examples = 0
                     _accum_loss_sum = 0.0
@@ -2748,6 +3081,7 @@ def main() -> None:
                 _running_loss += loss_val
                 _running_aux_loss += aux_val * micro_n
                 _running_n += micro_n
+                _tb_log_step(loss_val, aux_val, micro_n)
 
             ep_micro += 1
             if _compile_pending:
@@ -3072,6 +3406,32 @@ def main() -> None:
             f"gstep={gstep:,}",
             flush=True,
         )
+        if _tb_writer is not None:
+            _tb_writer.add_scalar("val/acc", float(acc), ep + 1)
+            _tb_writer.add_scalar("val/equiv", float(eq), ep + 1)
+            _tb_writer.add_scalar("val/top3", float(t3), ep + 1)
+            _tb_writer.add_scalar("val/atk", float(atk), ep + 1)
+            _tb_writer.add_scalar("val/ko", float(ko), ep + 1)
+            _tb_writer.add_scalar("val/loss", float(vloss / max(tot, 1)), ep + 1)
+            _tb_writer.add_scalar("val/epoch_time_s", float(ep_time), ep + 1)
+            _tb_writer.add_scalar(
+                "train/running_loss", float(_running_loss / max(_running_n, 1)),
+                ep + 1,
+            )
+            if aux_active:
+                _tb_writer.add_scalar(
+                    "train/running_aux_loss",
+                    float(_running_aux_loss / max(_running_n, 1)),
+                    ep + 1,
+                )
+            if aux_metrics is not None:
+                for _k, _v in aux_metrics.items():
+                    _tb_writer.add_scalar(f"aux/{_k}", float(_v), ep + 1)
+            _tb_writer.add_scalar(
+                "train/lr", float(optimizer.learning_rate), ep + 1
+            )
+            _tb_writer.add_scalar("train/gstep", int(gstep), ep + 1)
+            _tb_writer.flush()
 
         _progress_bar.stop()
 
@@ -3086,10 +3446,54 @@ def main() -> None:
             f"[bc-train-mlx] best checkpoint exported to {a.export_final}",
             flush=True,
         )
+    if _tbptt_row_group_cache is not None:
+        stats = _tbptt_row_group_cache.report()
+        total = stats["hits"] + stats["misses"]
+        hit_rate = (stats["hits"] / total * 100.0) if total else 0.0
+        print(
+            f"[cache] row_group cache: hits={stats['hits']:,} "
+            f"misses={stats['misses']:,} hit_rate={hit_rate:.1f}% "
+            f"resident={stats['resident_row_groups']} rg "
+            f"evictions={stats['evictions']:,} "
+            f"decoded={stats['bytes_loaded'] / (1024**2):.1f} MiB",
+            flush=True,
+        )
     print(
         f"[bc-train-mlx] RESULT: best_val_acc={best:.4f} params={nparams:,} gstep={gstep}",
         flush=True,
     )
+    if _tb_writer is not None:
+        _tb_writer.add_scalar("summary/best_val_acc", float(best), 0)
+        _tb_writer.add_scalar("summary/final_gstep", int(gstep), 0)
+        # add_hparams turns this run into a directly-comparable row in
+        # tensorboard's HParams tab (across the whole suite / seed sweep).
+        # Only scalar-typed values are accepted.
+        hparams = {
+            "batch": int(a.batch),
+            "tbptt_chunk": int(a.tbptt_chunk),
+            "lr": float(a.lr),
+            "warmup_steps": int(a.warmup_steps),
+            "aux_ko_weight": float(a.aux_ko_weight),
+            "aux_prize_weight": float(a.aux_prize_weight),
+            "aux_terminal_weight": float(a.aux_terminal_weight),
+            "aux_return_weight": float(a.aux_return_weight),
+            "scratch_registers": int(a.scratch_registers),
+            "d_model": int(a.d_model),
+            "nhead": int(a.nhead),
+            "nlayers": int(a.nlayers),
+            "epochs": int(a.epochs),
+            "seed": int(a.seed),
+            "max_rows_per_day": int(a.max_rows_per_day or 0),
+            "top_elo": int(a.top_elo or 0),
+            "n_train_rows": int(n_train),
+            "n_val_rows": int(n_val),
+        }
+        try:
+            _tb_writer.add_hparams(hparams, {"hparam/best_val_acc": float(best)})
+        except Exception:
+            pass
+        _tb_writer.flush()
+        _tb_writer.close()
 
 
 if __name__ == "__main__":
