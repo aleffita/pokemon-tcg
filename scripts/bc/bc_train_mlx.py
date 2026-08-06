@@ -26,6 +26,7 @@ import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -946,13 +947,51 @@ def _apply_episode_filter(row_filter, episode_ids: np.ndarray) -> np.ndarray:
 
 
 class _ParquetRowGroupCache:
-    """LRU cache of decoded parquet row_groups. Pass 2 of the TBPTT streaming
-    loader reads from here so each row_group is decoded at most once per
-    residency.
+    """Hierarchical KV cache of decoded parquet row_groups.
+
+    Design (mirrors an LLM KV cache with hot/transient zones + spill tier):
+
+    * **Zone HOT (60% of resident)** — pinned. An entry is promoted here once
+      its per-entry hit count crosses ``_HOT_PROMOTION_HITS``. Hot entries
+      are immune to memory-pressure eviction; the intent is that things we
+      touch repeatedly (row_groups iterated every epoch) sit rent-free.
+    * **Zone TRANSIENT (40% of resident)** — pure LRU. New entries land here
+      and rotate under memory pressure. Rotation criterion is LRU because
+      within the transient window recency and frequency are correlated.
+    * **Opt-step protection** — during an ``in_opt_step()`` context, evictions
+      are suppressed. MLX's forward+backward activation peak briefly pushes
+      host memory above the water-mark; we don't want the row_group we just
+      finished reading to be evicted mid-step and re-decoded on the next.
+    * **SSD tier** — an evicted transient entry is spilled to
+      ``<scratch>/<key>.npz`` before its RAM buffer is released. A subsequent
+      miss checks the SSD tier first; a hit there re-hydrates directly from
+      disk instead of re-decoding the parquet row_group (cheaper on
+      compressed columnar data, and on unified-memory Macs the .npz reads
+      go through the block cache anyway).
+    * **Device-aware pressure probe** — on unified memory (M-series /
+      ``mx.metal``) we probe host memory percent because RAM and VRAM share
+      one pool. On x86 + discrete accelerator (A100) we would probe VRAM
+      via ``mx.cuda`` or, absent MLX support, delegate to ``torch.cuda``.
+      The probe returns ``True`` when the OS is about to swap or the
+      accelerator is about to OOM.
 
     Keyed by ``(file_idx, row_group_idx)``. Each value is a dict of
     ``column_name -> np.ndarray`` already reshaped by ``_read_batch_column``.
     """
+
+    # macOS starts compressing / swapping around 85% of system memory used
+    # (Activity Monitor's "yellow" memory-pressure band). On unified memory
+    # this is our combined RAM+VRAM ceiling.
+    _HIGH_WATERMARK_PCT = 85.0
+    # Number of hits an entry must accumulate before promotion to the hot
+    # zone. Chosen so a row_group touched at least twice (typical from
+    # multiple chunks per row_group in the TBPTT plan) can survive rotation.
+    _HOT_PROMOTION_HITS = 2
+    # Fraction of the current resident set reserved for hot pinning. Values
+    # near 1.0 approach full pinning (no rotation); near 0.0 approach pure
+    # LRU with no hot layer. 0.6 keeps enough working set warm without
+    # freezing the whole cache.
+    _HOT_ZONE_FRACTION = 0.6
 
     def __init__(
         self,
@@ -960,8 +999,11 @@ class _ParquetRowGroupCache:
         columns: list[str],
         shapes: dict[str, tuple],
         int_keys: set[str],
+        *,
+        ssd_spill_dir: str | None = None,
     ) -> None:
         import pyarrow.parquet as pq  # local to avoid startup cost when unused
+        from collections import OrderedDict
         self._pq = pq
         self._file_paths = file_paths
         # ParquetFile handles: opened lazily and thread-safe for concurrent
@@ -972,27 +1014,44 @@ class _ParquetRowGroupCache:
         self._columns = list(columns)
         self._shapes = shapes
         self._int_keys = int_keys
-        # OrderedDict preserves insertion order for LRU eviction. The cache
-        # grows on-demand and evicts strictly under host-memory pressure --
-        # no arbitrary capacity, no preload phase. Same design as an LLM's
-        # KV cache: keep everything we can afford, drop the coldest when
-        # the OS is about to swap.
-        from collections import OrderedDict
-        self._cache: OrderedDict[
+        # Two OrderedDicts model the tiers. ``_transient`` is LRU (oldest at
+        # front, newest at back). ``_hot`` order does not matter for
+        # eviction but preserves insertion order for a stable report.
+        self._transient: OrderedDict[
             tuple[int, int], dict[str, np.ndarray]
         ] = OrderedDict()
-        # Fine-grained lock: guards _cache and _pq_files structure mutations.
-        # pyarrow decode itself releases the GIL and is thread-safe per file,
-        # so the lock is held only during the O(1) hash / list ops -- the
-        # slow decode runs unlocked so a prefetch thread and the main thread
-        # can genuinely overlap I/O with GPU work.
+        self._hot: OrderedDict[
+            tuple[int, int], dict[str, np.ndarray]
+        ] = OrderedDict()
+        # Per-entry hit counters. Kept for evicted entries too so a later
+        # re-load can restore its hot status without waiting for the counter
+        # to climb again.
+        self._hits_by_key: dict[tuple[int, int], int] = {}
+        # SSD spill tier. When an entry rotates out of RAM we write it as a
+        # single .npz alongside its key. On miss we check disk before
+        # re-decoding parquet. Directory is per-cache so train and val do
+        # not share spill files (they may hold different column subsets).
+        if ssd_spill_dir is not None:
+            os.makedirs(ssd_spill_dir, exist_ok=True)
+        self._ssd_spill_dir = ssd_spill_dir
+        self._ssd_keys: set[tuple[int, int]] = set()
+        # Fine-grained lock: guards _transient / _hot / _hits_by_key / stats.
+        # The pyarrow decode itself releases the GIL and runs unlocked so
+        # the prefetch thread and the main thread genuinely overlap I/O
+        # with GPU work.
         self._lock = threading.Lock()
-        # Instrumentation. All counters guarded by the same lock so the
-        # end-of-training report is consistent even with the prefetch
-        # thread hitting _touch concurrently.
+        # Reentrant depth counter so nested ``in_opt_step`` contexts work
+        # (e.g. gradient accumulation calls the forward path more than once
+        # per optimizer step, each protected). Non-zero => suppress
+        # eviction.
+        self._opt_step_depth = 0
+        # Instrumentation.
         self._hits = 0
         self._misses = 0
         self._evictions = 0
+        self._promotions = 0
+        self._ssd_hits = 0
+        self._ssd_spills = 0
         self._bytes_loaded = 0
         try:
             import psutil as _psutil  # noqa: F401 -- probe availability
@@ -1000,21 +1059,34 @@ class _ParquetRowGroupCache:
         except ImportError:
             self._pressure_probe = False
 
-    # macOS starts compressing / swapping around 85% of system memory used
-    # (Activity Monitor's "yellow" memory-pressure band). Below that we are
-    # safe to keep growing the cache; above it, evict the coldest row_groups
-    # until we drop back under. This is a system-level threshold, not a
-    # user-tunable knob -- if a different runtime (CUDA on A100, x86 host
-    # with distinct VRAM/RAM budgets) needs different accounting, add a
-    # device probe here and query it instead.
-    _HIGH_WATERMARK_PCT = 85.0
+    # ---- opt-step protection ------------------------------------------------
+    @contextmanager
+    def in_opt_step(self):
+        """Suppress eviction while the caller is inside a forward/backward /
+        optimizer.update. Reentrant. Exit resumes normal pressure eviction.
+        """
+        with self._lock:
+            self._opt_step_depth += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._opt_step_depth = max(0, self._opt_step_depth - 1)
 
+    # ---- pressure probe (device-aware) --------------------------------------
     def _under_pressure(self) -> bool:
+        # Unified-memory devices (M-series Macs) share RAM and VRAM; probing
+        # host memory percent is the correct signal. For discrete VRAM the
+        # right probe is ``mx.metal.get_active_memory()`` divided by the
+        # device limit, or ``torch.cuda.mem_get_info()``. Add per-device
+        # branches here when a run targets an accelerator with a separate
+        # VRAM pool.
         if not self._pressure_probe:
             return False
         import psutil
         return psutil.virtual_memory().percent >= self._HIGH_WATERMARK_PCT
 
+    # ---- pyarrow helpers ----------------------------------------------------
     def _open(self, file_idx: int):
         with self._lock:
             pf = self._pq_files.get(file_idx)
@@ -1028,13 +1100,8 @@ class _ParquetRowGroupCache:
     ) -> dict[str, np.ndarray]:
         pf = self._open(file_idx)
         table = pf.read_row_group(row_group_idx, columns=self._columns)
-        # Best-effort byte accounting: sum the decoded numpy buffer sizes below.
         rg_bytes = 0
-        # read_row_group returns a Table with one batch per column-chunk. Turn
-        # each column into its final numpy layout via the shared helper.
         rg_dict: dict[str, np.ndarray] = {}
-        # Combine chunks so _read_batch_column can operate on a single
-        # RecordBatch (its interface expects a batch, not a table).
         record_batch = table.combine_chunks().to_batches()
         if not record_batch:
             for c in self._columns:
@@ -1057,35 +1124,127 @@ class _ParquetRowGroupCache:
             self._bytes_loaded += rg_bytes
         return rg_dict
 
+    # ---- SSD spill tier -----------------------------------------------------
+    def _ssd_path(self, key: tuple[int, int]) -> str:
+        assert self._ssd_spill_dir is not None
+        return os.path.join(
+            self._ssd_spill_dir, f"rg_{key[0]}_{key[1]}.npz"
+        )
+
+    def _spill_to_ssd(
+        self, key: tuple[int, int], rg: dict[str, np.ndarray]
+    ) -> bool:
+        if self._ssd_spill_dir is None:
+            return False
+        try:
+            np.savez(self._ssd_path(key), **rg)
+            return True
+        except OSError:
+            # Disk full or permission trouble -- silently drop the entry.
+            return False
+
+    def _load_from_ssd(
+        self, key: tuple[int, int]
+    ) -> dict[str, np.ndarray] | None:
+        if self._ssd_spill_dir is None:
+            return None
+        if key not in self._ssd_keys:
+            return None
+        try:
+            with np.load(self._ssd_path(key)) as npz:
+                return {c: np.array(npz[c]) for c in npz.files}
+        except (OSError, KeyError):
+            return None
+
+    # ---- eviction -----------------------------------------------------------
+    def _rebalance_and_evict_locked(self) -> None:
+        """Called under ``self._lock`` from the miss path. Evicts from the
+        transient tier until host is below the water-mark, spilling each
+        evicted entry to SSD if the spill dir is configured. Hot tier is
+        never evicted here -- it's the whole point of promotion. Callers
+        must hold the lock.
+        """
+        if self._opt_step_depth > 0:
+            return
+        while self._under_pressure() and self._transient:
+            key, rg = self._transient.popitem(last=False)
+            self._evictions += 1
+            # Attempt SSD spill BEFORE releasing the reference so a partial
+            # write does not lose the entry silently. Success adds to
+            # _ssd_keys, failure just drops the entry.
+            if self._spill_to_ssd(key, rg):
+                self._ssd_spills += 1
+                self._ssd_keys.add(key)
+
+    def _rebalance_zones_locked(self) -> None:
+        """Enforce hot/transient split according to ``_HOT_ZONE_FRACTION``.
+        Called under lock. If the hot zone has grown past its share, demote
+        the least-recently-promoted entries back to transient (they can be
+        re-promoted quickly if they stay warm).
+        """
+        total = len(self._hot) + len(self._transient)
+        hot_budget = int(total * self._HOT_ZONE_FRACTION)
+        while len(self._hot) > hot_budget and self._hot:
+            k, v = self._hot.popitem(last=False)
+            # Insert at the newest slot of the transient LRU -- a demoted
+            # entry gets a full cycle to prove itself before rotation.
+            self._transient[k] = v
+            self._transient.move_to_end(k)
+
+    # ---- primary touch (fast path + slow path) ------------------------------
     def _touch(self, key: tuple[int, int]) -> dict[str, np.ndarray]:
-        # Fast path: cached row_group under the lock (dict ops are cheap).
+        # Fast path A: hot tier hit.
         with self._lock:
-            rg = self._cache.get(key)
+            rg = self._hot.get(key)
             if rg is not None:
-                self._cache.move_to_end(key)
                 self._hits += 1
+                self._hits_by_key[key] = self._hits_by_key.get(key, 0) + 1
                 return rg
-        # Slow path: decode outside the lock so the prefetch thread does not
-        # block the main thread's own cache reads while pyarrow is running.
+            # Fast path B: transient tier hit -> update recency and check
+            # for promotion.
+            rg = self._transient.get(key)
+            if rg is not None:
+                self._transient.move_to_end(key)
+                self._hits += 1
+                new_hits = self._hits_by_key.get(key, 0) + 1
+                self._hits_by_key[key] = new_hits
+                if new_hits >= self._HOT_PROMOTION_HITS:
+                    del self._transient[key]
+                    self._hot[key] = rg
+                    self._promotions += 1
+                    self._rebalance_zones_locked()
+                return rg
+
+        # Slow path 1: try the SSD spill tier before touching parquet again.
+        ssd_rg = self._load_from_ssd(key)
+        if ssd_rg is not None:
+            with self._lock:
+                # Concurrent load may have already re-hydrated the entry.
+                for tier in (self._hot, self._transient):
+                    existing = tier.get(key)
+                    if existing is not None:
+                        self._hits += 1
+                        return existing
+                self._transient[key] = ssd_rg
+                self._hits += 1
+                self._ssd_hits += 1
+                self._hits_by_key[key] = self._hits_by_key.get(key, 0) + 1
+                self._rebalance_and_evict_locked()
+            return ssd_rg
+
+        # Slow path 2: decode from parquet. Runs unlocked so the prefetch
+        # thread and the main thread can genuinely overlap.
         rg_loaded = self._load_rg(*key)
         with self._lock:
-            # Another thread may have finished the same key concurrently
-            # (prefetch + main both requesting the same row_group). Prefer
-            # the entry that was already cached to keep the LRU consistent.
-            existing = self._cache.get(key)
-            if existing is not None:
-                self._cache.move_to_end(key)
-                self._hits += 1
-                return existing
-            self._cache[key] = rg_loaded
+            for tier in (self._hot, self._transient):
+                existing = tier.get(key)
+                if existing is not None:
+                    self._hits += 1
+                    return existing
+            self._transient[key] = rg_loaded
             self._misses += 1
-            # Pressure-driven eviction: drop the LRU tail one row_group at a
-            # time until the host is no longer above _HIGH_WATERMARK_PCT.
-            # A cold row_group evicted now is cheap to re-decode later; a
-            # swap event costs orders of magnitude more.
-            while self._under_pressure() and len(self._cache) > 1:
-                self._cache.popitem(last=False)
-                self._evictions += 1
+            self._hits_by_key[key] = self._hits_by_key.get(key, 0) + 1
+            self._rebalance_and_evict_locked()
         return rg_loaded
 
     def report(self) -> dict[str, int]:
@@ -1095,8 +1254,14 @@ class _ParquetRowGroupCache:
                 "hits": self._hits,
                 "misses": self._misses,
                 "evictions": self._evictions,
+                "promotions": self._promotions,
+                "ssd_hits": self._ssd_hits,
+                "ssd_spills": self._ssd_spills,
                 "bytes_loaded": self._bytes_loaded,
-                "resident_row_groups": len(self._cache),
+                "resident_row_groups": len(self._hot) + len(self._transient),
+                "resident_hot": len(self._hot),
+                "resident_transient": len(self._transient),
+                "ssd_resident": len(self._ssd_keys),
             }
 
     def read_rows(
@@ -1949,33 +2114,60 @@ def main() -> None:
 
     _use_tbptt = bool(a.tbptt_chunk > 0)
 
-    # ---- validation split: always fully materialized in RAM (same as the
-    # old loader -- validation needs random access for TBPTT chunk replay and
-    # for the whole-split metric pass either way) ----
-    val_columns = list(keys) + ["y", "is_attack"]
-    if a.dedup:
-        val_columns.append("opt_group")
-    if aux_active:
-        val_columns.extend(_AUX_COLUMNS)
+    # ---- validation split: streamed via a dedicated KV row_group cache ----
+    # No pre-materialization. Scan pass 1 records per-val-row
+    # (file_idx, row_group_idx, offset). The val loop reads rows on demand
+    # via _val_row_group_cache (same hierarchical class as train, distinct
+    # instance so the two zones do not compete). Per-lane extras (y,
+    # is_attack, is_ko, opt_group) are accumulated during the val loop
+    # from the fetched dicts and stitched back to row-order for the metrics
+    # pass right after.
     val_meta_columns = ["episode_id", "side", "step_id"]
-    val_all = _materialize_columns(
-        pa_dataset, val_columns + val_meta_columns, val_filter, enc_shapes, int_keys
+    (
+        val_meta,
+        _val_row_file_idx,
+        _val_row_group_idx,
+        _val_row_offset,
+        _val_file_paths,
+    ) = _scan_tbptt_locations(
+        pa_dataset, val_filter, enc_shapes, int_keys
     )
-    _apply_dedup_relabel(val_all)
-    n_val = len(val_all["y"])
+    n_val = int(len(val_meta["episode_id"]))
     if n_val == 0:
         raise RuntimeError(
             "validation split produced no rows; adjust --val-frac or the "
             "selected training days"
         )
-    val_np = {k: val_all[k] for k in keys}
-    y_val = val_all["y"]
-    gv_np = val_all.get("opt_group") if a.dedup else None
-    aux_val_np = {c: val_all[c] for c in _AUX_COLUMNS} if aux_active else None
-    vi_atk = val_all["is_attack"].astype(bool)
-    oa_v = val_np["opt_attr"]
-    vi_ko = (oa_v[..., WK_LO] >= 0.5).any(axis=1)
-    val_meta = {k: val_all[k] for k in val_meta_columns}
+    val_cache_columns = list(keys) + ["y", "is_attack"]
+    if a.dedup:
+        val_cache_columns.append("opt_group")
+    if aux_active:
+        val_cache_columns.extend(_AUX_COLUMNS)
+    _val_spill_dir = os.path.join(
+        os.path.dirname(a.out) or ".", ".cache_spill", "val"
+    )
+    _val_row_group_cache = _ParquetRowGroupCache(
+        file_paths=_val_file_paths,
+        columns=val_cache_columns,
+        shapes=enc_shapes,
+        int_keys=int_keys,
+        ssd_spill_dir=_val_spill_dir,
+    )
+    _val_cache_backend = (
+        _val_row_group_cache,
+        _val_row_file_idx,
+        _val_row_group_idx,
+        _val_row_offset,
+    )
+    # No pre-materialized arrays. Metrics arrays (y_val / vi_atk / vi_ko /
+    # gv_np) are rebuilt from streamed batches inside the val loop and
+    # projected back to row-order via the plan's row_permutation.
+    val_np = None
+    y_val = None
+    aux_val_np = None
+    gv_np = None
+    vi_atk = None
+    vi_ko = None
 
     # ---- training split ------------------------------------------------------
     # TBPTT path is streamed row_group-by-row_group via a two-pass loader:
@@ -2001,11 +2193,15 @@ def main() -> None:
             pa_dataset, train_filter, enc_shapes, int_keys
         )
         n_train = int(len(train_meta["episode_id"]))
+        _train_spill_dir = os.path.join(
+            os.path.dirname(a.out) or ".", ".cache_spill", "train"
+        )
         _tbptt_row_group_cache = _ParquetRowGroupCache(
             file_paths=_tbptt_file_paths,
             columns=train_columns,
             shapes=enc_shapes,
             int_keys=int_keys,
+            ssd_spill_dir=_train_spill_dir,
         )
         # No preload phase. The cache grows on-demand as _load_temporal_batch
         # touches row_groups and only evicts under host-memory pressure --
@@ -2199,17 +2395,27 @@ def main() -> None:
         return ob, yb, aux_targets
 
     def _val_batches(batch_size: int):
-        """Slice the fully-materialized validation split into fixed batches."""
-        for i in range(0, n_val, batch_size):
-            j = min(n_val, i + batch_size)
-            chunk = {k: val_np[k][i:j] for k in keys}
-            chunk["y"] = y_val[i:j]
-            if a.dedup:
-                chunk["opt_group"] = gv_np[i:j]
-            if aux_active:
-                for c in _AUX_COLUMNS:
-                    chunk[c] = aux_val_np[c][i:j]
-            yield _to_mx_batch(chunk)
+        """Stream the validation split as fixed-size microbatches directly
+        from parquet, in the same manner as ``_stream_train_microbatches``.
+        Yields ``(mx_batch, raw_chunk)`` so the non-TBPTT val loop can
+        accumulate ``y`` / ``is_attack`` / ``opt_attr`` (for is_ko) /
+        ``opt_group`` from the same chunk without a second scan.
+        """
+        cols = list(keys) + ["y", "is_attack"]
+        if a.dedup:
+            cols.append("opt_group")
+        if aux_active:
+            cols.extend(_AUX_COLUMNS)
+        for chunk in _stream_train_microbatches(
+            pa_dataset,
+            cols,
+            val_filter,
+            enc_shapes,
+            int_keys,
+            batch_size,
+            seed_key=[int(a.seed), 0, 0, 0],
+        ):
+            yield _to_mx_batch(chunk), chunk
 
     # --- loss + grad function ---
     # aux_targets is always the 3rd positional arg (None when aux is
@@ -2583,23 +2789,28 @@ def main() -> None:
         label_base: int = 0,
         aux_arrays: dict[str, np.ndarray] | None = None,
         source: str = "materialized",
+        cache_backend: tuple | None = None,
+        emit_fetched: bool = False,
     ):
         """Materialize one pre-planned temporal batch with lane-local row order.
 
         Two backing modes are supported:
 
-        * ``source="materialized"`` (validation split, and the non-TBPTT train
-          path via the shared ``_stream_train_microbatches``): ``arrays``,
-          ``labels`` and ``aux_arrays`` are in-RAM dict/ndarray inputs, sliced
-          with the chunk's row indices.
-        * ``source="tbptt-cache"`` (TBPTT train path): ``arrays`` / ``labels``
-          / ``aux_arrays`` are ignored; each chunk's rows are fetched on
-          demand from ``_tbptt_row_group_cache`` and correlated with the
-          location arrays ``_tbptt_row_file_idx`` / ``_tbptt_row_group_idx``
-          / ``_tbptt_row_offset``.
+        * ``source="materialized"`` (in-RAM caller-owned arrays for the
+          non-TBPTT train path via ``_stream_train_microbatches``):
+          ``arrays``, ``labels`` and ``aux_arrays`` are sliced with the
+          chunk's row indices.
+        * ``source="tbptt-cache"`` (streaming row_group cache): rows are
+          fetched on demand from ``cache_backend`` -- a 4-tuple
+          ``(cache, file_idx, rg_idx, offset)``. When ``cache_backend`` is
+          None the train backend from the enclosing scope is used.
 
-        Returned tuple is always five elements: ``(lane_observations,
-        lane_labels, lane_decision_lengths, lane_rows, lane_aux_targets)``.
+        Returned tuple is 5 elements by default:
+        ``(lane_observations, lane_labels, lane_decision_lengths,
+        lane_rows, lane_aux_targets)``. With ``emit_fetched=True`` (cache
+        mode only) a 6th element ``lane_fetched`` is appended -- the raw
+        per-lane fetched dicts. The val loop uses it to accumulate y,
+        is_attack, is_ko and opt_group without a second cache read.
         """
         lane_observations: list[dict[str, mx.array]] = []
         lane_labels: list[mx.array] = []
@@ -2610,15 +2821,26 @@ def main() -> None:
             if aux_arrays is not None or source == "tbptt-cache" and aux_active
             else None
         )
+        lane_fetched: list[dict[str, np.ndarray]] | None = (
+            [] if (source == "tbptt-cache" and emit_fetched) else None
+        )
+        if source == "tbptt-cache":
+            if cache_backend is not None:
+                cache_obj, cb_file_idx, cb_rg_idx, cb_offset = cache_backend
+            else:
+                cache_obj = _tbptt_row_group_cache
+                cb_file_idx = _tbptt_row_file_idx
+                cb_rg_idx = _tbptt_row_group_idx
+                cb_offset = _tbptt_row_offset
         for chunk in temporal_batch:
             chunk_arr = np.concatenate(chunk.decisions)
             lane_rows.append(chunk_arr)
             if source == "tbptt-cache":
-                fetched = _tbptt_row_group_cache.read_rows(
+                fetched = cache_obj.read_rows(
                     chunk_arr,
-                    _tbptt_row_file_idx,
-                    _tbptt_row_group_idx,
-                    _tbptt_row_offset,
+                    cb_file_idx,
+                    cb_rg_idx,
+                    cb_offset,
                 )
                 # dedup label relabel is per-chunk (same as the .npy loader);
                 # this is exact because the remap is row-local.
@@ -2650,6 +2872,8 @@ def main() -> None:
                 lane_decision_lengths.append(
                     [len(decision_rows) for decision_rows in chunk.decisions]
                 )
+                if lane_fetched is not None:
+                    lane_fetched.append(fetched)
                 continue
             # materialized path
             lane_observations.append(
@@ -2682,6 +2906,15 @@ def main() -> None:
                 )
             lane_decision_lengths.append(
                 [len(decision_rows) for decision_rows in chunk.decisions]
+            )
+        if emit_fetched:
+            return (
+                lane_observations,
+                lane_labels,
+                lane_decision_lengths,
+                lane_rows,
+                lane_aux_targets,
+                lane_fetched,
             )
         return (
             lane_observations,
@@ -2820,13 +3053,23 @@ def main() -> None:
                 )
             except Exception:
                 pass
-            if _tbptt_row_group_cache is not None:
-                _cs = _tbptt_row_group_cache.report()
+            for _tag, _c in (
+                ("train", _tbptt_row_group_cache),
+                ("val", _val_row_group_cache if _use_tbptt else None),
+            ):
+                if _c is None:
+                    continue
+                _cs = _c.report()
                 _tot = _cs["hits"] + _cs["misses"]
                 _rate = (_cs["hits"] / _tot * 100.0) if _tot else 0.0
-                _tb_writer.add_scalar("cache/hit_rate_pct", float(_rate), gstep)
-                _tb_writer.add_scalar("cache/resident_row_groups", int(_cs["resident_row_groups"]), gstep)
-                _tb_writer.add_scalar("cache/evictions", int(_cs["evictions"]), gstep)
+                _tb_writer.add_scalar(f"cache_{_tag}/hit_rate_pct", float(_rate), gstep)
+                _tb_writer.add_scalar(f"cache_{_tag}/resident_hot", int(_cs["resident_hot"]), gstep)
+                _tb_writer.add_scalar(f"cache_{_tag}/resident_transient", int(_cs["resident_transient"]), gstep)
+                _tb_writer.add_scalar(f"cache_{_tag}/promotions", int(_cs["promotions"]), gstep)
+                _tb_writer.add_scalar(f"cache_{_tag}/evictions", int(_cs["evictions"]), gstep)
+                _tb_writer.add_scalar(f"cache_{_tag}/ssd_hits", int(_cs["ssd_hits"]), gstep)
+                _tb_writer.add_scalar(f"cache_{_tag}/ssd_spills", int(_cs["ssd_spills"]), gstep)
+                _tb_writer.add_scalar(f"cache_{_tag}/ssd_resident", int(_cs["ssd_resident"]), gstep)
         except Exception:
             # Never let TB logging break training.
             pass
@@ -3010,7 +3253,13 @@ def main() -> None:
 
                 # Accumulate in FP32 for numerical stability
                 if _micro_count % a.accum_steps == 0 or is_final_microbatch:
-                    optimizer_step(_accum_grads, _accum_examples)
+                    _cache_step_ctx = (
+                        _tbptt_row_group_cache.in_opt_step()
+                        if _tbptt_row_group_cache is not None
+                        else nullcontext()
+                    )
+                    with _cache_step_ctx:
+                        optimizer_step(_accum_grads, _accum_examples)
                     ep_step += 1
                     optimizer_updated = True
                     _running_loss += _accum_loss_sum
@@ -3075,7 +3324,13 @@ def main() -> None:
                         f"non-finite training loss at epoch={ep + 1}, "
                         f"microbatch={ep_micro + 1}"
                     )
-                optimizer_step(grads, micro_n)
+                _cache_step_ctx = (
+                    _tbptt_row_group_cache.in_opt_step()
+                    if _tbptt_row_group_cache is not None
+                    else nullcontext()
+                )
+                with _cache_step_ctx:
+                    optimizer_step(grads, micro_n)
                 ep_step += 1
                 optimizer_updated = True
                 _running_loss += loss_val
@@ -3175,6 +3430,10 @@ def main() -> None:
             validation_memories: dict[int, mx.array] = {}
             validation_rows: list[np.ndarray] = []
             validation_logits: list[np.ndarray] = []
+            validation_y: list[np.ndarray] = []
+            validation_is_attack: list[np.ndarray] = []
+            validation_is_ko: list[np.ndarray] = []
+            validation_opt_group: list[np.ndarray] = []
             aux_pred_val: dict[str, list[np.ndarray]] = defaultdict(list)
             aux_target_val: dict[str, list[np.ndarray]] = defaultdict(list)
             for val_batch, temporal_batch in enumerate(
@@ -3186,11 +3445,15 @@ def main() -> None:
                     lane_decision_lengths,
                     lane_rows,
                     lane_aux_targets,
+                    lane_fetched,
                 ) = _load_temporal_batch(
                     temporal_batch,
-                    val_np,
-                    y_val,
-                    aux_arrays=aux_val_np if aux_active else None,
+                    arrays=None,
+                    labels=None,
+                    aux_arrays=None,
+                    source="tbptt-cache",
+                    cache_backend=_val_cache_backend,
+                    emit_fetched=True,
                 )
                 lane_memory_in = [
                     (
@@ -3229,6 +3492,18 @@ def main() -> None:
                     validation_logits.append(
                         np.asarray(lane_logits[lane_index], dtype=np.float32)
                     )
+                    fetched = lane_fetched[lane_index]
+                    validation_y.append(fetched["y"].astype(np.int64))
+                    validation_is_attack.append(
+                        fetched["is_attack"].astype(bool)
+                    )
+                    validation_is_ko.append(
+                        (fetched["opt_attr"][..., WK_LO] >= 0.5).any(axis=1)
+                    )
+                    if a.dedup:
+                        validation_opt_group.append(
+                            fetched["opt_group"].astype(np.int32)
+                        )
                 if aux_active:
                     for key, value in aux_dict_all.items():
                         aux_pred_val[key].append(np.asarray(value, dtype=np.float32))
@@ -3251,7 +3526,14 @@ def main() -> None:
                     "temporal validation did not cover every validation row exactly once"
                 )
             lg_np = np.concatenate(validation_logits, axis=0)[row_permutation]
-            yb_np = y_val
+            yb_np = np.concatenate(validation_y)[row_permutation]
+            vi_atk = np.concatenate(validation_is_attack)[row_permutation]
+            vi_ko = np.concatenate(validation_is_ko)[row_permutation]
+            gv_np = (
+                np.concatenate(validation_opt_group, axis=0)[row_permutation]
+                if a.dedup
+                else None
+            )
             aux_metrics = (
                 _aux_metrics(
                     {k: np.concatenate(v) for k, v in aux_pred_val.items()},
@@ -3262,9 +3544,13 @@ def main() -> None:
             )
         else:
             logits_parts: list[np.ndarray] = []
+            y_parts: list[np.ndarray] = []
+            is_attack_parts: list[np.ndarray] = []
+            is_ko_parts: list[np.ndarray] = []
+            opt_group_parts: list[np.ndarray] = []
             aux_pred_val = defaultdict(list)
             aux_target_val = defaultdict(list)
-            for val_batch, (ob, _, aux_targets) in enumerate(
+            for val_batch, ((ob, _, aux_targets), raw_chunk) in enumerate(
                 _val_batches(a.val_batch_size), start=1
             ):
                 if aux_active:
@@ -3279,13 +3565,25 @@ def main() -> None:
                 else:
                     lg, _, _ = model.logits_value(ob)
                 logits_parts.append(np.asarray(lg, dtype=np.float32))
+                y_parts.append(raw_chunk["y"].astype(np.int64))
+                is_attack_parts.append(raw_chunk["is_attack"].astype(bool))
+                is_ko_parts.append(
+                    (raw_chunk["opt_attr"][..., WK_LO] >= 0.5).any(axis=1)
+                )
+                if a.dedup:
+                    opt_group_parts.append(raw_chunk["opt_group"].astype(np.int32))
                 _progress_bar.update(
                     _progress_task,
                     completed=val_batch,
                     unit=f"batch {val_batch:,}/{validation_batches:,}",
                 )
             lg_np = np.concatenate(logits_parts, axis=0)
-            yb_np = y_val
+            yb_np = np.concatenate(y_parts)
+            vi_atk = np.concatenate(is_attack_parts)
+            vi_ko = np.concatenate(is_ko_parts)
+            gv_np = (
+                np.concatenate(opt_group_parts, axis=0) if a.dedup else None
+            )
             aux_metrics = (
                 _aux_metrics(
                     {k: np.concatenate(v) for k, v in aux_pred_val.items()},
@@ -3331,7 +3629,7 @@ def main() -> None:
         eq: float = acc
         if gv_np is not None:
             am_cat = np.concatenate(am_all)
-            yv_group = gv_np[np.arange(n_val), y_val]
+            yv_group = gv_np[np.arange(n_val), yb_np]
             eq = float((gv_np[np.arange(n_val), am_cat] == yv_group).mean())
 
         _progress_bar.reset(
@@ -3446,18 +3744,25 @@ def main() -> None:
             f"[bc-train-mlx] best checkpoint exported to {a.export_final}",
             flush=True,
         )
-    if _tbptt_row_group_cache is not None:
-        stats = _tbptt_row_group_cache.report()
-        total = stats["hits"] + stats["misses"]
-        hit_rate = (stats["hits"] / total * 100.0) if total else 0.0
+    def _print_cache_report(tag: str, cache):
+        if cache is None:
+            return
+        s = cache.report()
+        total = s["hits"] + s["misses"]
+        hit_rate = (s["hits"] / total * 100.0) if total else 0.0
         print(
-            f"[cache] row_group cache: hits={stats['hits']:,} "
-            f"misses={stats['misses']:,} hit_rate={hit_rate:.1f}% "
-            f"resident={stats['resident_row_groups']} rg "
-            f"evictions={stats['evictions']:,} "
-            f"decoded={stats['bytes_loaded'] / (1024**2):.1f} MiB",
+            f"[cache-{tag}] hits={s['hits']:,} misses={s['misses']:,} "
+            f"hit_rate={hit_rate:.1f}% resident={s['resident_row_groups']} rg "
+            f"(hot={s['resident_hot']}/transient={s['resident_transient']}) "
+            f"promotions={s['promotions']:,} evictions={s['evictions']:,} "
+            f"ssd_hits={s['ssd_hits']:,} ssd_spills={s['ssd_spills']:,} "
+            f"ssd_resident={s['ssd_resident']} "
+            f"decoded={s['bytes_loaded'] / (1024**2):.1f} MiB",
             flush=True,
         )
+
+    _print_cache_report("train", _tbptt_row_group_cache)
+    _print_cache_report("val", _val_row_group_cache if _use_tbptt else None)
     print(
         f"[bc-train-mlx] RESULT: best_val_acc={best:.4f} params={nparams:,} gstep={gstep}",
         flush=True,
