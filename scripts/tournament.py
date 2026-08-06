@@ -144,7 +144,7 @@ def _find_or_create_deck(db, card_ids: list[int]) -> int:
     return deck_id
 
 
-def _get_test_decks(db) -> list[tuple[list[int], int | None]]:
+def _get_test_decks(db, source: str = "remote") -> list[tuple[list[int], int | None]]:
     """Get alternative decks for OUR agent's deck sweep only.
 
     Returns ``(card_ids, deck_id)`` tuples. The caller rewrites only
@@ -152,6 +152,12 @@ def _get_test_decks(db) -> list[tuple[list[int], int | None]]:
     callables are loaded once and their own deck files are never rewritten.
     deck_id may be None for the default deck if it has not been added to the
     DB yet. Entries are deduplicated by quantity-aware composition matching.
+
+    ``source`` selects the Elo tier the top decks are pulled from. ``remote``
+    (the default) reads ``deck_elo_daily`` rows populated from Kaggle replays,
+    which is what we have coverage for out of the box. ``local`` reads Elo
+    accumulated from local tournaments — only useful once local tournaments
+    have actually populated that table.
     """
     from collections import Counter
 
@@ -165,7 +171,7 @@ def _get_test_decks(db) -> list[tuple[list[int], int | None]]:
     if default_card_ids:
         seen_counters.append(Counter(default_card_ids))
 
-    top = db.get_top_decks(n=3, source='local')
+    top = db.get_top_decks(n=3, source=source)
     for d in top:
         deck_id = d["id"]
         known = db.conn.execute(
@@ -481,12 +487,25 @@ def run_matchup(env, our_agent, opp_agent, n_games: int):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--games", "-n", type=int, default=20, help="Games per opponent")
-    p.add_argument("--opponent", type=str, default=None,
-                   help="Single opponent path (skip tournament)")
+    p.add_argument("--opponent", type=str, default=None, action="append",
+                   help="Opponent path (submission tarball or agent main.py). "
+                        "May be repeated to select a custom opponent subset "
+                        "instead of iterating public_agents/.")
     p.add_argument("--note", type=str, default=None,
                    help="Annotation for this run (saved in SQLite)")
     p.add_argument("--no-sweep", action="store_true", default=False,
                    help="Disable deck sweep (only use default deck)")
+    p.add_argument("--sweep-source", choices=["remote", "local"], default="remote",
+                   help="Elo tier the sweep pulls its top decks from "
+                        "(default: remote, populated from Kaggle replays)")
+    p.add_argument("--skip-baselines", action="store_true", default=False,
+                   help="Skip the built-in random+first baseline opponents. "
+                        "Useful for round-robin runs where the noise floor "
+                        "was already measured elsewhere.")
+    p.add_argument("--report-json", type=str, default=None,
+                   help="Write the structured per-opponent/per-deck result "
+                        "table to this JSON path, so callers can consume "
+                        "results without scraping stdout.")
     p.add_argument("--txt-backup", action="store_true", default=False,
                    help="Also append results to eval_results.txt (backup)")
     p.add_argument(
@@ -523,11 +542,20 @@ def main():
                 cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), check=False)
         print("[auto-update] Remote data updated.\n")
 
-    # Baselines + public agents
-    opponents = [("random", "random"), ("first", "first")]
+    # Baselines + public agents. ``--opponent`` may be repeated to select a
+    # custom subset instead of iterating everything under public_agents/.
+    opponents = (
+        [] if args.skip_baselines
+        else [("random", "random"), ("first", "first")]
+    )
     if args.opponent:
-        label = os.path.basename(os.path.dirname(args.opponent)) if args.opponent.endswith("main.py") else os.path.basename(args.opponent)
-        opponents.append((label, args.opponent))
+        for opp_path in args.opponent:
+            label = (
+                os.path.basename(os.path.dirname(opp_path))
+                if opp_path.endswith("main.py")
+                else os.path.basename(opp_path)
+            )
+            opponents.append((label, opp_path))
     else:
         opponents.extend(
             (label, path)
@@ -547,7 +575,7 @@ def main():
             [(default_card_ids, None)] if default_card_ids is not None else []
         )
     else:
-        our_test_decks = _get_test_decks(db)
+        our_test_decks = _get_test_decks(db, source=args.sweep_source)
         default_card_ids = _read_deck_csv(os.path.join(AGENT_DIR, "deck.csv"))
 
     # Read original deck to restore after sweep
@@ -575,6 +603,7 @@ def main():
 
     total_w = total_l = total_d = 0
     rows = []
+    structured_rows: list[dict] = []
     all_game_results = []  # (label, deck_id, game_results) tuples
     start_time = time.time()
 
@@ -595,6 +624,15 @@ def main():
             opp_agent = resolve(opp_path)
         except Exception as e:
             rows.append((label, "ERROR", str(e)))
+            structured_rows.append({
+                "opponent_label": label,
+                "opponent_path": opp_path,
+                "deck_id": None,
+                "wins": 0, "losses": 0, "draws": 0,
+                "wr_pct": None,
+                "elapsed_s": 0.0,
+                "error": str(e),
+            })
             continue
 
         if do_sweep:
@@ -631,6 +669,15 @@ def main():
                 wr = w / max(w + l, 1) * 100
                 total_w += w; total_l += l; total_d += d
                 rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
+                structured_rows.append({
+                    "opponent_label": label,
+                    "opponent_path": opp_path,
+                    "deck_id": deck_id,
+                    "wins": w, "losses": l, "draws": d,
+                    "wr_pct": wr,
+                    "elapsed_s": elapsed,
+                    "error": None,
+                })
                 all_game_results.append((label, deck_id, game_results))
                 print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s)",
                       flush=True)
@@ -650,6 +697,15 @@ def main():
 
             deck_label = f"{label} [deck:{deck_id}]" if deck_id else label
             rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
+            structured_rows.append({
+                "opponent_label": label,
+                "opponent_path": opp_path,
+                "deck_id": deck_id,
+                "wins": w, "losses": l, "draws": d,
+                "wr_pct": wr,
+                "elapsed_s": elapsed,
+                "error": None,
+            })
             all_game_results.append((label, deck_id, game_results))
             print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s)",
                   flush=True)
@@ -669,6 +725,32 @@ def main():
             print(f"{row[0]:40s} {str(row[1]):>4s} {str(row[2]):>4s} {str(row[3]):>4s} {row[4]:>7.1f}% {row[5]:>5.0f}s")
     print("-" * len(header))
     print(f"{'OVERALL':40s} {total_w:>4d} {total_l:>4d} {total_d:>4d} {overall_wr:>7.1f}% {total_time:>5.0f}s")
+
+    # Structured report for programmatic consumers (suite scripts, dashboards).
+    # We already own the row data — no need for callers to scrape stdout.
+    if args.report_json:
+        import json as _json
+        report = {
+            "our_agent": our_path,
+            "sweep": do_sweep,
+            "sweep_source": args.sweep_source if do_sweep else None,
+            "games_per_opponent": args.games,
+            "note": args.note,
+            "rows": structured_rows,
+            "overall": {
+                "wins": total_w,
+                "losses": total_l,
+                "draws": total_d,
+                "wr_pct": overall_wr,
+                "elapsed_s": total_time,
+            },
+        }
+        os.makedirs(os.path.dirname(args.report_json) or ".", exist_ok=True)
+        tmp = f"{args.report_json}.tmp"
+        with open(tmp, "w") as f:
+            _json.dump(report, f, indent=2)
+        os.replace(tmp, args.report_json)
+        print(f"[tournament] report written: {args.report_json}", flush=True)
 
     # Deck performance summary (when sweep is active)
     if do_sweep and all_game_results:

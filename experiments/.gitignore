@@ -1,0 +1,3 @@
+# suite output — checkpoints, submission tarballs, JSON reports, logs
+# only the .sh script itself is versioned.
+bc_curriculum_suite/
