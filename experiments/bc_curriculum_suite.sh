@@ -271,8 +271,11 @@ pair_num=0
 
 RR_START=$(python3 -c "import time; print(time.time())")
 
-for i in $(seq 0 $((NTAGS - 1))); do
-  for j in $(seq $((i + 1)) $((NTAGS - 1))); do
+# Use bash arithmetic for-loops instead of $(seq); BSD seq on macOS
+# auto-detects reverse direction, so `seq 10 9` emits "10\n9" and the
+# last iteration would produce out-of-bounds + self-pair matchups.
+for ((i=0; i<NTAGS; i++)); do
+  for ((j=i+1; j<NTAGS; j++)); do
     pair_num=$((pair_num + 1))
     TAG_I="${TAGS[$i]}"
     TAG_J="${TAGS[$j]}"
