@@ -88,6 +88,65 @@ When deciding whether a change belongs in this task, use this order:
 4. the actual source snapshot;
 5. the historical inventory below.
 
+## Current phase log
+
+State as of 2026-08-07. This log records what has been implemented and validated on top of the handoff plan above. It is authoritative for operational state; the handoff below remains authoritative for scope.
+
+### Runtime split
+
+MLX for training. PyTorch FP16 for arena inference. Recurrent TBPTT is always on. No other paths are supported for this phase.
+
+### Trainer implemented (`scripts/bc/bc_train_mlx.py`)
+
+- FP16 model + FP16 data end-to-end, FP32 loss / reductions / accumulation / optimizer state
+- Muon on hidden matrix params, AdamW on embeddings/heads/vectors, explicit routing
+- Gradient accumulation with post-accumulation clip, single optimizer step per micro-batch group
+- Scheduler counts optimizer updates, resumable via `--optimizer-state resume --scheduler-state resume`
+- Full checkpoint payload (model, optimizer, scheduler_phase_step, arch_config, run_config, dataset_manifest, seed) with pickle round-trip validated on `--resume`
+- MLX random seeded (previously only numpy was seeded — caused untracked variance)
+- Additive attention mask (was boolean), MHA bias parity with the PyTorch reference, `padding_idx=0` semantics reproduced
+- Aux heads: `ko_bce`, `prize_mse`, `terminal_bce`, `return_mse` (weights fixed, not tuned by hand — Kendall uncertainty weighting is deferred backlog)
+- Hierarchical parquet KV cache with hot/transient tiers + SSD spill; `in_opt_step()` reentrant context suppresses eviction during forward/backward so activation peaks do not thrash a resident row group mid-microbatch
+- Validation split streams through the same KV cache (no materialization) — the previous ~22 GiB val RAM claim is gone
+- Full per-optimizer-step tensorboard instrumentation (loss, grad_norm, lr, aux losses, cache stats, host + MLX memory) at `runs/<tag>_<epoch>/`
+- Data selection: `--days <list>`, `--last-n-days N`, `--max-rows-per-day N`, `--top-elo N` (agent-Elo curriculum, source='remote' from Kaggle replays)
+
+### Tournament CLI (`scripts/tournament.py`)
+
+- `--sweep-source {remote,local}` (default remote): Elo tier the OUR-side deck sweep pulls its top decks from
+- `--opponent` accepts multiple paths (action=append) — pick a custom opponent subset without falling into iterate-all mode
+- `--skip-baselines`: drop the built-in `random`+`first` opponents (used by round-robin between trained models)
+- `--report-json PATH`: emit structured per-opponent/per-deck rows + overall summary as JSON, so callers do not parse stdout
+
+### Experiments convention
+
+`experiments/` is versioned. Each experiment is one self-contained `.sh` script at that root. Generated output (checkpoints, tarballs, JSON reports, logs, aggregated `results.md`) goes under `experiments/<name>/` and is gitignored. Scripts must be resume-aware at every level.
+
+### BC curriculum ablation (2026-08-06 – 2026-08-07)
+
+Script: `experiments/bc_curriculum_suite.sh`. Matrix: (1d, 3d, 5d) × (1ep, 10ep) × (top-elo OFF, ON), 30k rows/day, batch 1024, chunk 16, lr 2.46e-4, aux_return 1.0. Each run is followed by a per-run tournament (sweep ON, remote top decks) vs 9 opponents (random + first + 4 starters + 3 strong public agents). All 10 finished models then face each other in a no-sweep, no-baselines round-robin (30 games/pair, 45 pairs). Full JSON reports under `experiments/bc_curriculum_suite/reports/`, aggregated markdown at `experiments/bc_curriculum_suite/results.md`.
+
+Findings that inform planning:
+
+- Best vs public agents: `5d_10ep_OFF` at **21.0% overall**. Second: `3d_1ep_ON` at 20.4%. Worst: `3d_10ep_ON` at 16.9% (overfit on the small filtered set).
+- Best vs peers in the intra-suite round-robin: `3d_1ep_ON` and `5d_1ep_ON` tied at **53.2%**. `5d_10ep_ON` last at 44.1%.
+- **Anti-correlation between vs-publics and vs-peers**: models that specialize enough to bat weaker public agents lose to peers trained on similar data. `vs publics` is the proxy for real ladder Elo, not intra-suite.
+- **Top-elo filter never wins in matched (days, epochs) pairs**: OFF ties or beats ON in every quadrant, on `vs publics`. Curriculum by agent-Elo is the wrong cut while the model is data-limited.
+- **Coverage cost of the filter is visible and closes with scale**: all `ON` runs zero vs `lb526_iono` (a low-Elo starter deck the filter excludes) — except `5d_10ep_ON` which finally reaches 10% because 5 filtered days carry enough deck diversity.
+- **Architecture is not the bottleneck**: peer round-robin sits at 44–53% across all 10 models — a healthy Elo dispersion, no collapsed model, no divergence, no NaN, all aux heads improve monotonically. The ceiling here is data + training regime, not the transformer.
+
+Deeper writeup and evidence: [wikifita → pokemon_tcg_bc_curriculum_ablation](https://wikifita.aleffita.dev/kaggle/pokemon_tcg_bc_curriculum_ablation.html).
+
+### Current submission candidate
+
+`model/checkpoint/suite_5d_10ep_OFF/5d_10ep_OFF.pkl` — packaged tarball at `experiments/bc_curriculum_suite/models/5d_10ep_OFF.tar.gz`.
+
+### Next research directions (not yet started, not the current task)
+
+- Data selection stratified by deck archetype (`deck_elo_daily` + `deck_cards`) instead of by agent — the sqlite already supports it.
+- Kendall & Gal uncertainty weighting for aux losses.
+- More data — the 30k/day cap was for suite parity, not a training decision.
+
 ## Imported historical inventory
 
 The remainder of the original `CLAUDE.md` is intentionally preserved. It records the source archive's directory structure, known status, datasets, checkpoints, engine restrictions, and local workflow. It is useful for orientation, but statements such as the old branch labels, old hardware assumptions, future PPO plans, and direct `python3` examples are historical. Use `uv run` for Python and follow the current plan below.
