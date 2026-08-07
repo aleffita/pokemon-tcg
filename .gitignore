@@ -21,6 +21,8 @@ Thumbs.db
 
 # === Engine ===
 engine/
+runs/
+model/
 
 # === RL ===
 data/
