@@ -25,13 +25,11 @@ _FIELD_TO_FLAG = {
     "replay_zip_dir": "replay-zip",
     "kaggle_episodes_prefix": "kaggle-episodes-prefix",
     "checkpoint_dir": "checkpoint-dir",
-    "model_dir": "model-dir",
     "lr_min_ratio": "lr-min-ratio",
     "max_grad_norm": "max-grad-norm",
     "warmup_steps": "warmup-steps",
     "accum_steps": "accum-steps",
     "kaggle_competition": "kaggle-competition",
-    "slab_rows": "slab-rows",
     "val_frac": "val-frac",
     "bc_workers": "workers",
     "bc_flush": "flush",
@@ -54,7 +52,6 @@ class TrainConfig:
     scratch_registers: int = 16
 
     # Trainer options
-    prefetch: bool = False
     compile: bool = False
     log_interval: int = 100
 
@@ -85,10 +82,6 @@ class TrainConfig:
     # Data
     data_dir: str = "data/bc_data"
     replay_zip_dir: str = "data/bc_replay_zip"
-    # Deprecated: the Parquet streaming loader (bc_train_mlx.py) has no notion
-    # of a fixed-size in-memory slab anymore -- each pyarrow batch is its own
-    # I/O unit. Kept only so old config JSON files with this key still load.
-    slab_rows: int = 32768
     val_frac: float = 0.1
     val_batch_size: int = 128
     # Training days resolved from the SQLite results catalog (model/results.db,
@@ -99,7 +92,6 @@ class TrainConfig:
 
     # Output
     checkpoint_dir: str = "model/checkpoint"
-    model_dir: str = "model/bc_model"
     checkpoint_every_epochs: int = 1
 
     # Kaggle

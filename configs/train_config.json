@@ -8,7 +8,6 @@
   "split_heads": true,
   "structured": false,
   "scratch_registers": 32,
-  "prefetch": true,
   "compile": false,
   "log_interval": 100,
   "epochs": 3,

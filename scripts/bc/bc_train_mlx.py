@@ -1592,18 +1592,10 @@ def main() -> None:
         metavar="true|false",
         help="mx.compile the loss function",
     )
-    p.add_argument(
-        "--prefetch",
-        type=_bool_arg,
-        default=None,
-        metavar="true|false",
-        help="Prefetch next slab on CPU while GPU trains",
-    )
     p.add_argument("--log-interval", type=int, default=None)
     # Data
     p.add_argument("--val-frac", type=float, default=None)
     p.add_argument("--val-batch-size", type=int, default=None)
-    p.add_argument("--slab-rows", type=int, default=None)
     p.add_argument(
         "--max-rows", type=int, default=None, help="Max training rows (0=all)"
     )
@@ -1694,11 +1686,9 @@ def main() -> None:
         "aux_terminal_weight": "aux_terminal_weight",
         "aux_return_weight": "aux_return_weight",
         "compile": "compile",
-        "prefetch": "prefetch",
         "log_interval": "log_interval",
         "val_frac": "val_frac",
         "val_batch_size": "val_batch_size",
-        "slab_rows": "slab_rows",
         "max_rows": "max_rows",
         "bc_would_ko": "bc_would_ko",
         "bc_wk_nvar": "bc_wk_nvar",
@@ -1785,13 +1775,11 @@ def main() -> None:
         a.aux_return_weight if a.aux_return_weight is not None else cfg.aux_return_weight
     )
     a.compile = a.compile if a.compile is not None else cfg.compile
-    a.prefetch = a.prefetch if a.prefetch is not None else cfg.prefetch
     a.log_interval = a.log_interval if a.log_interval is not None else cfg.log_interval
     a.val_frac = a.val_frac if a.val_frac is not None else cfg.val_frac
     a.val_batch_size = (
         a.val_batch_size if a.val_batch_size is not None else cfg.val_batch_size
     )
-    a.slab_rows = a.slab_rows if a.slab_rows is not None else cfg.slab_rows
     a.max_rows = a.max_rows if a.max_rows is not None else cfg.max_rows
     # Trainer-only CLI knobs (no config counterparts). Default 0 = disabled.
     a.max_rows_per_day = int(a.max_rows_per_day) if a.max_rows_per_day else 0
@@ -2352,7 +2340,6 @@ def main() -> None:
         f"{' +split' if a.split_heads else ''}"
         f"{' +struct' if a.structured else ''}"
         f"{' +compile' if a.compile else ''}"
-        f"{' +prefetch' if a.prefetch else ''}"
         f"{' +accum' if a.accum_steps > 1 else ''}"
     )
     print(
@@ -2768,17 +2755,10 @@ def main() -> None:
 
         print("[bc-train-mlx] compiled train_step with state capture", flush=True)
 
-    # Streaming I/O overlap is now intrinsic to the pyarrow batch iterator
-    # (pyarrow.dataset.Scanner reads ahead internally); there is no more
-    # slab/thread/queue machinery to prefetch manually. `--prefetch` /
-    # cfg.prefetch is kept in the CLI/config schema only so old invocations
-    # and config JSON files don't break; it is otherwise a no-op here.
-    if a.prefetch:
-        print(
-            "[bc-train-mlx] --prefetch is deprecated and ignored: pyarrow "
-            "streaming reads ahead on its own",
-            flush=True,
-        )
+    # Streaming I/O overlap is intrinsic to the pyarrow batch iterator
+    # (pyarrow.dataset.Scanner reads ahead internally). There is no separate
+    # slab/thread/queue prefetch step; the hierarchical row-group cache
+    # (see _ParquetRowGroupCache) owns cross-batch retention.
 
     # ---- F.3: TBPTT batch generator ----
     def _load_temporal_batch(

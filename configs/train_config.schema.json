@@ -63,11 +63,6 @@
       "minimum": 0,
       "maximum": 64
     },
-    "prefetch": {
-      "type": "boolean",
-      "default": false,
-      "description": "Enable background slab prefetching. A separate thread loads the next memory-mapped slab while the GPU trains on the current one. Reduces I/O wait but uses more RAM (2 slabs in memory)."
-    },
     "compile": {
       "type": "boolean",
       "default": false,
@@ -305,11 +300,6 @@
       "type": "string",
       "default": "model/checkpoint",
       "description": "Directory for training checkpoints (.pkl). Best model saved here during training."
-    },
-    "model_dir": {
-      "type": "string",
-      "default": "model/bc_model",
-      "description": "Directory for the final best model. Copied from checkpoint_dir at end of training."
     },
     "checkpoint_every_epochs": {
       "type": "integer",
