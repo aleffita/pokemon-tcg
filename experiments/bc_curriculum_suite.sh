@@ -219,6 +219,11 @@ for i in "${!MATRIX[@]}"; do
       2>&1 | tee -a "$OUT_DIR/_train.log"
   fi
 
+  # KV cache SSD spill dir is training-scoped storage. Left in place it grows
+  # unbounded across runs (10-25 GiB per big run) and fills the disk. Delete
+  # as soon as training is done — checkpoints and _train.log are unaffected.
+  rm -rf "$OUT_DIR/.cache_spill"
+
   # Package this model as a submission tarball for the round-robin phase.
   BEST_PKL="$FINAL_PKL"
   [ ! -f "$BEST_PKL" ] && BEST_PKL="$LATEST_PKL"
