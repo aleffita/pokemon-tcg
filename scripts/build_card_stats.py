@@ -291,14 +291,14 @@ def main() -> None:
     if args.date:
         dates = [args.date]
     elif args.range:
-        dates = [
-            f"2026-{month:02d}-{day:02d}"
-            for month in range(7, 8)
-            for day in range(1, 32)
-            if args.range[0]
-            <= f"2026-{month:02d}-{day:02d}"
-            <= args.range[1]
-        ]
+        from datetime import date, timedelta
+        start = date.fromisoformat(args.range[0])
+        end = date.fromisoformat(args.range[1])
+        dates = []
+        cursor = start
+        while cursor <= end:
+            dates.append(cursor.isoformat())
+            cursor += timedelta(days=1)
     else:
         dates = sorted(file.stem for file in zip_dir.glob("*.zip"))
 

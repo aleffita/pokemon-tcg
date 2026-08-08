@@ -992,6 +992,12 @@ class _ParquetRowGroupCache:
     # LRU with no hot layer. 0.6 keeps enough working set warm without
     # freezing the whole cache.
     _HOT_ZONE_FRACTION = 0.6
+    # Hard cap on the total bytes stored in the SSD spill tier.  Without a
+    # cap the spill dir grows proportionally to n_days × row_groups/day
+    # (observed: 54 GB in a single overnight run, filling the disk to 99%).
+    # 10 GB is generous enough to keep the most recent evictees warm without
+    # threatening disk headroom on a 256-512 GB MacBook SSD.
+    _SSD_MAX_BYTES: int = 10 * 1024 ** 3  # 10 GiB
 
     def __init__(
         self,
@@ -1034,7 +1040,10 @@ class _ParquetRowGroupCache:
         if ssd_spill_dir is not None:
             os.makedirs(ssd_spill_dir, exist_ok=True)
         self._ssd_spill_dir = ssd_spill_dir
-        self._ssd_keys: set[tuple[int, int]] = set()
+        # Ordered dict preserves insertion (= spill) order for LRU eviction.
+        # Values are the on-disk file size in bytes so we can track total.
+        self._ssd_keys: OrderedDict[tuple[int, int], int] = OrderedDict()
+        self._ssd_total_bytes: int = 0
         # Fine-grained lock: guards _transient / _hot / _hits_by_key / stats.
         # The pyarrow decode itself releases the GIL and runs unlocked so
         # the prefetch thread and the main thread genuinely overlap I/O
@@ -1131,13 +1140,38 @@ class _ParquetRowGroupCache:
             self._ssd_spill_dir, f"rg_{key[0]}_{key[1]}.npz"
         )
 
+    def _evict_ssd_lru(self, bytes_needed: int) -> None:
+        """Delete oldest SSD spill files until we have room for *bytes_needed*
+        without exceeding ``_SSD_MAX_BYTES``.  Called before every new spill."""
+        while (
+            self._ssd_keys
+            and self._ssd_total_bytes + bytes_needed > self._SSD_MAX_BYTES
+        ):
+            oldest_key, oldest_size = self._ssd_keys.popitem(last=False)
+            self._ssd_total_bytes -= oldest_size
+            try:
+                os.remove(self._ssd_path(oldest_key))
+            except FileNotFoundError:
+                pass  # already gone — fine
+
     def _spill_to_ssd(
         self, key: tuple[int, int], rg: dict[str, np.ndarray]
     ) -> bool:
         if self._ssd_spill_dir is None:
             return False
+        # Estimate on-disk size from in-memory arrays (npz is uncompressed
+        # numpy — file ≈ sum of array nbytes + tiny header overhead).
+        est_bytes = sum(a.nbytes for a in rg.values())
+        # If a single row group is larger than the entire cap, skip spill.
+        if est_bytes > self._SSD_MAX_BYTES:
+            return False
+        self._evict_ssd_lru(est_bytes)
         try:
             np.savez(self._ssd_path(key), **rg)
+            # Use actual file size for accurate tracking.
+            actual_bytes = os.path.getsize(self._ssd_path(key))
+            self._ssd_keys[key] = actual_bytes
+            self._ssd_total_bytes += actual_bytes
             return True
         except OSError:
             # Disk full or permission trouble -- silently drop the entry.
@@ -1152,8 +1186,14 @@ class _ParquetRowGroupCache:
             return None
         try:
             with np.load(self._ssd_path(key)) as npz:
-                return {c: np.array(npz[c]) for c in npz.files}
+                data = {c: np.array(npz[c]) for c in npz.files}
+            # Move to end so recently-loaded entries survive longer.
+            self._ssd_keys.move_to_end(key)
+            return data
         except (OSError, KeyError):
+            # Corrupted or missing — remove tracking entry.
+            if key in self._ssd_keys:
+                self._ssd_total_bytes -= self._ssd_keys.pop(key, 0)
             return None
 
     # ---- eviction -----------------------------------------------------------
@@ -1174,7 +1214,7 @@ class _ParquetRowGroupCache:
             # _ssd_keys, failure just drops the entry.
             if self._spill_to_ssd(key, rg):
                 self._ssd_spills += 1
-                self._ssd_keys.add(key)
+                # _ssd_keys updated inside _spill_to_ssd
 
     def _rebalance_zones_locked(self) -> None:
         """Enforce hot/transient split according to ``_HOT_ZONE_FRACTION``.
@@ -1262,6 +1302,7 @@ class _ParquetRowGroupCache:
                 "resident_hot": len(self._hot),
                 "resident_transient": len(self._transient),
                 "ssd_resident": len(self._ssd_keys),
+                "ssd_bytes": self._ssd_total_bytes,
             }
 
     def read_rows(
@@ -3050,6 +3091,7 @@ def main() -> None:
                 _tb_writer.add_scalar(f"cache_{_tag}/ssd_hits", int(_cs["ssd_hits"]), gstep)
                 _tb_writer.add_scalar(f"cache_{_tag}/ssd_spills", int(_cs["ssd_spills"]), gstep)
                 _tb_writer.add_scalar(f"cache_{_tag}/ssd_resident", int(_cs["ssd_resident"]), gstep)
+                _tb_writer.add_scalar(f"cache_{_tag}/ssd_bytes_gib", _cs["ssd_bytes"] / (1024**3), gstep)
         except Exception:
             # Never let TB logging break training.
             pass
@@ -3737,6 +3779,7 @@ def main() -> None:
             f"promotions={s['promotions']:,} evictions={s['evictions']:,} "
             f"ssd_hits={s['ssd_hits']:,} ssd_spills={s['ssd_spills']:,} "
             f"ssd_resident={s['ssd_resident']} "
+            f"ssd_bytes={s['ssd_bytes'] / (1024**3):.2f} GiB "
             f"decoded={s['bytes_loaded'] / (1024**2):.1f} MiB",
             flush=True,
         )

@@ -50,6 +50,7 @@ tcg-build-card-stats = "scripts.build_card_stats:main"
 tcg-rebuild-db = "scripts.rebuild_db:main"
 tcg-daily         = "scripts.daily_pipeline:main"
 tcg-train-sequence = "scripts.train_sequence:main"
+tcg-elo-reconcile  = "scripts.reconcile_elo:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rl", "scripts", "agent", "cg"]

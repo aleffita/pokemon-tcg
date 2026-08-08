@@ -1854,11 +1854,131 @@ class ResultsDB:
         Each sub-computation already deletes its own ``(source, day_id)``
         slice before inserting, so calling this repeatedly for the same day
         is idempotent.
+
+        For ``source='remote'``, ``agent_elo_daily`` is populated from the
+        LIVE Kaggle leaderboard (the external source of truth for agent
+        skill), NOT from an in-corpus Elo recomputation. Card and deck Elo
+        remain domain-derived because Kaggle does not publish those.
+        For ``source='local'``, every table is domain-derived from local
+        match results.
         """
 
         self.compute_card_elo(source=source)
         self.compute_deck_elo(source=source)
-        self.compute_agent_elo(source=source)
+        if source == "remote":
+            self.populate_agent_elo_from_kaggle_leaderboard()
+        else:
+            self.compute_agent_elo(source=source)
+
+    def populate_agent_elo_from_kaggle_leaderboard(
+        self,
+        competition: str = "pokemon-tcg-ai-battle",
+        day_ids: list[int] | None = None,
+    ) -> dict[str, float]:
+        """Populate ``agent_elo_daily(source='remote').elo`` with the REAL
+        Kaggle leaderboard Score for each of our known agents.
+
+        Uses the ``kaggle`` Python API directly (no subprocess, no temp CSV
+        left behind). The Kaggle leaderboard endpoint is a live snapshot of
+        the competition ranking, not a per-day time series, so retroactive
+        fill uses today's Score for every ``day_id`` in ``day_ids`` (default:
+        every day in the ``days`` table). Agents whose name has no exact
+        match in the leaderboard receive no row and are naturally excluded
+        from the top-N curriculum filter.
+
+        Idempotent: replaces the ``(source='remote')`` slice per day before
+        inserting. ``games_played`` / ``wins`` / ``losses`` / ``draws`` are
+        stored as 0 because the Kaggle-published Score is not decomposable
+        into those counts.
+
+        Returns a dict of ``{TeamName: Score}`` for every matched agent, for
+        logging / diagnostics at the caller.
+        """
+        import csv
+        import io
+        import tempfile
+        import zipfile
+        from pathlib import Path
+
+        from kaggle.api.kaggle_api_extended import KaggleApi
+
+        api = KaggleApi()
+        api.authenticate()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            api.competition_leaderboard_download(
+                competition, path=tmp, quiet=True
+            )
+            zips = list(Path(tmp).glob("*.zip"))
+            if not zips:
+                raise RuntimeError(
+                    "kaggle competition_leaderboard_download produced no zip "
+                    f"under {tmp!r} for competition {competition!r}"
+                )
+            with zipfile.ZipFile(zips[0]) as zf:
+                inner = zf.namelist()[0]
+                csv_text = zf.read(inner).decode("utf-8")
+
+        rows = list(csv.DictReader(io.StringIO(csv_text)))
+        if not rows:
+            raise RuntimeError(
+                "kaggle leaderboard CSV is empty; refusing to wipe "
+                "agent_elo_daily(source='remote')"
+            )
+        scores: dict[str, float] = {}
+        for row in rows:
+            name = row.get("TeamName")
+            score = row.get("Score")
+            if name is None or score is None:
+                continue
+            try:
+                scores[name] = float(score)
+            except ValueError:
+                continue
+
+        if day_ids is None:
+            day_ids = [
+                int(r["id"])
+                for r in self.conn.execute(
+                    "SELECT id FROM days ORDER BY date"
+                ).fetchall()
+            ]
+
+        matched: dict[int, float] = {}
+        for agent in self.conn.execute(
+            "SELECT id, name FROM agents"
+        ).fetchall():
+            name = agent["name"]
+            if name in scores:
+                matched[int(agent["id"])] = scores[name]
+
+        with self.transaction():
+            for day_id in day_ids:
+                self.conn.execute(
+                    "DELETE FROM agent_elo_daily "
+                    "WHERE source='remote' AND day_id = ?",
+                    (day_id,),
+                )
+                self.conn.executemany(
+                    """
+                    INSERT INTO agent_elo_daily (
+                        agent_id, day_id, source, elo,
+                        games_played, wins, losses, draws
+                    ) VALUES (?, ?, 'remote', ?, 0, 0, 0, 0)
+                    """,
+                    [
+                        (agent_id, day_id, elo)
+                        for agent_id, elo in matched.items()
+                    ],
+                )
+
+        return {
+            name: score
+            for name, score in scores.items()
+            if any(a["name"] == name for a in self.conn.execute(
+                "SELECT name FROM agents"
+            ).fetchall())
+        }
 
     def refresh_meta_features(self, source: str) -> None:
         """Rebuild ``meta_features_daily`` from ``card_elo_daily`` for ``source``.
