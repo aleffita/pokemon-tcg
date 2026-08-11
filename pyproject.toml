@@ -51,6 +51,7 @@ tcg-rebuild-db = "scripts.rebuild_db:main"
 tcg-daily         = "scripts.daily_pipeline:main"
 tcg-train-sequence = "scripts.train_sequence:main"
 tcg-elo-reconcile  = "scripts.reconcile_elo:main"
+tcg-curriculum-v1 = "experiments.curriculum_v1:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["rl", "scripts", "agent", "cg"]
+packages = ["rl", "scripts", "agent", "cg", "experiments"]

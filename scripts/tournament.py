@@ -144,20 +144,13 @@ def _find_or_create_deck(db, card_ids: list[int]) -> int:
     return deck_id
 
 
-def _get_test_decks(db, source: str = "remote") -> list[tuple[list[int], int | None]]:
-    """Get alternative decks for OUR agent's deck sweep only.
+def _get_test_decks(db, source: str = "remote", n_top: int = 4) -> list[tuple[list[int], int | None]]:
+    """Pick decks for our agent to sweep over.
 
-    Returns ``(card_ids, deck_id)`` tuples. The caller rewrites only
-    ``agent/deck.csv`` and calls our module's ``reload_deck()``. Opponent
-    callables are loaded once and their own deck files are never rewritten.
-    deck_id may be None for the default deck if it has not been added to the
-    DB yet. Entries are deduplicated by quantity-aware composition matching.
-
-    ``source`` selects the Elo tier the top decks are pulled from. ``remote``
-    (the default) reads ``deck_elo_daily`` rows populated from Kaggle replays,
-    which is what we have coverage for out of the box. ``local`` reads Elo
-    accumulated from local tournaments — only useful once local tournaments
-    have actually populated that table.
+    Includes the default deck (from ``agent/deck.csv``) plus up to ``n_top`` top
+    decks from the ``deck_elo`` table for the requested source tier.
+    Decks with >=90% card overlap with an already-queued deck are deduplicated.
+    Returns list of ``(card_ids, deck_id)`` tuples.
     """
     from collections import Counter
 
@@ -171,7 +164,7 @@ def _get_test_decks(db, source: str = "remote") -> list[tuple[list[int], int | N
     if default_card_ids:
         seen_counters.append(Counter(default_card_ids))
 
-    top = db.get_top_decks(n=3, source=source)
+    top = db.get_top_decks(n=n_top, source=source)
     for d in top:
         deck_id = d["id"]
         known = db.conn.execute(
@@ -502,6 +495,8 @@ def main():
                    help="Skip the built-in random+first baseline opponents. "
                         "Useful for round-robin runs where the noise floor "
                         "was already measured elsewhere.")
+    p.add_argument("--top-decks", type=int, default=4,
+                   help="Number of top remote/local decks to include in sweep (default: 4)")
     p.add_argument("--report-json", type=str, default=None,
                    help="Write the structured per-opponent/per-deck result "
                         "table to this JSON path, so callers can consume "
@@ -575,7 +570,7 @@ def main():
             [(default_card_ids, None)] if default_card_ids is not None else []
         )
     else:
-        our_test_decks = _get_test_decks(db, source=args.sweep_source)
+        our_test_decks = _get_test_decks(db, source=args.sweep_source, n_top=args.top_decks)
         default_card_ids = _read_deck_csv(os.path.join(AGENT_DIR, "deck.csv"))
 
     # Read original deck to restore after sweep
@@ -615,6 +610,9 @@ def main():
         and not args.no_sweep
         and len(our_test_decks) > 1
     )
+    total_blocks = len(opponents) * (len(our_test_decks) if do_sweep else 1)
+    completed_blocks = 0
+
     if do_sweep:
         print(f"Sweep: {len(our_test_decks)} OUR decks per opponent "
               f"(default + {len(our_test_decks) - 1} from deck_elo)\n", flush=True)
@@ -679,7 +677,15 @@ def main():
                     "error": None,
                 })
                 all_game_results.append((label, deck_id, game_results))
-                print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s)",
+                completed_blocks += 1
+                elapsed_suite = time.time() - start_time
+                avg_block = elapsed_suite / completed_blocks
+                rem_blocks = max(0, total_blocks - completed_blocks)
+                eta_sec = int(avg_block * rem_blocks)
+                eta_m, eta_s = divmod(eta_sec, 60)
+                eta_h, eta_m = divmod(eta_m, 60)
+                eta_fmt = f"{eta_h}h{eta_m:02d}m" if eta_h else f"{eta_m}m{eta_s:02d}s"
+                print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s) | [{completed_blocks}/{total_blocks} ETA: {eta_fmt}]",
                       flush=True)
         else:
             # No sweep: run with default deck only
@@ -707,7 +713,15 @@ def main():
                 "error": None,
             })
             all_game_results.append((label, deck_id, game_results))
-            print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s)",
+            completed_blocks += 1
+            elapsed_suite = time.time() - start_time
+            avg_block = elapsed_suite / completed_blocks
+            rem_blocks = max(0, total_blocks - completed_blocks)
+            eta_sec = int(avg_block * rem_blocks)
+            eta_m, eta_s = divmod(eta_sec, 60)
+            eta_h, eta_m = divmod(eta_m, 60)
+            eta_fmt = f"{eta_h}h{eta_m:02d}m" if eta_h else f"{eta_m}m{eta_s:02d}s"
+            print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s) | [{completed_blocks}/{total_blocks} ETA: {eta_fmt}]",
                   flush=True)
 
     total_time = time.time() - start_time

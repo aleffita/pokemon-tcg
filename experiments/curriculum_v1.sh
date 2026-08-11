@@ -3,7 +3,7 @@
 # suite_5d_10ep_OFF/5d_10ep_OFF.pkl. Cada estágio salva checkpoint por epoch
 # e roda tournament ao terminar.
 #
-# Stage 1: OFF, all days,     15ep, 80k rows/day,  lr=1.5e-4
+# Stage 1: OFF, all days,     15ep, 30k rows/day,  lr=1.5e-4
 # Stage 2: ON top-600 real,   5 days (últimos),  5ep, 300k rows/day, lr=8e-5
 # Stage 3: ON top-100 real,   1 day  (último),  10ep, 300k rows/day, lr=3e-5
 #
@@ -19,7 +19,7 @@
 # Resume-aware: qualquer estágio cujo _final.pkl já existir é pulado (o
 # tournament dele também é pulado se seu _tourn.json já existir).
 
-set -e
+set -eo pipefail
 cd /Users/alefita/workdir/pokemon-tcg
 
 # ---------------- config ----------------
@@ -178,7 +178,7 @@ fi
 echo "----- reconciling agent_elo_daily(source='remote') with Kaggle LB -----"
 uv run tcg-elo-reconcile 2>&1 | tail -6
 
-# ---------------- STAGE 1: OFF, all days, 15ep, 80k/day, lr=1.5e-4 ----------------
+# ---------------- STAGE 1: OFF, all days, 15ep, 30k/day, lr=1.5e-4 ----------------
 S1_ROOT=$EXP_ROOT/stage1
 S1_FINAL=$S1_ROOT/curriculum_v1_stage1.pkl
 S1_LATEST=$S1_ROOT/curriculum_v1_stage1_latest.pkl
@@ -188,7 +188,7 @@ mkdir -p "$S1_ROOT"
 
 echo ""
 echo "======================================================================"
-echo "  STAGE 1: OFF, all_days, 15ep, 80k/day, lr=1.5e-4"
+echo "  STAGE 1: OFF, all_days, 15ep, 30k/day, lr=1.5e-4"
 echo "  resume from base: $BASE_CHECKPOINT"
 echo "======================================================================"
 
@@ -200,14 +200,14 @@ else
   # but never leave the run in an ambiguous partial state.
   rm -rf "$S1_ROOT"; mkdir -p "$S1_ROOT"
 
-  S1_START=$(python3 -c "import time; print(time.time())")
+  S1_START=$(python3 -c "import time; print(int(time.time()))")
   uv run tcg-train --config "$CONFIG" \
-    --all-days --max-rows-per-day 80000 --epochs 15 \
+    --all-days --max-rows-per-day 30000 --epochs 15 \
     --lr 1.5e-4 \
     --resume "$BASE_CHECKPOINT" --optimizer-state reset --scheduler-state reset \
     --out "$S1_FINAL" --checkpoint-every-epochs 1 \
     2>&1 | tee -a "$S1_ROOT/_train.log"
-  S1_END=$(python3 -c "import time; print(time.time())")
+  S1_END=$(python3 -c "import time; print(int(time.time()))")
   echo ">>> stage 1 training DONE in $(format_dur $((S1_END - S1_START)))"
 
   rm -rf "$S1_ROOT/.cache_spill"
@@ -237,7 +237,7 @@ if [ -f "$S2_FINAL" ]; then
 else
   rm -rf "$S2_ROOT"; mkdir -p "$S2_ROOT"
 
-  S2_START=$(python3 -c "import time; print(time.time())")
+  S2_START=$(python3 -c "import time; print(int(time.time()))")
   uv run tcg-train --config "$CONFIG" \
     --last-n-days 5 --max-rows-per-day 300000 --epochs 5 \
     --top-elo 600 \
@@ -245,7 +245,7 @@ else
     --resume "$S1_FINAL" --optimizer-state reset --scheduler-state reset \
     --out "$S2_FINAL" --checkpoint-every-epochs 1 \
     2>&1 | tee -a "$S2_ROOT/_train.log"
-  S2_END=$(python3 -c "import time; print(time.time())")
+  S2_END=$(python3 -c "import time; print(int(time.time()))")
   echo ">>> stage 2 training DONE in $(format_dur $((S2_END - S2_START)))"
 
   rm -rf "$S2_ROOT/.cache_spill"
@@ -274,7 +274,7 @@ if [ -f "$S3_FINAL" ]; then
 else
   rm -rf "$S3_ROOT"; mkdir -p "$S3_ROOT"
 
-  S3_START=$(python3 -c "import time; print(time.time())")
+  S3_START=$(python3 -c "import time; print(int(time.time()))")
   uv run tcg-train --config "$CONFIG" \
     --last-n-days 1 --max-rows-per-day 300000 --epochs 10 \
     --top-elo 100 \
@@ -282,7 +282,7 @@ else
     --resume "$S2_FINAL" --optimizer-state reset --scheduler-state reset \
     --out "$S3_FINAL" --checkpoint-every-epochs 1 \
     2>&1 | tee -a "$S3_ROOT/_train.log"
-  S3_END=$(python3 -c "import time; print(time.time())")
+  S3_END=$(python3 -c "import time; print(int(time.time()))")
   echo ">>> stage 3 training DONE in $(format_dur $((S3_END - S3_START)))"
 
   rm -rf "$S3_ROOT/.cache_spill"

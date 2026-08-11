@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import gc
 import hashlib
 import json
 import os
@@ -979,10 +980,9 @@ class _ParquetRowGroupCache:
     ``column_name -> np.ndarray`` already reshaped by ``_read_batch_column``.
     """
 
-    # macOS starts compressing / swapping around 85% of system memory used
-    # (Activity Monitor's "yellow" memory-pressure band). On unified memory
-    # this is our combined RAM+VRAM ceiling.
-    _HIGH_WATERMARK_PCT = 85.0
+    # macOS starts compressing / swapping around 75% of system memory used
+    # (leaving 25% headroom for OS, display, and MLX activation peaks).
+    _HIGH_WATERMARK_PCT = 75.0
     # Number of hits an entry must accumulate before promotion to the hot
     # zone. Chosen so a row_group touched at least twice (typical from
     # multiple chunks per row_group in the TBPTT plan) can survive rotation.
@@ -1442,24 +1442,24 @@ def _resolve_day_ids(args, cfg, db: "ResultsDB") -> list[int]:
     selectors = [bool(args.all_days), bool(args.last_n_days), bool(args.days)]
     if sum(selectors) > 1:
         raise SystemExit("use only one of --days, --last-n-days, --all-days")
+    data_dir = Path(getattr(args, "data_dir", None) or cfg.data_dir or "data/bc_data")
+    existing_dates = {p.stem for p in data_dir.glob("*.parquet")}
+
     if args.all_days:
-        rows = db.conn.execute("SELECT id FROM days ORDER BY date").fetchall()
-        return [int(row["id"]) for row in rows]
+        rows = db.conn.execute("SELECT id, date FROM days ORDER BY date").fetchall()
+        return [int(row["id"]) for row in rows if row["date"] in existing_dates]
     if args.last_n_days:
         n = int(args.last_n_days)
-        rows = db.conn.execute(
-            "SELECT id, date FROM days ORDER BY date DESC LIMIT ?", (n,)
-        ).fetchall()
-        if len(rows) < n:
+        rows = db.conn.execute("SELECT id, date FROM days ORDER BY date").fetchall()
+        valid_rows = [row for row in rows if row["date"] in existing_dates]
+        selected = valid_rows[-n:] if n <= len(valid_rows) else valid_rows
+        if len(selected) < n:
             print(
-                f"[bc-train-mlx] --last-n-days {n}: only {len(rows)} day(s) "
-                f"registered in the catalog; using them all",
+                f"[bc-train-mlx] --last-n-days {n}: only {len(selected)} day(s) "
+                f"registered in the catalog with parquet data; using them all",
                 flush=True,
             )
-        # Return in chronological (oldest first) order so training walks the
-        # meta forward in time, matching the intent of ``--days`` when the
-        # user types the list in ISO order.
-        return [int(row["id"]) for row in reversed(rows)]
+        return [int(row["id"]) for row in selected]
     dates: list[str] = []
     if args.days:
         dates = [d.strip() for d in args.days.split(",") if d.strip()]
@@ -2286,7 +2286,10 @@ def main() -> None:
         if isinstance(model_params, dict):
             model.update(model_params)
         start_epoch = int(state.get("epoch", -1)) + 1
-        best = float(state.get("best_val_acc", state.get("val_acc", 0.0)))
+        if a.optimizer_state == "reset":
+            best = 0.0
+        else:
+            best = float(state.get("best_val_acc", state.get("val_acc", 0.0)))
         # Global model-update history is provenance, not scheduler position.
         gstep = int(state.get("gstep", 0))
         # Validate arch_config if present (backward compat with old checkpoints)
@@ -3444,6 +3447,8 @@ def main() -> None:
 
         # ---- validation ----
         model.eval()
+        gc.collect()
+        mx.clear_cache()
         preds: list[np.ndarray] = []
         am_all: list[np.ndarray] = []
         vloss: float = 0.0
@@ -3533,6 +3538,8 @@ def main() -> None:
                         aux_target_val[key].append(
                             np.asarray(value, dtype=np.float32)
                         )
+                if val_batch % 20 == 0:
+                    mx.clear_cache()
                 _progress_bar.update(
                     _progress_task,
                     completed=val_batch,
@@ -3654,6 +3661,19 @@ def main() -> None:
             yv_group = gv_np[np.arange(n_val), yb_np]
             eq = float((gv_np[np.arange(n_val), am_cat] == yv_group).mean())
 
+        # Clear large temporary arrays from memory
+        try:
+            if _use_tbptt:
+                del validation_memories, validation_rows, validation_logits, validation_y
+                del validation_is_attack, validation_is_ko, validation_opt_group
+            else:
+                del logits_parts, y_parts, is_attack_parts, is_ko_parts, opt_group_parts
+            del lg_np, yb_np, vi_atk, vi_ko, preds, am_all
+        except Exception:
+            pass
+        gc.collect()
+        mx.clear_cache()
+
         _progress_bar.reset(
             _progress_task,
             total=1,
@@ -3754,6 +3774,9 @@ def main() -> None:
             _tb_writer.flush()
 
         _progress_bar.stop()
+
+    if a.out and not os.path.exists(a.out):
+        _save_checkpoint(a.out, run_end_epoch - 1, acc)
 
     # Export is explicit so smoke runs and alternative training phases cannot
     # overwrite the submission model as an unrelated side effect.

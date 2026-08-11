@@ -1088,6 +1088,17 @@ class ResultsDB:
             )
             if cursor.rowcount:
                 self._bump_day_match_count(day_id)
+                our_aid = self.upsert_agent(our_agent, day_id)
+                opp_aid = self.upsert_agent(opp_agent, day_id)
+                self.conn.execute(
+                    """
+                    UPDATE matches
+                    SET our_agent_id = ?, opp_agent_id = ?
+                    WHERE matchup_id = ? AND game_index = ?
+                    """,
+                    (our_aid, opp_aid, matchup_id, game_index),
+                )
+                self._update_online_elo(our_aid, opp_aid, result, day_id, source)
             row = self.conn.execute(
                 """
                 SELECT id, source, our_agent, our_deck_id, opp_agent,
@@ -1124,6 +1135,55 @@ class ResultsDB:
                 "local matchup/game identity has conflicting evidence"
             )
         return int(row["id"])
+
+    def _update_online_elo(
+        self, our_aid: int, opp_aid: int, result: int, day_id: int, source: str
+    ) -> None:
+        """Update agent_elo_daily atomically for a single match result (K=32)."""
+        def _get_elo(aid: int) -> float:
+            row = self.conn.execute(
+                "SELECT elo FROM agent_elo_daily WHERE agent_id = ? AND day_id = ? AND source = ?",
+                (aid, day_id, source),
+            ).fetchone()
+            if row is not None:
+                return float(row["elo"])
+            row_prev = self.conn.execute(
+                "SELECT elo FROM agent_elo_daily WHERE agent_id = ? AND source = ? ORDER BY day_id DESC LIMIT 1",
+                (aid, source),
+            ).fetchone()
+            return float(row_prev["elo"]) if row_prev is not None else INITIAL_ELO
+
+        elo_our = _get_elo(our_aid)
+        elo_opp = _get_elo(opp_aid)
+
+        score = 1.0 if result > 0 else (0.0 if result < 0 else 0.5)
+        expected = 1.0 / (1.0 + 10.0 ** ((elo_opp - elo_our) / 400.0))
+        delta = K * (score - expected)
+
+        new_our = elo_our + delta
+        new_opp = elo_opp - delta
+
+        w_our, l_our, d_our = (1, 0, 0) if result > 0 else ((0, 1, 0) if result < 0 else (0, 0, 1))
+        w_opp, l_opp, d_opp = (0, 1, 0) if result > 0 else ((1, 0, 0) if result < 0 else (0, 0, 1))
+
+        for aid, new_elo, w, l, d in [
+            (our_aid, new_our, w_our, l_our, d_our),
+            (opp_aid, new_opp, w_opp, l_opp, d_opp),
+        ]:
+            self.conn.execute(
+                """
+                INSERT INTO agent_elo_daily (
+                    agent_id, day_id, source, elo, games_played, wins, losses, draws
+                ) VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+                ON CONFLICT(agent_id, day_id, source) DO UPDATE SET
+                    elo = ?,
+                    games_played = games_played + 1,
+                    wins = wins + ?,
+                    losses = losses + ?,
+                    draws = draws + ?
+                """,
+                (aid, day_id, source, new_elo, w, l, d, new_elo, w, l, d),
+            )
 
     def add_match_steps(self, match_id: int, steps_data: list[dict]) -> None:
         """Compatibility writer for current local replay normalization."""
