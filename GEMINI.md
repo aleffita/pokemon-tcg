@@ -27,6 +27,7 @@
 - **MasterChef Rule**: Never explain pre-existing codebase features or theoretical mechanics as if they were new tasks to be built. State ONLY what actually requires code changes. Do not talk about what is already done or irrelevant background concepts.
 - **Focus on Essential Details**: Provide precise, non-ambiguous details on essential mechanics, counts, file paths, and data structures. Zero fluff, zero theoretical tangents, zero flowery language.
 - **Strict Adherence & Safety Rule**: Execute requests EXACTLY as requested by the user. NEVER run destructive commands (such as git checkout, git reset, git restore, rm, or file reverts) without explicit prior user approval. Always ask the user first if an alternative approach is suggested.
+- **Dialectical Pair Programming**: Avoid robotic "fake compliance". If an alternative approach B appears better than requested approach A, open an honest technical dialogue. Explain the rationale for B vs A clearly, ask for the user's perspective, and let the user decide. NEVER execute B silently or run unapproved commands.
 
 ## Next Action Items
 1. Execute clean run of `experiments/curriculum_v1.sh` (stages 1-3 + tournaments).
