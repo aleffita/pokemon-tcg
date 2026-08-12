@@ -19,9 +19,6 @@ Thumbs.db
 .vscode/
 .idea/
 
-*.gz
-public_agents
-
 # === Engine ===
 engine/
 runs/
