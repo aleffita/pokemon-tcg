@@ -5,13 +5,10 @@
 - **Current Objective**: Transition from Behavioral Cloning (BC) Curriculum V1 to GRPO (Group Relative Policy Optimization) and Reinforcement Learning Policy Alignment on Apple Silicon (M3 Pro 24GB).
 - **Core Strategy**: BC Pre-training → Parity & Semantic corrections → Recurrent registers (TBPTT) → Elo-oriented Evaluation → GRPO / RL Alignment.
 
-## Current State (as of 2026-08-11)
+## Current State (as of 2026-08-12)
+- **Precision Crisis Resolved**: PyTorch inference was collapsing due to FP16 underflow (dropping to 3.3% WR). The pipeline (`build_submission.py`, `rl/policy_infer_torch.py`, and `bc_train_mlx.py`) has been migrated to strict FP32. Existing checkpoints were surgically repacked to update their `static_feature_contract` to FP32 hashes.
+- **Ablation Matrix Preparation**: We are orchestrating a cross-stage baseline tournament. Stages 1, 2, 3 (loss-corrupted aux heads) and Stage 4 (corrected, 5 epochs top-100) will battle `first_sub` on a 3x5 deck matrix. This baseline will inform the next training strategy: rapid new initialization vs GRPO/PPO distillation (Teacher: `first_sub`).
 - **MLX Trainer Core**: Native FP16 trainer (`scripts/bc/bc_train_mlx.py`) with Muon + AdamW split optimizer, gradient accumulation, parquet KV cache, Tensorboard logging, and checkpoint resume support.
-- **SSD Spill Cache Cap**: 10GB hardcap (`_SSD_MAX_BYTES = 10 * 1024**3`) with LRU eviction added to `_ParquetRowGroupCache` preventing disk overflow.
-- **Curriculum V1 Pipeline**: 3-stage continuous training pipeline (`experiments/curriculum_v1.py`):
-  - Stage 1: All-days 30k/day (25 epochs, `curriculum_v1_stage1.pkl`).
-  - Stage 2: Top-600 300k/day (5 epochs, `curriculum_v1_stage2.pkl`, `val_acc = 62.07%`).
-  - Stage 3: Top-100 elite (10 epochs, active background training pipeline).
 - **Benchmark Orchestrator**: Multi-model evaluation script (`scripts/tournament.py` & `experiments/run_full_sweeps.py`) featuring OS subprocess isolation, dynamic ETA tracking, asymmetric opponent deck sweeps (`--opp-top-decks`), best deck CSV auto-export (`--emit-best-performing-deck`), disaggregated OVERALL metrics, atomic SQLite Elo updates, and $N \times M$ unnested matrix table layout.
 - **Seasons & Reset System**: Strongly-typed `seasons` table (`id`, `name`, `is_active`), with CLI controls `--new-season`, `--reset-local-elo`, and `--clear-local-matches`.
 - **Sample-Size Invariant Elo ($R_{\text{invariante}}$)**: Integrated Bradley-Terry MLE inversion, MD10 placement smoothing ($N_0 = 10$), and Softmax Abelian Group translation calibration ($\Delta R_{\text{Abeliano}}$) in `rl/results_db.py`.
@@ -81,6 +78,12 @@ $$R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}$$
 
 - **Deterministic Task Cleanup Directive (Zombie Task Prevention)**: Before launching a new background task, inspect active tasks using `manage_task(Action='list')`. Match the target command string and kill ONLY the specific task ID using `manage_task(Action='kill', TaskId=exact_id)`. Never use `kill_all` or kill unrelated background workers (such as active model training jobs).
   *Rationale: Zombie tasks (orphan background processes) leak VRAM/CPU resources and cause SQLite database write-lock deadlocks. Unchecked process termination destroys independent training pipelines.*
+
+- **Zero-Assumption CLI Execution Directive**: NEVER assume CLI flags or script arguments based on past behavior or memory. ALWAYS read the `argparse` definition (via grep) or run `--help` BEFORE proposing a command. Action before parameter verification is strictly prohibited.
+  *Rationale: Alucinating script arguments wastes context window iterations and causes task execution failures, breaking the agentic workflow.*
+
+- **User Lead & Artifact Consent Directive**: The Scientist leads the interaction exclusively. NEVER suggest unprompted next steps, "options on the table", or dictate the research trajectory. NEVER create markdown artifacts unless explicitly requested. Present raw empirical data directly in the chat without forging conclusions.
+  *Rationale: Unprompted suggestions and unauthorized artifacts violate the Scientist's cognitive authority over the research flow and clutter the interface.*
 
 - **Residual Stream Signal Preservation Directive**: Omit compliance phrases, apologies, and repeated policy citations (e.g. "seguindo a diretriz..."). Output high-density technical analysis directly.
   *Rationale: Repeated procedural text injects static vectors into the Transformer residual stream. This vector accumulation causes prompt inertia, degrades attention entropy, and reduces reasoning accuracy during autoregressive decoding.*

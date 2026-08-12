@@ -797,7 +797,7 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                 is_default = (deck_id == default_deck_id)
                 our_info = _resolve_deck_human_info(db, deck_id, is_our_deck=is_default)
                 rem_elo = f"{our_info['remote_elo']:.1f}" if our_info['remote_elo'] else "N/A"
-                loc_elo = f"{our_info['local_elo']:.1f}" if our_info['local_elo'] else "N/A"
+                loc_elo = f"{our_info.get('local_elo_invariant', our_info['local_elo']):.1f}" if our_info.get('local_elo_invariant', our_info['local_elo']) else "N/A"
 
                 if is_default:
                     deck_header = f"OUR AGENT DECK [NATIVO]: {our_info['nick']}"
