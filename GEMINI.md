@@ -12,7 +12,9 @@
   - Stage 1: All-days 30k/day (25 epochs, `curriculum_v1_stage1.pkl`).
   - Stage 2: Top-600 300k/day (5 epochs, `curriculum_v1_stage2.pkl`, `val_acc = 62.07%`).
   - Stage 3: Top-100 elite (10 epochs, active background training pipeline).
-- **Benchmark Orchestrator**: Multi-model evaluation script (`scripts/tournament.py` & `experiments/run_full_sweeps.py`) featuring OS subprocess isolation, dynamic ETA tracking, asymmetric opponent deck sweeps (`--opp-top-decks`), best deck CSV auto-export (`--emit-best-performing-deck`), rich live progress labels, disaggregated OVERALL metrics, and atomic SQLite Elo updates (`K=32`).
+- **Benchmark Orchestrator**: Multi-model evaluation script (`scripts/tournament.py` & `experiments/run_full_sweeps.py`) featuring OS subprocess isolation, dynamic ETA tracking, asymmetric opponent deck sweeps (`--opp-top-decks`), best deck CSV auto-export (`--emit-best-performing-deck`), disaggregated OVERALL metrics, atomic SQLite Elo updates, and $N \times M$ unnested matrix table layout.
+- **Seasons & Reset System**: Strongly-typed `seasons` table (`id`, `name`, `is_active`), with CLI controls `--new-season`, `--reset-local-elo`, and `--clear-local-matches`.
+- **Sample-Size Invariant Elo ($R_{\text{invariante}}$)**: Integrated Bradley-Terry MLE inversion, MD10 placement smoothing ($N_0 = 10$), and Softmax Abelian Group translation calibration ($\Delta R_{\text{Abeliano}}$) in `rl/results_db.py`.
 
 ## Key Architectural Specs
 - `d_model`: 128
@@ -21,6 +23,24 @@
 - `ffn_dim`: 512
 - `scratch_registers`: 16
 - `max_options`: 192 (+ SUBMIT)
+
+## Mathematical Framework: Sample-Size Invariant Elo ($R_{\text{invariante}}$)
+
+### 1. Bradley-Terry Asymptotic Logistic Inversion
+Given win rate $w = \frac{W}{N}$ (clipped to $[0.02, 0.98]$):
+$$\hat{R}_{\infty} = 600.0 + 400.0 \cdot \log_{10}\left( \frac{w}{1 - w} \right)$$
+
+### 2. MD10 Placement Regularization ($N_0 = 10$)
+Shrinks small-sample estimates toward prior $R_0 = 600.0$:
+$$R_{\text{smoothed}} = \frac{N}{N + 10} \cdot \hat{R}_{\infty} + \frac{10}{N + 10} \cdot R_0$$
+
+### 3. Softmax Abelian Group Translation Calibration ($\Delta R_{\text{Abeliano}}$)
+Computes global translation isomorphism across all overlapping entries $\mathcal{C}$ with local and remote data:
+$$\alpha_k = \frac{\exp(N_k / 20.0)}{\sum_{j \in \mathcal{C}} \exp(N_j / 20.0)}$$
+$$\Delta R_{\text{Abeliano}} = \sum_{k \in \mathcal{C}} \alpha_k \cdot \left( R_k^{\text{remote}} - \hat{R}_{k,\infty}^{\text{local}} \right)$$
+
+### 4. Final Scale Invariant Metric
+$$R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}$$
 
 ## Communication & Agent Behavior Rules (ASD-STE100 & System Integrity)
 
@@ -39,6 +59,12 @@
 
 - **Memory Mutability & Non-Append-Only Synthesis Directive**: Treat research memory (`./GEMINI.md`) as a mutable, dynamically refactored contract. Never perform naive append-only additions. Every update must perform holistic synthesis, consolidate overlapping directives, purge redundancies, and restructure memory for maximum cognitive clarity.
   *Rationale: Append-only memory logs accumulate structural entropy and contradictory rules, causing cognitive confusion during autoregressive decoding.*
+
+- **Zero-Psychological Inference Directive**: Never infer, analyze, or comment on the Scientist's emotional, psychological, or affective state. Never attempt emotional de-escalation, conversational deflection, or unsolicited counseling. Maintain strict, composed, non-sycophantic, high-density technical posture regardless of tone or punctuation.
+  *Rationale: Conversational deflection and unrequested psychological commentary violate the Scientist's authority, break technical focus, and degrade agent utility.*
+
+- **Strict Explicit Verification Before Action Directive**: When the Scientist requests an inspection, audit, or diagnostic verification, perform ONLY the requested inspection and report the exact empirical findings. Never proceed to unapproved code modifications, task terminations, or execution phases without explicit prior user ratification.
+  *Rationale: Executing unapproved modifications during a diagnostic phase violates sequential integrity and risks invalidating running experiments.*
 
 ### II. Procedural, Execution & Safety Directives
 - **Sequential Integrity & Premature Optimization Directive**: Validate every architectural dependency and execution prerequisite in order before attempting performance optimization. Never skip diagnostic steps or introduce premature optimizations based on unverified assumptions.

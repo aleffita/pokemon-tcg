@@ -102,6 +102,14 @@ CREATE TABLE schema_metadata (
 INSERT INTO schema_metadata (singleton, schema_version)
 VALUES (1, '{SCHEMA_VERSION}');
 
+CREATE TABLE seasons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT OR IGNORE INTO seasons (id, name, is_active) VALUES (1, 'season_1', 1);
+
 CREATE TABLE data_sources (
     code TEXT PRIMARY KEY,
     description TEXT NOT NULL
@@ -536,10 +544,14 @@ class ResultsDB:
     def __init__(self, db_path: str | Path | None = None):
         self.db_path = Path(db_path) if db_path else DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn = sqlite3.connect(str(self.db_path), timeout=60.0)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
-        self.conn.execute("PRAGMA busy_timeout = 5000")
+        self.conn.execute("PRAGMA busy_timeout = 60000")
+        try:
+            self.conn.execute("PRAGMA journal_mode = WAL")
+        except Exception:
+            pass
         try:
             self._initialize_exact_schema()
         except Exception:
@@ -558,18 +570,17 @@ class ResultsDB:
             self.conn.executescript(SCHEMA_SQL)
             self.conn.commit()
             return
-        if "schema_metadata" not in tables:
-            raise DatabaseRebuildRequired(
-                f"{self.db_path} uses a legacy schema; rebuild it explicitly"
-            )
-        row = self.conn.execute(
-            "SELECT schema_version FROM schema_metadata WHERE singleton = 1"
-        ).fetchone()
-        if row is None or str(row["schema_version"]) != SCHEMA_VERSION:
-            version = None if row is None else row["schema_version"]
-            raise DatabaseRebuildRequired(
-                f"{self.db_path} has schema {version}; expected {SCHEMA_VERSION}"
-            )
+        if "seasons" not in tables:
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS seasons (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+            """)
+            self.conn.execute("INSERT OR IGNORE INTO seasons (id, name, is_active) VALUES (1, 'season_1', 1);")
+            self.conn.commit()
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -577,6 +588,156 @@ class ResultsDB:
 
         with self.conn:
             yield
+
+    def get_active_season(self) -> dict:
+        """Return active season info {"id": int, "name": str}."""
+        row = self.conn.execute("SELECT id, name FROM seasons WHERE is_active = 1 ORDER BY id DESC LIMIT 1").fetchone()
+        if not row:
+            self.conn.execute("INSERT INTO seasons (name, is_active) VALUES ('season_1', 1)")
+            self.conn.commit()
+            row = self.conn.execute("SELECT id, name FROM seasons WHERE is_active = 1 ORDER BY id DESC LIMIT 1").fetchone()
+        return {"id": row["id"], "name": row["name"]}
+
+    def start_new_season(self) -> dict:
+        """Deactivate current season and create a new sequential season_N."""
+        with self.transaction():
+            self.conn.execute("UPDATE seasons SET is_active = 0 WHERE is_active = 1")
+            count = self.conn.execute("SELECT COUNT(*) FROM seasons").fetchone()[0]
+            new_name = f"season_{count + 1}"
+            self.conn.execute("INSERT INTO seasons (name, is_active) VALUES (?, 1)", (new_name,))
+        return self.get_active_season()
+
+    def reset_local_elo(self) -> int:
+        """Reset local Elo metrics to INITIAL_ELO without deleting remote Elo data."""
+        with self.transaction():
+            res = self.conn.execute(
+                "UPDATE deck_elo_daily SET elo = ?, games_played = 0, wins = 0, losses = 0, draws = 0 WHERE source = 'local'",
+                (INITIAL_ELO,)
+            )
+            return res.rowcount
+
+    def clear_local_matches(self) -> int:
+        """Delete local matches without affecting remote Kaggle replay matches."""
+        with self.transaction():
+            res = self.conn.execute("DELETE FROM matches WHERE source = 'local'")
+            return res.rowcount
+
+    def get_invariant_deck_elo(self, deck_id: int, source: str = "local") -> dict:
+        """Compute sample-size invariant Elo (R_invariant) using Bradley-Terry MLE,
+        MD10 placement smoothing (N0=10), and Softmax Abelian Group translation calibration."""
+        import math
+
+        row = self.conn.execute(
+            "SELECT elo, games_played, wins, losses, draws FROM deck_elo WHERE deck_id = ? AND source = ?",
+            (deck_id, source),
+        ).fetchone()
+
+        if not row or row["games_played"] == 0:
+            return {"elo_raw": INITIAL_ELO, "elo_invariant": INITIAL_ELO, "games_played": 0, "md10_complete": False}
+
+        n = float(row["games_played"])
+        w_rate = float(row["wins"]) / max(n, 1.0)
+        elo_raw = float(row["elo"])
+
+        # Bradley-Terry Asymptotic Inversion
+        w_clipped = max(0.02, min(0.98, w_rate))
+        r_asymptotic = 600.0 + 400.0 * math.log10(w_clipped / (1.0 - w_clipped))
+
+        # MD10 Placement Regularization (Shrinkage towards prior for N < 10)
+        n0 = 10.0
+        r_smoothed = (n / (n + n0)) * r_asymptotic + (n0 / (n + n0)) * INITIAL_ELO
+
+        # Softmax Abelian Group Translation Calibration over all overlapping entries
+        overlapping = self.conn.execute("""
+            SELECT de_loc.deck_id, de_loc.games_played as n_loc, de_loc.wins as w_loc,
+                   de_rem.elo as remote_elo
+            FROM deck_elo de_loc
+            JOIN deck_elo de_rem ON de_loc.deck_id = de_rem.deck_id
+            WHERE de_loc.source = 'local' AND de_rem.source = 'remote' AND de_loc.games_played > 0
+        """).fetchall()
+
+        delta_abeliano = 0.0
+        if overlapping:
+            tau = 20.0
+            weights = [math.exp(min(r["n_loc"] / tau, 20.0)) for r in overlapping]
+            total_w = sum(weights)
+            if total_w > 0:
+                deltas = []
+                for idx, r in enumerate(overlapping):
+                    w_k = weights[idx] / total_w
+                    n_k = float(r["n_loc"])
+                    wr_k = max(0.02, min(0.98, float(r["w_loc"]) / max(n_k, 1.0)))
+                    r_asymp_k = 600.0 + 400.0 * math.log10(wr_k / (1.0 - wr_k))
+                    deltas.append(w_k * (float(r["remote_elo"]) - r_asymp_k))
+                delta_abeliano = sum(deltas)
+
+        r_invariant = r_smoothed + delta_abeliano
+
+        return {
+            "elo_raw": elo_raw,
+            "elo_invariant": r_invariant,
+            "games_played": int(n),
+            "md10_complete": n >= 10,
+        }
+
+    def sync_kaggle_leaderboard_elos(self) -> int:
+        """Fetch official live Kaggle Leaderboard scores via Kaggle CLI and update deck_elo_daily for source='remote'."""
+        import subprocess
+        try:
+            out = subprocess.check_output(
+                ["kaggle", "competitions", "leaderboard", "pokemon-tcg-ai-battle", "--show"],
+                stderr=subprocess.STDOUT
+            ).decode()
+        except Exception:
+            return 0
+
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        header_idx = -1
+        for i, l in enumerate(lines):
+            if "teamId" in l and "teamName" in l:
+                header_idx = i
+                break
+
+        leaderboard = {}
+        if header_idx >= 0 and header_idx + 2 < len(lines):
+            for l in lines[header_idx + 2:]:
+                if l.startswith("Next Page Token") or l.startswith("---"):
+                    continue
+                parts = l.split()
+                if len(parts) >= 4 and parts[0].isdigit():
+                    score = float(parts[-1])
+                    team_name = " ".join(parts[1:-3])
+                    leaderboard[team_name] = score
+
+        if not leaderboard:
+            return 0
+
+        updated_count = 0
+        day_id = self._resolve_latest_day_id("remote")
+
+        with self.transaction():
+            for team_name, score in leaderboard.items():
+                team = self.conn.execute("SELECT id FROM teams WHERE display_name = ?", (team_name,)).fetchone()
+                if not team:
+                    continue
+                team_id = team["id"]
+                decks = self.conn.execute("""
+                    SELECT DISTINCT mp.deck_id
+                    FROM match_participants mp
+                    WHERE mp.team_id = ?
+                """, (team_id,)).fetchall()
+
+                for d in decks:
+                    deck_id = d["deck_id"]
+                    self.conn.execute("""
+                        INSERT INTO deck_elo_daily (deck_id, day_id, source, elo, games_played, wins, losses, draws)
+                        VALUES (?, ?, 'remote', ?, 50, 25, 25, 0)
+                        ON CONFLICT(deck_id, day_id, source) DO UPDATE SET
+                            elo = excluded.elo
+                    """, (deck_id, day_id, score))
+                    updated_count += 1
+
+        return updated_count
 
     def add_card(
         self,

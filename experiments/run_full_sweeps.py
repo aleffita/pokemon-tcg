@@ -98,6 +98,11 @@ def print_comparison(reports: dict[str, Path]):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Run 3-model 5-deck sweep benchmarks.")
+    parser.add_argument("--reset", action="store_true", help="Force re-running all benchmarks from scratch, ignoring existing JSON reports.")
+    args = parser.parse_args()
+
     base_pkl = ROOT_DIR / "model" / "checkpoint" / "suite_5d_10ep_OFF" / "5d_10ep_OFF.pkl"
     s1_pkl = EXP_ROOT / "stage1" / "curriculum_v1_stage1.pkl"
     s2_pkl = EXP_ROOT / "stage2" / "curriculum_v1_stage2.pkl"
@@ -113,19 +118,28 @@ def main():
     }
 
     if base_pkl.exists():
-        print("\n>>> 1/3: Evaluating Base Model (Pre-Stage 1) with 5-deck sweep (30 games/deck)...")
-        package_checkpoint(base_pkl, "base_model")
-        run_full_sweep_tournament("base_model", r_base_json, games_per_deck=30, top_decks=4)
+        if r_base_json.exists() and not args.reset:
+            print(f"\n>>> 1/3: Base Model report already exists at {r_base_json} (skipping sweep). Pass --reset to force re-run.")
+        else:
+            print("\n>>> 1/3: Evaluating Base Model (Pre-Stage 1) with 5-deck sweep (30 games/deck)...")
+            package_checkpoint(base_pkl, "base_model")
+            run_full_sweep_tournament("base_model", r_base_json, games_per_deck=30, top_decks=4)
 
     if s1_pkl.exists():
-        print("\n>>> 2/3: Evaluating Stage 1 (25ep OFF) with 5-deck sweep (30 games/deck)...")
-        package_checkpoint(s1_pkl, "stage1")
-        run_full_sweep_tournament("stage1", r1_json, games_per_deck=30, top_decks=4)
+        if r1_json.exists() and not args.reset:
+            print(f"\n>>> 2/3: Stage 1 Model report already exists at {r1_json} (skipping sweep). Pass --reset to force re-run.")
+        else:
+            print("\n>>> 2/3: Evaluating Stage 1 (25ep OFF) with 5-deck sweep (30 games/deck)...")
+            package_checkpoint(s1_pkl, "stage1")
+            run_full_sweep_tournament("stage1", r1_json, games_per_deck=30, top_decks=4)
 
     if s2_pkl.exists():
-        print("\n>>> 3/3: Evaluating Stage 2 (5ep Top-600) with 5-deck sweep (30 games/deck)...")
-        package_checkpoint(s2_pkl, "stage2")
-        run_full_sweep_tournament("stage2", r2_json, games_per_deck=30, top_decks=4)
+        if r2_json.exists() and not args.reset:
+            print(f"\n>>> 3/3: Stage 2 Model report already exists at {r2_json} (skipping sweep). Pass --reset to force re-run.")
+        else:
+            print("\n>>> 3/3: Evaluating Stage 2 (5ep Top-600) with 5-deck sweep (30 games/deck)...")
+            package_checkpoint(s2_pkl, "stage2")
+            run_full_sweep_tournament("stage2", r2_json, games_per_deck=30, top_decks=4)
 
     print_comparison(reports)
 

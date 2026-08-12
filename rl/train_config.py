@@ -128,6 +128,11 @@ class TrainConfig:
     aux_terminal_weight: float = 0.5
     aux_return_weight: float = 1.0
 
+    @property
+    def model_dir(self) -> str:
+        """Backward-compatibility alias for older submission code."""
+        return self.checkpoint_dir
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 

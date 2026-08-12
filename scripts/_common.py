@@ -63,15 +63,38 @@ def load_agent(path: str, return_module: bool = False):
         if not os.path.exists(main_py):
             raise FileNotFoundError(f"No main.py found in {path}")
         path = main_py
-    # If directory, look for main.py inside
+    # If directory, look for main.py or submission.tar.gz inside
     elif os.path.isdir(path):
+        sub_tar = os.path.join(path, "submission.tar.gz")
         main_py = os.path.join(path, "main.py")
+        sub_main_py = os.path.join(path, "submission", "main.py")
         if os.path.exists(main_py):
             path = main_py
+        elif os.path.exists(sub_tar):
+            agent_dir = _extract_submission(sub_tar)
+            path = os.path.join(agent_dir, "main.py")
+        elif os.path.exists(sub_main_py):
+            path = sub_main_py
         else:
-            raise FileNotFoundError(f"No main.py found in {path}")
+            raise FileNotFoundError(f"No main.py or submission.tar.gz found in {path}")
 
     agent_dir = os.path.dirname(path)
+    # Auto-detect backend: if tarball has MLX checkpoint but no PyTorch .pt file, set PTCG_INFERENCE_BACKEND=mlx
+    has_mlx = os.path.exists(os.path.join(agent_dir, "model", "bc_model", "bc_best_mlx_final.pkl"))
+    has_pt = (
+        os.path.exists(os.path.join(agent_dir, "model", "bc_model", "bc_best_torch_fp16.pt"))
+        or os.path.exists(os.path.join(agent_dir, "model", "bc_best_final.pt"))
+    )
+    if has_mlx and not has_pt:
+        os.environ["PTCG_INFERENCE_BACKEND"] = "mlx"
+    elif has_pt:
+        os.environ["PTCG_INFERENCE_BACKEND"] = "torch"
+
+    # Purge previously loaded submission agent/rl modules from sys.modules to prevent cross-agent backend cache pollution
+    for mod_name in list(sys.modules.keys()):
+        if mod_name.startswith("rl.") or mod_name in ("submission_agent", "rl"):
+            del sys.modules[mod_name]
+
     spec = importlib.util.spec_from_file_location("submission_agent", path)
     module = importlib.util.module_from_spec(spec)
     # Make sibling files (deck.csv, rl/, model/) resolvable from the agent dir.

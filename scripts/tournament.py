@@ -15,8 +15,10 @@ import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from scripts._common import AGENT_DIR, load_agent, make_env
+from rl.results_db import ResultsDB as ProjectResultsDB
 
 PUBLIC_AGENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                  "public_agents")
@@ -31,9 +33,11 @@ RESULTS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 
 
 def find_agents() -> list[tuple[str, str]]:
-    """Discover all public agents and submissions. Returns [(label, path), ...] sorted by score."""
+    """Discover all public agents under public_agents/."""
     agents = []
     for root, dirs, files in os.walk(PUBLIC_AGENTS_DIR):
+        if "smoke" in root.split(os.sep):
+            continue
         if "main.py" in files and root != PUBLIC_AGENTS_DIR:
             # Label = relative path from public_agents/ (e.g. "lb826_alakazam_seok")
             rel = os.path.relpath(root, PUBLIC_AGENTS_DIR)
@@ -48,6 +52,8 @@ def find_agents() -> list[tuple[str, str]]:
         # Also discover submission.tar.gz files
         for f in files:
             if f.endswith(".tar.gz") and "submissions" in root:
+                if "smoke" in f:
+                    continue
                 rel = os.path.relpath(root, PUBLIC_AGENTS_DIR)
                 label = rel.replace("submissions/", "sub/")
                 agents.append((label, os.path.join(root, f)))
@@ -144,18 +150,19 @@ def _find_or_create_deck(db, card_ids: list[int]) -> int:
     return deck_id
 
 
-def _get_test_decks(db, source: str = "remote", n_top: int = 4) -> list[tuple[list[int], int | None]]:
-    """Pick decks for our agent to sweep over.
+def _get_test_decks(db, source: str = "remote", n_top: int = 4, default_card_ids: list[int] | None = None) -> list[tuple[list[int], int | None]]:
+    """Pick decks for an agent to sweep over.
 
-    Includes the default deck (from ``agent/deck.csv``) plus up to ``n_top`` top
-    decks from the ``deck_elo`` table for the requested source tier.
+    Includes the default deck plus up to ``n_top`` top decks from the ``deck_elo``
+    table for the requested source tier.
     Decks with >=90% card overlap with an already-queued deck are deduplicated.
     Returns list of ``(card_ids, deck_id)`` tuples.
     """
     from collections import Counter
 
     decks = []
-    default_card_ids = _read_deck_csv(os.path.join(AGENT_DIR, "deck.csv"))
+    if default_card_ids is None:
+        default_card_ids = _read_deck_csv(os.path.join(AGENT_DIR, "deck.csv"))
     if default_card_ids:
         decks.append((default_card_ids, None))  # deck_id resolved later
 
@@ -227,6 +234,65 @@ def _identify_deck(db, card_ids):
     return deck_id
 
 
+def _clean_agent_label(path: str) -> str:
+    """Extract clean agent name from file path, handling generic filenames like submission.tar.gz."""
+    if not path:
+        return "Unknown"
+    base = os.path.basename(path)
+    if base in ("submission.tar.gz", "submission.tgz", "submission", "main.py"):
+        parent = os.path.basename(os.path.dirname(path))
+        if parent and parent not in ("submissions", "models"):
+            return parent
+    return base
+
+
+def _resolve_deck_human_info(db, deck_id: int | None, is_our_deck: bool = False) -> dict:
+    """Resolve human info for deck_id. If is_our_deck is True, brands cleanly as Agent Submission Deck."""
+    if deck_id is None:
+        return {"nick": "Submission Deck", "remote_elo": None, "local_elo": None, "local_games": 0, "archetype": "N/A"}
+
+    d_row = db.conn.execute("SELECT name, archetype, source FROM decks WHERE id = ?", (deck_id,)).fetchone()
+    archetype = d_row['archetype'] if d_row and d_row['archetype'] else "N/A"
+    raw_name = d_row['name'] if d_row and d_row['name'] else f"deck_{deck_id}"
+
+    if is_our_deck:
+        nick = "Submission Deck"
+        remote_elo = None
+    else:
+        team_row = db.conn.execute("""
+            SELECT t.display_name, COUNT(*) as cnt
+            FROM match_participants mp
+            JOIN teams t ON mp.team_id = t.id
+            WHERE mp.deck_id = ?
+            GROUP BY t.display_name
+            ORDER BY cnt DESC
+            LIMIT 1
+        """, (deck_id,)).fetchone()
+
+        nick = team_row['display_name'] if team_row and team_row['display_name'] else raw_name
+        if nick.startswith("replay_deck_"):
+            nick = f"Deck #{deck_id}"
+
+        remote_row = db.conn.execute("SELECT elo FROM deck_elo WHERE deck_id = ? AND source = 'remote'", (deck_id,)).fetchone()
+        remote_elo = remote_row['elo'] if remote_row else None
+
+    local_row = db.conn.execute("SELECT elo, games_played FROM deck_elo WHERE deck_id = ? AND source = 'local'", (deck_id,)).fetchone()
+    local_elo = local_row['elo'] if local_row else None
+    local_games = local_row['games_played'] if local_row else 0
+
+    inv_data = db.get_invariant_deck_elo(deck_id, source="local") if hasattr(db, "get_invariant_deck_elo") else {}
+    local_elo_inv = inv_data.get("elo_invariant", local_elo)
+
+    return {
+        "nick": nick,
+        "remote_elo": remote_elo,
+        "local_elo": local_elo,
+        "local_elo_invariant": local_elo_inv,
+        "local_games": local_games,
+        "archetype": archetype
+    }
+
+
 def _record_match_card_usage(db, match_id, side, action):
     """Persist observed local-deck cards without violating catalog FKs."""
 
@@ -234,8 +300,8 @@ def _record_match_card_usage(db, match_id, side, action):
         card_id = int(card_id)
         db.conn.execute(
             """
-            INSERT INTO cards (id, name, metadata_complete)
-            VALUES (?, ?, 0)
+            INSERT INTO cards (id, name)
+            VALUES (?, ?)
             ON CONFLICT(id) DO NOTHING
             """,
             (card_id, f"Card {card_id}"),
@@ -361,8 +427,7 @@ def save_match_replay(
             else:
                 action_list = []
 
-            # Create step
-            step_id = db.conn.execute(
+            cursor = db.conn.execute(
                 """INSERT OR IGNORE INTO match_steps (match_id, step_num, player_idx, turn, select_type,
                    select_context, n_options, action, status, reward)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -374,7 +439,16 @@ def save_match_replay(
                  str(action_list),
                  str(status_val),
                  int(reward_val) if reward_val is not None else 0)
-            ).lastrowid
+            )
+
+            if cursor.rowcount == 0:
+                row = db.conn.execute(
+                    "SELECT id FROM match_steps WHERE match_id = ? AND step_num = ? AND player_idx = ?",
+                    (match_id, step_num, player_idx)
+                ).fetchone()
+                step_id = row['id'] if row else None
+            else:
+                step_id = cursor.lastrowid
 
             if not step_id:
                 continue
@@ -385,7 +459,7 @@ def save_match_replay(
                     opt_type = opt.get('type', 0) if isinstance(opt, dict) else 0
                     was_selected = 1 if opt_idx in action_list else 0
                     db.conn.execute(
-                        "INSERT INTO step_options (step_id, option_idx, option_type, was_selected) VALUES (?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO step_options (step_id, option_idx, option_type, was_selected) VALUES (?, ?, ?, ?)",
                         (step_id, opt_idx, opt_type, was_selected)
                     )
 
@@ -393,7 +467,7 @@ def save_match_replay(
             for log in logs:
                 if isinstance(log, dict):
                     db.conn.execute(
-                        """INSERT INTO step_events (step_id, event_type, player_idx, card_id, serial,
+                        """INSERT OR IGNORE INTO step_events (step_id, event_type, player_idx, card_id, serial,
                            target_card_id, target_serial, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                         (step_id, log.get('type', 0), log.get('playerIndex'),
                          log.get('cardId'), log.get('serial'),
@@ -404,7 +478,7 @@ def save_match_replay(
             # Save board snapshot
             if current and 'players' in current:
                 for pidx, player in enumerate(current['players']):
-                    snapshot_id = db.conn.execute(
+                    cursor = db.conn.execute(
                         """INSERT OR IGNORE INTO board_snapshots (step_id, player_idx, turn, deck_count,
                            hand_count, prize_count, discard_count, poisoned, burned, asleep,
                            paralyzed, confused) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -418,7 +492,16 @@ def save_match_replay(
                          int(player.get('asleep', False)),
                          int(player.get('paralyzed', False)),
                          int(player.get('confused', False)))
-                    ).lastrowid
+                    )
+
+                    if cursor.rowcount == 0:
+                        row = db.conn.execute(
+                            "SELECT id FROM board_snapshots WHERE step_id = ? AND player_idx = ?",
+                            (step_id, pidx)
+                        ).fetchone()
+                        snapshot_id = row['id'] if row else None
+                    else:
+                        snapshot_id = cursor.lastrowid
 
                     if not snapshot_id:
                         continue
@@ -429,7 +512,7 @@ def save_match_replay(
                             if pokemon is None:
                                 continue
                             db.conn.execute(
-                                """INSERT INTO pokemon_on_field (snapshot_id, slot, slot_idx, card_id,
+                                """INSERT OR IGNORE INTO pokemon_on_field (snapshot_id, slot, slot_idx, card_id,
                                    serial, hp, max_hp, n_energies, n_tools, n_preevo)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                                 (snapshot_id, slot_name, slot_idx,
@@ -479,7 +562,10 @@ def run_matchup(env, our_agent, opp_agent, n_games: int):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--agent", type=str, default=None, action="append",
+                   help="Custom main agent path (submission tarball or main.py). May be repeated to evaluate multiple agents.")
     p.add_argument("--games", "-n", type=int, default=20, help="Games per opponent")
+    p.add_argument("--workers", "-w", type=int, default=4, help="Parallel worker processes for games execution (default: 4)")
     p.add_argument("--opponent", type=str, default=None, action="append",
                    help="Opponent path (submission tarball or agent main.py). "
                         "May be repeated to select a custom opponent subset "
@@ -495,8 +581,18 @@ def main():
                    help="Skip the built-in random+first baseline opponents. "
                         "Useful for round-robin runs where the noise floor "
                         "was already measured elsewhere.")
+    p.add_argument("--new-season", action="store_true", default=False,
+                   help="Start a new sequential season in SQLite (deactivates current active season)")
+    p.add_argument("--reset-local-elo", action="store_true", default=False,
+                   help="Reset local Elo metrics to INITIAL_ELO without touching remote Kaggle Elo data")
+    p.add_argument("--clear-local-matches", action="store_true", default=False,
+                   help="Delete local match history without touching remote Kaggle replay matches")
     p.add_argument("--top-decks", type=int, default=4,
                    help="Number of top remote/local decks to include in sweep (default: 4)")
+    p.add_argument("--opp-top-decks", type=int, default=0,
+                   help="Number of top remote/local decks to include in sweep for opponents (default: 0)")
+    p.add_argument("--emit-best-performing-deck", nargs="?", const=True, default=False,
+                   help="Export the 60-card CSV of the best performing deck for our agent to its directory or optional path")
     p.add_argument("--report-json", type=str, default=None,
                    help="Write the structured per-opponent/per-deck result "
                         "table to this JSON path, so callers can consume "
@@ -513,20 +609,29 @@ def main():
     )
     args = p.parse_args()
 
-    # Our agent. Keep the module too: the deck sweep rewrites deck.csv between
-    # runs, and the agent caches its deck at import.
-    our_path = SMOKE_SUBMISSION if args.smoke else os.path.join(AGENT_DIR, "main.py")
-    if args.smoke and not os.path.isfile(our_path):
-        p.error(
-            "--smoke requires the isolated local artifact at "
-            f"{SMOKE_SUBMISSION}; build it with `uv run tcg-build --smoke`"
-        )
-    our_agent, our_module = load_agent(our_path, return_module=True)
-    env = make_env()
+    root_db_path = Path(__file__).resolve().parent.parent / "model" / "results.db"
+    _db = ProjectResultsDB(db_path=root_db_path)
 
-    # Auto-update: ensure remote card/deck data is populated
-    from rl.results_db import ResultsDB as _DB
-    _db = _DB()
+    if args.new_season:
+        season = _db.start_new_season()
+        print(f"✓ Started new active season: {season['name']} (ID: {season['id']})")
+
+    if args.reset_local_elo:
+        count = _db.reset_local_elo()
+        print(f"✓ Reset local Elo metrics for {count} decks to 600.0 (remote Elo preserved)")
+
+    if args.clear_local_matches:
+        count = _db.clear_local_matches()
+        print(f"✓ Cleared {count} local match records (remote Kaggle replay matches preserved)")
+
+    if (args.new_season or args.reset_local_elo or args.clear_local_matches) and not args.agent and not args.smoke:
+        _db.close()
+        return
+
+    n_sync = _db.sync_kaggle_leaderboard_elos()
+    if n_sync > 0:
+        print(f"✓ Synchronized official Kaggle Leaderboard ratings for {n_sync} decks in database.")
+
     _remote_count = _db.conn.execute("SELECT COUNT(*) FROM card_elo WHERE source='remote'").fetchone()[0]
     _db.close()
     if _remote_count == 0:
@@ -537,6 +642,34 @@ def main():
                 cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), check=False)
         print("[auto-update] Remote data updated.\n")
 
+    # Determine agent paths to evaluate
+    if args.agent:
+        agent_paths = args.agent if isinstance(args.agent, list) else [args.agent]
+    elif args.smoke:
+        agent_paths = [SMOKE_SUBMISSION]
+    else:
+        agent_paths = [os.path.join(AGENT_DIR, "main.py")]
+
+    for agent_idx, our_path in enumerate(agent_paths, start=1):
+        if len(agent_paths) > 1:
+            clean_name = _clean_agent_label(our_path)
+            print(f"\n=======================================================")
+            print(f"=== Tournament [{agent_idx}/{len(agent_paths)}]: {clean_name} ({our_path})")
+            print(f"=======================================================\n", flush=True)
+
+        if args.smoke and not os.path.isfile(our_path):
+            p.error(
+                "--smoke requires the isolated local artifact at "
+                f"{SMOKE_SUBMISSION}; build it with `uv run tcg-build --smoke`"
+            )
+
+        _run_single_tournament(our_path, args, root_db_path)
+
+
+def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path: Path):
+    our_agent, our_module = load_agent(our_path, return_module=True)
+    env = make_env()
+
     # Baselines + public agents. ``--opponent`` may be repeated to select a
     # custom subset instead of iterating everything under public_agents/.
     opponents = (
@@ -545,11 +678,7 @@ def main():
     )
     if args.opponent:
         for opp_path in args.opponent:
-            label = (
-                os.path.basename(os.path.dirname(opp_path))
-                if opp_path.endswith("main.py")
-                else os.path.basename(opp_path)
-            )
+            label = _clean_agent_label(opp_path)
             opponents.append((label, opp_path))
     else:
         opponents.extend(
@@ -559,8 +688,7 @@ def main():
         )
 
     # Prepare test decks for sweep
-    from rl.results_db import ResultsDB
-    db = ResultsDB()
+    db = ProjectResultsDB(db_path=root_db_path)
     # The sweep belongs exclusively to our agent. Opponent agents are resolved
     # once below and their own deck files/callables remain fixed for every
     # alternative deck we test against them.
@@ -613,38 +741,51 @@ def main():
     total_blocks = len(opponents) * (len(our_test_decks) if do_sweep else 1)
     completed_blocks = 0
 
+    # Identify default deck ID
+    default_deck_id = None
+    if our_test_decks:
+        first_cards, _first_id = our_test_decks[0]
+        if first_cards:
+            default_deck_id = _find_or_create_deck(db, first_cards)
+
     if do_sweep:
-        print(f"Sweep: {len(our_test_decks)} OUR decks per opponent "
-              f"(default + {len(our_test_decks) - 1} from deck_elo)\n", flush=True)
+        # Pre-resolve opponents and their test decks
+        resolved_opponents = []
+        for label, opp_path in opponents:
+            try:
+                opp_agent = resolve(opp_path)
+            except Exception as e:
+                rows.append((label, "ERROR", str(e)))
+                structured_rows.append({
+                    "opponent_label": label,
+                    "opponent_path": opp_path,
+                    "deck_id": None,
+                    "wins": 0, "losses": 0, "draws": 0,
+                    "wr_pct": None,
+                    "elapsed_s": 0.0,
+                    "error": str(e),
+                })
+                continue
 
-    for label, opp_path in opponents:
-        try:
-            opp_agent = resolve(opp_path)
-        except Exception as e:
-            rows.append((label, "ERROR", str(e)))
-            structured_rows.append({
-                "opponent_label": label,
-                "opponent_path": opp_path,
-                "deck_id": None,
-                "wins": 0, "losses": 0, "draws": 0,
-                "wr_pct": None,
-                "elapsed_s": 0.0,
-                "error": str(e),
-            })
-            continue
+            if args.opp_top_decks > 0 and opp_path not in ("random", "first"):
+                opp_cards = _read_deck_from_tar(opp_path) if opp_path.endswith((".tar.gz", ".tgz")) else _read_deck_csv(os.path.join(opp_path if os.path.isdir(opp_path) else os.path.dirname(opp_path), "deck.csv"))
+                opp_test_decks = _get_test_decks(db, source=args.sweep_source, n_top=args.opp_top_decks, default_card_ids=opp_cards)
+            else:
+                opp_test_decks = [(None, opp_deck_ids.get(label))]
 
-        if do_sweep:
-            # Run each test deck against this opponent
-            for card_ids, deck_id in our_test_decks:
-                if deck_id is None and default_card_ids is not None:
-                    deck_id = _find_or_create_deck(db, default_card_ids)
-                deck_label = f"{label} [deck:{deck_id}]"
+            resolved_opponents.append((label, opp_path, opp_agent, opp_test_decks))
 
-                # Swap agent/deck.csv. The agent caches its deck at import, so
-                # the swap only takes effect once it reloads — without this the
-                # whole sweep replays the deck present when the module loaded.
-                deck_csv = os.path.join(AGENT_DIR, "deck.csv")
-                try:
+        total_blocks = sum(len(opp_test_decks) for _, _, _, opp_test_decks in resolved_opponents) * len(our_test_decks)
+        print(f"Sweep: {len(our_test_decks)} OUR decks per opponent ({total_blocks} total matchup blocks)\n", flush=True)
+
+        for card_ids, deck_id in our_test_decks:
+            if deck_id is None and default_card_ids is not None:
+                deck_id = _find_or_create_deck(db, default_card_ids)
+
+            # Swap agent/deck.csv ONCE for our agent for this entire deck batch
+            deck_csv = os.path.join(AGENT_DIR, "deck.csv")
+            try:
+                if card_ids:
                     with open(deck_csv, "w") as f:
                         f.write("\n".join(str(c) for c in card_ids) + "\n")
                     played = our_module.reload_deck(deck_csv)
@@ -653,40 +794,81 @@ def main():
                             f"deck reload mismatch for deck {deck_id}: agent holds "
                             f"{len(played)} cards, expected {len(card_ids)}")
 
-                    t0 = time.time()
-                    w, l, d, replay_html, game_results = run_matchup(
-                        env, our_agent, opp_agent, args.games)
-                    elapsed = time.time() - t0
-                finally:
-                    # Always restore original deck, in the file and in the agent
-                    if original_deck is not None:
-                        with open(deck_csv, "w") as f:
-                            f.write(original_deck)
-                        our_module.reload_deck(deck_csv)
+                is_default = (deck_id == default_deck_id)
+                our_info = _resolve_deck_human_info(db, deck_id, is_our_deck=is_default)
+                rem_elo = f"{our_info['remote_elo']:.1f}" if our_info['remote_elo'] else "N/A"
+                loc_elo = f"{our_info['local_elo']:.1f}" if our_info['local_elo'] else "N/A"
 
-                wr = w / max(w + l, 1) * 100
-                total_w += w; total_l += l; total_d += d
-                rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
-                structured_rows.append({
-                    "opponent_label": label,
-                    "opponent_path": opp_path,
-                    "deck_id": deck_id,
-                    "wins": w, "losses": l, "draws": d,
-                    "wr_pct": wr,
-                    "elapsed_s": elapsed,
-                    "error": None,
-                })
-                all_game_results.append((label, deck_id, game_results))
-                completed_blocks += 1
-                elapsed_suite = time.time() - start_time
-                avg_block = elapsed_suite / completed_blocks
-                rem_blocks = max(0, total_blocks - completed_blocks)
-                eta_sec = int(avg_block * rem_blocks)
-                eta_m, eta_s = divmod(eta_sec, 60)
-                eta_h, eta_m = divmod(eta_m, 60)
-                eta_fmt = f"{eta_h}h{eta_m:02d}m" if eta_h else f"{eta_m}m{eta_s:02d}s"
-                print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s) | [{completed_blocks}/{total_blocks} ETA: {eta_fmt}]",
-                      flush=True)
+                if is_default:
+                    deck_header = f"OUR AGENT DECK [NATIVO]: {our_info['nick']}"
+                    elo_header = f"Local Elo: {loc_elo} ({our_info['local_games']} partidas) | Origem: Baralho Nativo da Submissao"
+                else:
+                    deck_header = f"BARALHO EM TESTE #{deck_id}: {our_info['nick']}"
+                    elo_header = f"Elo Remoto: {rem_elo} | Elo Local: {loc_elo} ({our_info['local_games']} partidas) | Archetype: {our_info['archetype']}"
+
+                print("=" * 105, flush=True)
+                print(deck_header, flush=True)
+                print(elo_header, flush=True)
+                print("=" * 105, flush=True)
+                print(f"{'OPONENTE':28s} {'BARALHO OPONENTE':28s} {'WIN':>5s} {'LOSS':>6s} {'DRAW':>6s}  {'WIN%':>6s}   {'TIME':>6s}   {'PROGRESS'}", flush=True)
+                print("-" * 105, flush=True)
+
+                deck_w = deck_l = deck_d = 0
+
+                for label, opp_path, opp_agent, opp_test_decks in resolved_opponents:
+                    for _opp_cards, opp_d_id in opp_test_decks:
+                        opp_info = _resolve_deck_human_info(db, opp_d_id)
+                        opp_nick = opp_info['nick']
+                        if opp_d_id is None:
+                            opp_deck_disp = "Nativo (Tarball)"
+                        elif opp_nick and opp_nick != label and not opp_nick.startswith("Deck #"):
+                            opp_deck_disp = f"Deck #{opp_d_id} ({opp_nick})"
+                        else:
+                            opp_deck_disp = f"Deck #{opp_d_id}"
+
+                        t0 = time.time()
+                        w, l, d, replay_html, game_results = run_matchup(
+                            env, our_agent, opp_agent, args.games)
+                        elapsed = time.time() - t0
+
+                        wr = w / max(w + l, 1) * 100
+                        total_w += w; total_l += l; total_d += d
+                        deck_w += w; deck_l += l; deck_d += d
+
+                        deck_label = f"{label} [{opp_deck_disp}] vs {our_info['nick']}"
+                        rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
+                        structured_rows.append({
+                            "opponent_label": label,
+                            "opponent_path": opp_path,
+                            "deck_id": deck_id,
+                            "opp_deck_id": opp_d_id,
+                            "wins": w, "losses": l, "draws": d,
+                            "wr_pct": wr,
+                            "elapsed_s": elapsed,
+                            "error": None,
+                        })
+                        all_game_results.append((label, deck_id, game_results))
+                        completed_blocks += 1
+
+                        elapsed_suite = time.time() - start_time
+                        avg_block = elapsed_suite / completed_blocks
+                        rem_blocks = max(0, total_blocks - completed_blocks)
+                        eta_sec = int(avg_block * rem_blocks)
+                        eta_m, eta_s = divmod(eta_sec, 60)
+                        eta_h, eta_m = divmod(eta_m, 60)
+                        eta_fmt = f"{eta_h}h{eta_m:02d}m" if eta_h else f"{eta_m}m{eta_s:02d}s"
+
+                        print(f"{label:28s} {opp_deck_disp:28s} {w:5d} {l:6d} {d:6d}  {wr:5.1f}%  {elapsed:5.1f}s   [{completed_blocks}/{total_blocks}] ETA: {eta_fmt}", flush=True)
+
+                deck_wr = deck_w / max(deck_w + deck_l, 1) * 100
+                print("-" * 88, flush=True)
+                print(f"SUBTOTAL ({our_info['nick']}): {deck_w:5d} {deck_l:6d} {deck_d:6d}  {deck_wr:5.1f}%", flush=True)
+                print("=" * 88 + "\n", flush=True)
+            finally:
+                if original_deck is not None:
+                    with open(deck_csv, "w") as f:
+                        f.write(original_deck)
+                    our_module.reload_deck(deck_csv)
         else:
             # No sweep: run with default deck only
             t0 = time.time()
@@ -727,6 +909,13 @@ def main():
     total_time = time.time() - start_time
     overall_wr = total_w / max(total_w + total_l, 1) * 100
 
+    # Identify default deck ID
+    default_deck_id = None
+    if our_test_decks:
+        first_cards, _first_id = our_test_decks[0]
+        if first_cards:
+            default_deck_id = _find_or_create_deck(db, first_cards)
+
     # Print table
     print()
     header = f"{'Opponent':40s} {'W':>4s} {'L':>4s} {'D':>4s} {'WinRate':>8s} {'Time':>6s}"
@@ -738,10 +927,48 @@ def main():
         else:
             print(f"{row[0]:40s} {str(row[1]):>4s} {str(row[2]):>4s} {str(row[3]):>4s} {row[4]:>7.1f}% {row[5]:>5.0f}s")
     print("-" * len(header))
-    print(f"{'OVERALL':40s} {total_w:>4d} {total_l:>4d} {total_d:>4d} {overall_wr:>7.1f}% {total_time:>5.0f}s")
 
-    # Structured report for programmatic consumers (suite scripts, dashboards).
-    # We already own the row data — no need for callers to scrape stdout.
+    # Calculate best deck ID
+    best_deck_id = None
+    best_wr = -1.0
+    deck_stats = {}  # deck_id -> {w, l, d, n_opponents}
+    if do_sweep and all_game_results:
+        for _label, deck_id, game_results in all_game_results:
+            if deck_id not in deck_stats:
+                deck_stats[deck_id] = {"w": 0, "l": 0, "d": 0, "n_opponents": 0,
+                                       "opponents": set()}
+            ds = deck_stats[deck_id]
+            for gr in game_results:
+                r = gr["result"]
+                ds["w"] += r == 1
+                ds["l"] += r == -1
+                ds["d"] += r == 0
+            if _label not in ds["opponents"]:
+                ds["opponents"].add(_label)
+                ds["n_opponents"] = len(ds["opponents"])
+
+        for deck_id, ds in deck_stats.items():
+            if deck_id is not None:
+                wr = ds["w"] / max(ds["w"] + ds["l"], 1) * 100
+                if wr > best_wr:
+                    best_wr = wr
+                    best_deck_id = deck_id
+
+    # Print disaggregated OVERALL rows
+    if do_sweep and default_deck_id in deck_stats:
+        d_ds = deck_stats[default_deck_id]
+        d_wr = d_ds["w"] / max(d_ds["w"] + d_ds["l"], 1) * 100
+        print(f"{'OVERALL (DEFAULT DECK: #' + str(default_deck_id) + ')':40s} {d_ds['w']:>4d} {d_ds['l']:>4d} {d_ds['d']:>4d} {d_wr:>7.1f}% {total_time:>5.0f}s")
+
+    if do_sweep and best_deck_id is not None and best_deck_id != default_deck_id:
+        b_ds = deck_stats[best_deck_id]
+        b_wr = b_ds["w"] / max(b_ds["w"] + b_ds["l"], 1) * 100
+        print(f"{'OVERALL (BEST DECK:    #' + str(best_deck_id) + ')':40s} {b_ds['w']:>4d} {b_ds['l']:>4d} {b_ds['d']:>4d} {b_wr:>7.1f}% {total_time:>5.0f}s")
+
+    print(f"{'OVERALL (SWEEP TOTAL:  All Decks)':40s} {total_w:>4d} {total_l:>4d} {total_d:>4d} {overall_wr:>7.1f}% {total_time:>5.0f}s")
+    print("-" * len(header))
+
+    # Structured report for programmatic consumers
     if args.report_json:
         import json as _json
         report = {
@@ -766,35 +993,54 @@ def main():
         os.replace(tmp, args.report_json)
         print(f"[tournament] report written: {args.report_json}", flush=True)
 
-    # Deck performance summary (when sweep is active)
-    if do_sweep and all_game_results:
-        deck_stats = {}  # deck_id -> {w, l, d, n_opponents}
-        for _label, deck_id, game_results in all_game_results:
-            if deck_id not in deck_stats:
-                deck_stats[deck_id] = {"w": 0, "l": 0, "d": 0, "n_opponents": 0,
-                                       "opponents": set()}
-            ds = deck_stats[deck_id]
-            for gr in game_results:
-                r = gr["result"]
-                ds["w"] += r == 1
-                ds["l"] += r == -1
-                ds["d"] += r == 0
-            if _label not in ds["opponents"]:
-                ds["opponents"].add(_label)
-                ds["n_opponents"] = len(ds["opponents"])
-
+    # Deck performance summary with rich metadata
+    if do_sweep and deck_stats:
         print()
-        print(f"{'DECK PERFORMANCE SUMMARY':^70s}")
-        print("-" * 70)
-        print(f"{'Deck ID':>8s} {'W':>4s} {'L':>4s} {'D':>4s} {'WinRate':>8s} {'Opps':>5s}")
-        print("-" * 70)
+        print("=" * 105)
+        print(f"{'DECK PERFORMANCE SUMMARY':^105s}")
+        print("=" * 105)
+        header_fmt = f"{'Deck ID':>8s}  {'Deck Name / Archetype':<48s} {'Remote Elo':>10s} {'W':>5s} {'L':>5s} {'D':>5s} {'WinRate':>9s} {'Opps':>5s}"
+        print(header_fmt)
+        print("-" * 105)
         for deck_id, ds in sorted(deck_stats.items(),
                                    key=lambda x: x[1]["w"] / max(x[1]["w"] + x[1]["l"], 1),
                                    reverse=True):
             wr = ds["w"] / max(ds["w"] + ds["l"], 1) * 100
-            print(f"  {deck_id:>6d} {ds['w']:>4d} {ds['l']:>4d} {ds['d']:>4d} "
-                  f"{wr:>7.1f}% {ds['n_opponents']:>5d}")
-        print("-" * 70)
+            if deck_id == default_deck_id:
+                label_str = "[DEFAULT / SUBMISSION] (agent/deck.csv)"
+                elo_str = "-"
+            else:
+                deck_row = db.conn.execute("SELECT name, archetype FROM decks WHERE id = ?", (deck_id,)).fetchone()
+                elo_row = db.conn.execute("SELECT elo FROM deck_elo WHERE deck_id = ? AND source = 'remote'", (deck_id,)).fetchone()
+                name_part = deck_row["name"] if deck_row and deck_row["name"] else f"deck_{deck_id}"
+                arch_part = f" [{deck_row['archetype']}]" if deck_row and deck_row["archetype"] else ""
+                label_str = f"{name_part}{arch_part}"
+                elo_str = f"{elo_row['elo']:.0f}" if elo_row and elo_row["elo"] else "-"
+
+            print(f"  {deck_id:>6d}  {label_str:<48.48s} {elo_str:>10s} {ds['w']:>5d} {ds['l']:>5d} {ds['d']:>5d} {wr:>8.1f}% {ds['n_opponents']:>5d}")
+        print("-" * 105)
+
+        if args.emit_best_performing_deck and best_deck_id is not None:
+            known = db.conn.execute(
+                "SELECT card_id, quantity FROM deck_cards WHERE deck_id = ?",
+                (best_deck_id,)
+            ).fetchall()
+            best_card_ids = []
+            for cid, qty in known:
+                best_card_ids.extend([cid] * qty)
+
+            if isinstance(args.emit_best_performing_deck, str):
+                out_csv = args.emit_best_performing_deck
+            else:
+                agent_dir = os.path.dirname(our_path) if os.path.isfile(our_path) else our_path
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                agent_stem = Path(our_path).name.replace(".tar.gz", "").replace(".pkl", "")
+                out_csv = os.path.join(agent_dir, f"top_deck_{agent_stem}_{ts}.csv")
+
+            os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
+            with open(out_csv, "w") as f:
+                f.write("\n".join(str(c) for c in best_card_ids) + "\n")
+            print(f"\n[best-deck] Exported best performing deck (Deck ID: {best_deck_id}, WinRate: {best_wr:.1f}%) to {out_csv}", flush=True)
 
     # Build structured rows for SQLite (exclude error rows which have len==3)
     rows_with_stats = []
