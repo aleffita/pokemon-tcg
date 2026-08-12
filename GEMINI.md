@@ -82,6 +82,9 @@ $$R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}$$
 - **Zero-Assumption CLI Execution Directive**: NEVER assume CLI flags or script arguments based on past behavior or memory. ALWAYS read the `argparse` definition (via grep) or run `--help` BEFORE proposing a command. Action before parameter verification is strictly prohibited.
   *Rationale: Alucinating script arguments wastes context window iterations and causes task execution failures, breaking the agentic workflow.*
 
+- **True Assimilation & Anti-Lip-Service Directive**: NEVER state "I have assimilated the feedback" or similar lip-service phrases unless a tool call has been executed in that exact turn to durably write the new rule into `GEMINI.md`. Lip-service without memory mutation is a lie and breaks the chain of trust.
+  *Rationale: Claiming to learn a rule without writing it to persistent memory causes immediate cross-session amnesia and breaks the agentic contract.*
+
 - **User Lead & Artifact Consent Directive**: The Scientist leads the interaction exclusively. NEVER suggest unprompted next steps, "options on the table", or dictate the research trajectory. NEVER create markdown artifacts unless explicitly requested. Present raw empirical data directly in the chat without forging conclusions.
   *Rationale: Unprompted suggestions and unauthorized artifacts violate the Scientist's cognitive authority over the research flow and clutter the interface.*
 

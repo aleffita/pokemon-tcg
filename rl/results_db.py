@@ -1295,6 +1295,7 @@ class ResultsDB:
             raise IdempotencyConflict(
                 "local matchup/game identity has conflicting evidence"
             )
+        self.compute_daily_elos(source)
         return int(row["id"])
 
     def _update_online_elo(
@@ -1754,6 +1755,7 @@ class ResultsDB:
                 """,
                 (receipt_key, source_observation_digest, match_id),
             )
+        self.compute_daily_elos(source)
         return match_id
 
     def _resolve_latest_day_id(self, source: str) -> int:
@@ -2090,6 +2092,49 @@ class ResultsDB:
             self.populate_agent_elo_from_kaggle_leaderboard()
         else:
             self.compute_agent_elo(source=source)
+        self._apply_invariant_scaling(source)
+
+    def _apply_invariant_scaling(self, source: str) -> None:
+        import math
+        overlapping = self.conn.execute("""
+            SELECT de_loc.deck_id, de_loc.games_played as n_loc, de_loc.wins as w_loc,
+                   de_rem.elo as remote_elo
+            FROM deck_elo_daily de_loc
+            JOIN deck_elo_daily de_rem ON de_loc.deck_id = de_rem.deck_id
+            WHERE de_loc.source = 'local' AND de_rem.source = 'remote' 
+              AND de_loc.games_played > 0 AND de_rem.games_played > 0
+              AND de_loc.day_id = (SELECT MAX(day_id) FROM deck_elo_daily WHERE source='local')
+              AND de_rem.day_id = (SELECT MAX(day_id) FROM deck_elo_daily WHERE source='remote')
+        """).fetchall()
+
+        delta_abeliano = 0.0
+        if overlapping:
+            tau = 20.0
+            weights = [math.exp(min(r["n_loc"] / tau, 20.0)) for r in overlapping]
+            total_w = sum(weights)
+            if total_w > 0:
+                deltas = []
+                for idx, r in enumerate(overlapping):
+                    w_k = weights[idx] / total_w
+                    n_k = float(r["n_loc"])
+                    wr_k = max(0.02, min(0.98, float(r["w_loc"]) / max(n_k, 1.0)))
+                    r_asymp_k = 600.0 + 400.0 * math.log10(wr_k / (1.0 - wr_k))
+                    deltas.append(w_k * (float(r["remote_elo"]) - r_asymp_k))
+                delta_abeliano = sum(deltas)
+
+        with self.transaction():
+            for table in ["deck_elo_daily", "card_elo_daily", "agent_elo_daily"]:
+                rows = self.conn.execute(f"SELECT rowid, games_played, wins FROM {table} WHERE source=?", (source,)).fetchall()
+                for r in rows:
+                    n = float(r["games_played"])
+                    if n == 0:
+                        continue
+                    w_rate = float(r["wins"]) / n
+                    w_clipped = max(0.02, min(0.98, w_rate))
+                    r_asymptotic = 600.0 + 400.0 * math.log10(w_clipped / (1.0 - w_clipped))
+                    r_smoothed = (n / (n + 10.0)) * r_asymptotic + (10.0 / (n + 10.0)) * 600.0
+                    r_invariant = r_smoothed + delta_abeliano
+                    self.conn.execute(f"UPDATE {table} SET elo = ? WHERE rowid = ?", (r_invariant, r["rowid"]))
 
     def populate_agent_elo_from_kaggle_leaderboard(
         self,
