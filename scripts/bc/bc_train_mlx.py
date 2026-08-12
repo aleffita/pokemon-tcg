@@ -295,11 +295,8 @@ def _aux_loss(
     terminal_tgt = aux_targets["aux_terminal"].astype(mx.float32)
     return_tgt = aux_targets["aux_return"].astype(mx.float32)
     valid = aux_targets["aux_valid"].astype(mx.float32)
-    valid_sum = mx.maximum(mx.sum(valid), mx.array(1.0, dtype=mx.float32))
 
-    ko_bce = (
-        mx.logaddexp(mx.array(0.0, dtype=mx.float32), ko_logit) - ko_tgt * ko_logit
-    )
+    ko_bce = mx.logaddexp(mx.array(0.0, dtype=mx.float32), ko_logit) - ko_tgt * ko_logit
     terminal_bce = (
         mx.logaddexp(mx.array(0.0, dtype=mx.float32), terminal_logit)
         - terminal_tgt * terminal_logit
@@ -308,10 +305,10 @@ def _aux_loss(
     return_mse = (return_pred - return_tgt) ** 2
 
     loss = (
-        weights["ko"] * mx.sum(valid * ko_bce) / valid_sum
-        + weights["prize"] * mx.sum(valid * prize_mse) / valid_sum
-        + weights["terminal"] * mx.sum(valid * terminal_bce) / valid_sum
-        + weights["return"] * mx.sum(valid * return_mse) / valid_sum
+        weights["ko"] * mx.sum(valid * ko_bce)
+        + weights["prize"] * mx.sum(valid * prize_mse)
+        + weights["terminal"] * mx.sum(valid * terminal_bce)
+        + weights["return"] * mx.sum(valid * return_mse)
     )
     return loss
 
@@ -404,9 +401,7 @@ def _batched_sequential_tbptt_loss(
     if lane_count == 0:
         raise ValueError("TBPTT temporal batches must contain at least one lane")
     if (lane_aux_targets is None) != (aux_weights is None):
-        raise ValueError(
-            "lane_aux_targets and aux_weights must be provided together"
-        )
+        raise ValueError("lane_aux_targets and aux_weights must be provided together")
     if lane_aux_targets is not None and len(lane_aux_targets) != lane_count:
         raise ValueError("lane_aux_targets must have one entry per lane")
 
@@ -458,9 +453,7 @@ def _batched_sequential_tbptt_loss(
                 )
             memory = lane_memories[lane_index]
             if memory is None:
-                memory = model.learned_init.reshape(
-                    1, model.scratch_tokens, model.d
-                )
+                memory = model.learned_init.reshape(1, model.scratch_tokens, model.d)
             repeated_memories.append(
                 mx.broadcast_to(
                     memory,
@@ -516,19 +509,14 @@ def _batched_sequential_tbptt_loss(
     aux_targets_all: dict[str, mx.array] | None = None
     if aux_active and total_aux_rows > 0:
         aux_dict_all = {
-            key: mx.concatenate(parts, axis=0)
-            for key, parts in aux_pred_parts.items()
+            key: mx.concatenate(parts, axis=0) for key, parts in aux_pred_parts.items()
         }
         aux_targets_all = {
             key: mx.concatenate(parts, axis=0)
             for key, parts in aux_target_parts.items()
         }
-        aux_mean = _aux_loss(aux_dict_all, aux_targets_all, aux_weights)
-        # Rescale mean -> sum form so it composes with the CE sum above and
-        # the caller's single division by total example count at the
-        # optimizer-step boundary yields mean(CE) + mean(aux), consistent
-        # with the non-TBPTT scaling choice.
-        loss_sum = loss_sum + aux_mean * total_aux_rows
+        aux_sum = _aux_loss(aux_dict_all, aux_targets_all, aux_weights)
+        loss_sum = loss_sum + aux_sum
 
     if any(memory is None for memory in lane_memories):
         raise ValueError("every TBPTT lane must advance at least one decision")
@@ -628,8 +616,7 @@ def _build_tbptt_plan(
                     "the largest autoregressive decision."
                 )
             if current and (
-                len(current) >= chunk_size
-                or current_rows + decision_rows > row_budget
+                len(current) >= chunk_size or current_rows + decision_rows > row_budget
             ):
                 group_chunks.append(
                     _TBPTTChunk(
@@ -864,9 +851,9 @@ def _scan_tbptt_locations(
             eids_rg = None
             sides_rg = None
             steps_rg = None
-            for io_batch in fragment.subset(
-                row_group_ids=[rg_idx]
-            ).to_batches(columns=columns, batch_size=batch_size):
+            for io_batch in fragment.subset(row_group_ids=[rg_idx]).to_batches(
+                columns=columns, batch_size=batch_size
+            ):
                 eb = io_batch.column("episode_id").to_numpy(zero_copy_only=False)
                 sb = io_batch.column("side").to_numpy(zero_copy_only=False)
                 tb = io_batch.column("step_id").to_numpy(zero_copy_only=False)
@@ -997,7 +984,7 @@ class _ParquetRowGroupCache:
     # (observed: 54 GB in a single overnight run, filling the disk to 99%).
     # 10 GB is generous enough to keep the most recent evictees warm without
     # threatening disk headroom on a 256-512 GB MacBook SSD.
-    _SSD_MAX_BYTES: int = 10 * 1024 ** 3  # 10 GiB
+    _SSD_MAX_BYTES: int = 10 * 1024**3  # 10 GiB
 
     def __init__(
         self,
@@ -1010,6 +997,7 @@ class _ParquetRowGroupCache:
     ) -> None:
         import pyarrow.parquet as pq  # local to avoid startup cost when unused
         from collections import OrderedDict
+
         self._pq = pq
         self._file_paths = file_paths
         # ParquetFile handles: opened lazily and thread-safe for concurrent
@@ -1023,12 +1011,10 @@ class _ParquetRowGroupCache:
         # Two OrderedDicts model the tiers. ``_transient`` is LRU (oldest at
         # front, newest at back). ``_hot`` order does not matter for
         # eviction but preserves insertion order for a stable report.
-        self._transient: OrderedDict[
-            tuple[int, int], dict[str, np.ndarray]
-        ] = OrderedDict()
-        self._hot: OrderedDict[
-            tuple[int, int], dict[str, np.ndarray]
-        ] = OrderedDict()
+        self._transient: OrderedDict[tuple[int, int], dict[str, np.ndarray]] = (
+            OrderedDict()
+        )
+        self._hot: OrderedDict[tuple[int, int], dict[str, np.ndarray]] = OrderedDict()
         # Per-entry hit counters. Kept for evicted entries too so a later
         # re-load can restore its hot status without waiting for the counter
         # to climb again.
@@ -1064,6 +1050,7 @@ class _ParquetRowGroupCache:
         self._bytes_loaded = 0
         try:
             import psutil as _psutil  # noqa: F401 -- probe availability
+
             self._pressure_probe = True
         except ImportError:
             self._pressure_probe = False
@@ -1093,6 +1080,7 @@ class _ParquetRowGroupCache:
         if not self._pressure_probe:
             return False
         import psutil
+
         return psutil.virtual_memory().percent >= self._HIGH_WATERMARK_PCT
 
     # ---- pyarrow helpers ----------------------------------------------------
@@ -1104,9 +1092,7 @@ class _ParquetRowGroupCache:
                 self._pq_files[file_idx] = pf
         return pf
 
-    def _load_rg(
-        self, file_idx: int, row_group_idx: int
-    ) -> dict[str, np.ndarray]:
+    def _load_rg(self, file_idx: int, row_group_idx: int) -> dict[str, np.ndarray]:
         pf = self._open(file_idx)
         table = pf.read_row_group(row_group_idx, columns=self._columns)
         rg_bytes = 0
@@ -1116,8 +1102,7 @@ class _ParquetRowGroupCache:
             for c in self._columns:
                 dtype = (
                     np.int32
-                    if c in self._int_keys
-                    or c == "opt_group"
+                    if c in self._int_keys or c == "opt_group"
                     else _META_COLUMN_DTYPES.get(c, np.float32)
                 )
                 rg_dict[c] = np.zeros(
@@ -1136,9 +1121,7 @@ class _ParquetRowGroupCache:
     # ---- SSD spill tier -----------------------------------------------------
     def _ssd_path(self, key: tuple[int, int]) -> str:
         assert self._ssd_spill_dir is not None
-        return os.path.join(
-            self._ssd_spill_dir, f"rg_{key[0]}_{key[1]}.npz"
-        )
+        return os.path.join(self._ssd_spill_dir, f"rg_{key[0]}_{key[1]}.npz")
 
     def _evict_ssd_lru(self, bytes_needed: int) -> None:
         """Delete oldest SSD spill files until we have room for *bytes_needed*
@@ -1154,9 +1137,7 @@ class _ParquetRowGroupCache:
             except FileNotFoundError:
                 pass  # already gone — fine
 
-    def _spill_to_ssd(
-        self, key: tuple[int, int], rg: dict[str, np.ndarray]
-    ) -> bool:
+    def _spill_to_ssd(self, key: tuple[int, int], rg: dict[str, np.ndarray]) -> bool:
         if self._ssd_spill_dir is None:
             return False
         # Estimate on-disk size from in-memory arrays (npz is uncompressed
@@ -1177,9 +1158,7 @@ class _ParquetRowGroupCache:
             # Disk full or permission trouble -- silently drop the entry.
             return False
 
-    def _load_from_ssd(
-        self, key: tuple[int, int]
-    ) -> dict[str, np.ndarray] | None:
+    def _load_from_ssd(self, key: tuple[int, int]) -> dict[str, np.ndarray] | None:
         if self._ssd_spill_dir is None:
             return None
         if key not in self._ssd_keys:
@@ -1339,9 +1318,7 @@ class _ParquetRowGroupCache:
             f = int(sel_files[order[i]])
             g = int(sel_rgs[order[i]])
             while (
-                j < n
-                and int(sel_files[order[j]]) == f
-                and int(sel_rgs[order[j]]) == g
+                j < n and int(sel_files[order[j]]) == f and int(sel_rgs[order[j]]) == g
             ):
                 j += 1
             rg_dict = self._touch((f, g))
@@ -1350,9 +1327,7 @@ class _ParquetRowGroupCache:
             for c in self._columns:
                 arr = rg_dict[c][row_ids_in_rg]
                 if gathered[c] is None:
-                    gathered[c] = np.empty(
-                        (n,) + arr.shape[1:], dtype=arr.dtype
-                    )
+                    gathered[c] = np.empty((n,) + arr.shape[1:], dtype=arr.dtype)
                 gathered[c][block] = arr  # writes into sorted-order slots
             i = j
 
@@ -1364,8 +1339,7 @@ class _ParquetRowGroupCache:
                 data = np.zeros(
                     (0,) + self._shapes.get(c, ()),
                     dtype=np.int32
-                    if c in self._int_keys
-                    or c == "opt_group"
+                    if c in self._int_keys or c == "opt_group"
                     else _META_COLUMN_DTYPES.get(c, np.float32),
                 )
             out[c] = data[inv_order]
@@ -1415,18 +1389,14 @@ def _stream_train_microbatches(
     ):
         if io_batch.num_rows == 0:
             continue
-        chunk = {
-            c: _read_batch_column(io_batch, c, shapes, int_keys) for c in columns
-        }
+        chunk = {c: _read_batch_column(io_batch, c, shapes, int_keys) for c in columns}
         _apply_dedup_relabel(chunk)
         n = io_batch.num_rows
         perm = np.random.default_rng([*seed_key, io_index]).permutation(n)
         io_index += 1
         chunk = {c: v[perm] for c, v in chunk.items()}
         if carry is not None:
-            chunk = {
-                c: np.concatenate([carry[c], chunk[c]], axis=0) for c in columns
-            }
+            chunk = {c: np.concatenate([carry[c], chunk[c]], axis=0) for c in columns}
         total = len(chunk[columns[0]])
         pos = 0
         while total - pos >= batch_size:
@@ -1788,9 +1758,7 @@ def main() -> None:
         if a.muon_weight_decay is not None
         else cfg.muon_weight_decay
     )
-    a.adamw_betas = (
-        a.adamw_betas if a.adamw_betas is not None else cfg.adamw_betas
-    )
+    a.adamw_betas = a.adamw_betas if a.adamw_betas is not None else cfg.adamw_betas
     a.adamw_eps = a.adamw_eps if a.adamw_eps is not None else cfg.adamw_eps
     a.adamw_weight_decay = (
         a.adamw_weight_decay
@@ -1813,7 +1781,9 @@ def main() -> None:
         else cfg.aux_terminal_weight
     )
     a.aux_return_weight = (
-        a.aux_return_weight if a.aux_return_weight is not None else cfg.aux_return_weight
+        a.aux_return_weight
+        if a.aux_return_weight is not None
+        else cfg.aux_return_weight
     )
     a.compile = a.compile if a.compile is not None else cfg.compile
     a.log_interval = a.log_interval if a.log_interval is not None else cfg.log_interval
@@ -1896,9 +1866,7 @@ def main() -> None:
             "selected training days disagree on would-KO ('enabled' differs "
             "across days); pick a homogeneous set of days"
         )
-    dataset_would_ko = (
-        would_ko_enabled_flags.pop() if would_ko_enabled_flags else False
-    )
+    dataset_would_ko = would_ko_enabled_flags.pop() if would_ko_enabled_flags else False
     if dataset_would_ko != bool(cfg.bc_would_ko):
         raise ValueError(
             "training config and dataset disagree on would-KO: "
@@ -1907,8 +1875,7 @@ def main() -> None:
         )
     if dataset_would_ko:
         wk_nvars = {
-            int((m.get("build_config") or {}).get("bc_wk_nvar", -1))
-            for m in manifests
+            int((m.get("build_config") or {}).get("bc_wk_nvar", -1)) for m in manifests
         }
         if wk_nvars != {int(cfg.bc_wk_nvar)}:
             raise ValueError(
@@ -2029,6 +1996,7 @@ def main() -> None:
                 "in the parquet; rebuild the dataset"
             )
         import sqlite3 as _sqlite3_top
+
         _top_conn = _sqlite3_top.connect(str(a.db))
         _top_conn.row_factory = _sqlite3_top.Row
         top_names_by_day: dict[int, set[str]] = {}
@@ -2113,24 +2081,24 @@ def main() -> None:
     # files, so the split key is the episode set itself, seeded and
     # deterministic. Episodes never straddle files (one zip == one day == one
     # episode's home), so this keeps train/val fully episode-disjoint.
-    rng = np.random.default_rng(a.seed)
-    shuffled_eids = selected_eids[rng.permutation(len(selected_eids))]
-    n_val_eps = max(1, int(round(len(shuffled_eids) * a.val_frac)))
-    if n_val_eps >= len(shuffled_eids):
-        n_val_eps = len(shuffled_eids) - 1
-    if n_val_eps <= 0 or len(shuffled_eids) - n_val_eps <= 0:
+    # To prevent SSD cache thrashing on Unified Memory (Zero-SSD), we do not
+    # permute the episodes globally before the split. We take a contiguous block
+    # for validation (which corresponds to sequential Parquet row_groups), ensuring
+    # the KV cache loads each block fully sequentially.
+    n_val_eps = max(1, int(round(len(selected_eids) * a.val_frac)))
+    if n_val_eps >= len(selected_eids):
+        n_val_eps = len(selected_eids) - 1
+    if n_val_eps <= 0 or len(selected_eids) - n_val_eps <= 0:
         raise ValueError(
             "episode split produced an empty train or val set "
-            f"({len(shuffled_eids)} episode(s) selected); add more training "
+            f"({len(selected_eids)} episode(s) selected); add more training "
             "days or lower --val-frac"
         )
-    val_episode_ids = shuffled_eids[:n_val_eps]
-    train_episode_ids = shuffled_eids[n_val_eps:]
+    val_episode_ids = selected_eids[:n_val_eps]
+    train_episode_ids = selected_eids[n_val_eps:]
     val_filter = pads.field("episode_id").isin(val_episode_ids.tolist())
     train_filter = pads.field("episode_id").isin(train_episode_ids.tolist())
-    _TBPTT_FILTER_CACHE[id(val_filter)] = np.asarray(
-        val_episode_ids, dtype=np.int64
-    )
+    _TBPTT_FILTER_CACHE[id(val_filter)] = np.asarray(val_episode_ids, dtype=np.int64)
     _TBPTT_FILTER_CACHE[id(train_filter)] = np.asarray(
         train_episode_ids, dtype=np.int64
     )
@@ -2151,16 +2119,13 @@ def main() -> None:
     # is_attack, is_ko, opt_group) are accumulated during the val loop
     # from the fetched dicts and stitched back to row-order for the metrics
     # pass right after.
-    val_meta_columns = ["episode_id", "side", "step_id"]
     (
         val_meta,
         _val_row_file_idx,
         _val_row_group_idx,
         _val_row_offset,
         _val_file_paths,
-    ) = _scan_tbptt_locations(
-        pa_dataset, val_filter, enc_shapes, int_keys
-    )
+    ) = _scan_tbptt_locations(pa_dataset, val_filter, enc_shapes, int_keys)
     n_val = int(len(val_meta["episode_id"]))
     if n_val == 0:
         raise RuntimeError(
@@ -2172,9 +2137,7 @@ def main() -> None:
         val_cache_columns.append("opt_group")
     if aux_active:
         val_cache_columns.extend(_AUX_COLUMNS)
-    _val_spill_dir = os.path.join(
-        os.path.dirname(a.out) or ".", ".cache_spill", "val"
-    )
+    _val_spill_dir = os.path.join(os.path.dirname(a.out) or ".", ".cache_spill", "val")
     _val_row_group_cache = _ParquetRowGroupCache(
         file_paths=_val_file_paths,
         columns=val_cache_columns,
@@ -2218,9 +2181,7 @@ def main() -> None:
             _tbptt_row_group_idx,
             _tbptt_row_offset,
             _tbptt_file_paths,
-        ) = _scan_tbptt_locations(
-            pa_dataset, train_filter, enc_shapes, int_keys
-        )
+        ) = _scan_tbptt_locations(pa_dataset, train_filter, enc_shapes, int_keys)
         n_train = int(len(train_meta["episode_id"]))
         _train_spill_dir = os.path.join(
             os.path.dirname(a.out) or ".", ".cache_spill", "train"
@@ -2325,7 +2286,9 @@ def main() -> None:
         for _, parameter in nn.utils.tree_flatten(model.parameters())
     }
     if parameter_dtypes != {"mlx.core.float16"}:
-        raise RuntimeError(f"model parameters are not strictly FP16: {parameter_dtypes}")
+        raise RuntimeError(
+            f"model parameters are not strictly FP16: {parameter_dtypes}"
+        )
 
     # ``--epochs`` is the number of epochs for THIS invocation. The checkpoint
     # epoch is an absolute history counter used only to continue numbering.
@@ -2454,16 +2417,15 @@ def main() -> None:
     # branch is byte-identical to the pre-aux legacy path (logits_value,
     # no aux forward at all).
     if aux_active:
+
         def _loss_fn(model, ob, yb, aux_targets):
             logits, _value, _mem, aux_dict = model.logits_value_aux(ob)
             ce = _cross_entropy_sum(logits, yb)
-            aux_mean = _aux_loss(aux_dict, aux_targets, aux_weights)
-            # Rescale mean -> sum form (see _batched_sequential_tbptt_loss's
-            # matching comment) so a single division by n_examples at the
-            # optimizer-step boundary yields mean(CE) + mean(aux).
-            total = ce + aux_mean * yb.shape[0]
-            return total, aux_mean
+            aux_sum = _aux_loss(aux_dict, aux_targets, aux_weights)
+            total = ce + aux_sum
+            return total, aux_sum
     else:
+
         def _loss_fn(model, ob, yb, aux_targets):
             return _cross_entropy_sum(model.logits_value(ob)[0], yb)
 
@@ -2604,9 +2566,7 @@ def main() -> None:
             "full phase horizon before the original run."
         )
     warmup_steps = min(a.warmup_steps, max(1, scheduler_total_steps // 5))
-    scheduler_contract = _scheduler_contract(
-        a, scheduler_total_steps, warmup_steps
-    )
+    scheduler_contract = _scheduler_contract(a, scheduler_total_steps, warmup_steps)
     if a.resume and a.scheduler_state == "resume":
         saved_scheduler_contract = state.get("scheduler_contract")
         if saved_scheduler_contract != scheduler_contract:
@@ -2712,9 +2672,7 @@ def main() -> None:
 
     def _latest_checkpoint_path() -> str:
         out_path = Path(a.out)
-        return str(
-            out_path.with_name(f"{out_path.stem}_latest{out_path.suffix}")
-        )
+        return str(out_path.with_name(f"{out_path.stem}_latest{out_path.suffix}"))
 
     # --- graph-safe gradient clipping (C.3) ---
     def clip_grads(grads, max_norm):
@@ -2882,9 +2840,7 @@ def main() -> None:
                 if a.zero_wouldko:
                     attr = np.asarray(lane_observations[-1]["opt_attr"]).copy()
                     attr[..., WK_LO:WK_HI] = 0.0
-                    lane_observations[-1]["opt_attr"] = mx.array(
-                        attr, dtype=mx.float16
-                    )
+                    lane_observations[-1]["opt_attr"] = mx.array(attr, dtype=mx.float16)
                 lane_labels.append(mx.array(fetched["y"].astype(np.int32)))
                 if aux_active:
                     lane_aux_targets.append(
@@ -2913,9 +2869,7 @@ def main() -> None:
             if a.zero_wouldko:
                 attr = np.asarray(lane_observations[-1]["opt_attr"]).copy()
                 attr[..., WK_LO:WK_HI] = 0.0
-                lane_observations[-1]["opt_attr"] = mx.array(
-                    attr, dtype=mx.float16
-                )
+                lane_observations[-1]["opt_attr"] = mx.array(attr, dtype=mx.float16)
             lane_labels.append(
                 mx.array(labels[label_base + chunk_arr].astype(np.int32))
             )
@@ -2956,6 +2910,7 @@ def main() -> None:
         GPU compute. Cache capacity is 6 row_groups so the prefetched entry
         does not evict what step N is still reading.
         """
+
         def _load_one(temporal_batch):
             return _load_temporal_batch(
                 temporal_batch,
@@ -2965,7 +2920,9 @@ def main() -> None:
                 source="tbptt-cache",
             )
 
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="tbptt-prefetch") as pool:
+        with ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="tbptt-prefetch"
+        ) as pool:
             if not _tbptt_plan:
                 return
             current_future = pool.submit(_load_one, _tbptt_plan[0])
@@ -2976,9 +2933,13 @@ def main() -> None:
                     if i + 1 < len(_tbptt_plan)
                     else None
                 )
-                lane_observations, lane_labels, lane_decision_lengths, _, lane_aux_targets = (
-                    current_future.result()
-                )
+                (
+                    lane_observations,
+                    lane_labels,
+                    lane_decision_lengths,
+                    _,
+                    lane_aux_targets,
+                ) = current_future.result()
                 yield (
                     temporal_batch,
                     lane_observations,
@@ -2997,6 +2958,7 @@ def main() -> None:
     _tb_writer = None
     try:
         from torch.utils.tensorboard import SummaryWriter
+
         _tb_run_name = (
             os.path.splitext(os.path.basename(a.out))[0] + "_" + str(int(time.time()))
         )
@@ -3040,7 +3002,9 @@ def main() -> None:
         step_time_ms = (now - _tb_last_step_ts) * 1000.0
         _tb_last_step_ts = now
         try:
-            _tb_writer.add_scalar("train/loss", float(loss_val) / max(micro_n, 1), gstep)
+            _tb_writer.add_scalar(
+                "train/loss", float(loss_val) / max(micro_n, 1), gstep
+            )
             if aux_active:
                 _tb_writer.add_scalar("train/aux_loss", float(aux_val), gstep)
             gm = _last_step_metrics.get("grad_norm")
@@ -3070,6 +3034,7 @@ def main() -> None:
                 pass
             try:
                 import psutil as _psutil_step
+
                 _tb_writer.add_scalar(
                     "sys/host_memory_percent",
                     float(_psutil_step.virtual_memory().percent),
@@ -3087,22 +3052,38 @@ def main() -> None:
                 _tot = _cs["hits"] + _cs["misses"]
                 _rate = (_cs["hits"] / _tot * 100.0) if _tot else 0.0
                 _tb_writer.add_scalar(f"cache_{_tag}/hit_rate_pct", float(_rate), gstep)
-                _tb_writer.add_scalar(f"cache_{_tag}/resident_hot", int(_cs["resident_hot"]), gstep)
-                _tb_writer.add_scalar(f"cache_{_tag}/resident_transient", int(_cs["resident_transient"]), gstep)
-                _tb_writer.add_scalar(f"cache_{_tag}/promotions", int(_cs["promotions"]), gstep)
-                _tb_writer.add_scalar(f"cache_{_tag}/evictions", int(_cs["evictions"]), gstep)
-                _tb_writer.add_scalar(f"cache_{_tag}/ssd_hits", int(_cs["ssd_hits"]), gstep)
-                _tb_writer.add_scalar(f"cache_{_tag}/ssd_spills", int(_cs["ssd_spills"]), gstep)
-                _tb_writer.add_scalar(f"cache_{_tag}/ssd_resident", int(_cs["ssd_resident"]), gstep)
-                _tb_writer.add_scalar(f"cache_{_tag}/ssd_bytes_gib", _cs["ssd_bytes"] / (1024**3), gstep)
+                _tb_writer.add_scalar(
+                    f"cache_{_tag}/resident_hot", int(_cs["resident_hot"]), gstep
+                )
+                _tb_writer.add_scalar(
+                    f"cache_{_tag}/resident_transient",
+                    int(_cs["resident_transient"]),
+                    gstep,
+                )
+                _tb_writer.add_scalar(
+                    f"cache_{_tag}/promotions", int(_cs["promotions"]), gstep
+                )
+                _tb_writer.add_scalar(
+                    f"cache_{_tag}/evictions", int(_cs["evictions"]), gstep
+                )
+                _tb_writer.add_scalar(
+                    f"cache_{_tag}/ssd_hits", int(_cs["ssd_hits"]), gstep
+                )
+                _tb_writer.add_scalar(
+                    f"cache_{_tag}/ssd_spills", int(_cs["ssd_spills"]), gstep
+                )
+                _tb_writer.add_scalar(
+                    f"cache_{_tag}/ssd_resident", int(_cs["ssd_resident"]), gstep
+                )
+                _tb_writer.add_scalar(
+                    f"cache_{_tag}/ssd_bytes_gib", _cs["ssd_bytes"] / (1024**3), gstep
+                )
         except Exception:
             # Never let TB logging break training.
             pass
 
     validation_batches = (
-        len(_val_tbptt_plan)
-        if _use_tbptt
-        else _ceil_div(n_val, a.val_batch_size)
+        len(_val_tbptt_plan) if _use_tbptt else _ceil_div(n_val, a.val_batch_size)
     )
     train_t0 = time.time()
 
@@ -3203,11 +3184,7 @@ def main() -> None:
                     lane_aux_targets,
                 ) = _batch_tuple
                 lane_memory_in = [
-                    (
-                        None
-                        if chunk.is_new_group
-                        else _tbptt_memories[chunk.group_index]
-                    )
+                    (None if chunk.is_new_group else _tbptt_memories[chunk.group_index])
                     for chunk in temporal_batch
                 ]
                 micro_n = sum(len(labels) for labels in lane_labels)
@@ -3290,7 +3267,11 @@ def main() -> None:
                     _running_loss += _accum_loss_sum
                     _running_aux_loss += _accum_aux_loss_sum
                     _running_n += _accum_examples
-                    _tb_log_step(_accum_loss_sum, _accum_aux_loss_sum / max(_accum_examples, 1), _accum_examples)
+                    _tb_log_step(
+                        _accum_loss_sum,
+                        _accum_aux_loss_sum / max(_accum_examples, 1),
+                        _accum_examples,
+                    )
                     _accum_grads = None
                     _accum_examples = 0
                     _accum_loss_sum = 0.0
@@ -3426,7 +3407,7 @@ def main() -> None:
         print(
             f"[bc-train-mlx] training complete: epoch {ep + 1}, "
             f"microbatches={ep_micro:,}, optimizer_steps={ep_step:,}, "
-            f"gstep={gstep:,}; peak_memory={mx.get_peak_memory() / (1024 ** 3):.2f} GiB; "
+            f"gstep={gstep:,}; peak_memory={mx.get_peak_memory() / (1024**3):.2f} GiB; "
             "starting validation",
             flush=True,
         )
@@ -3463,9 +3444,7 @@ def main() -> None:
             validation_opt_group: list[np.ndarray] = []
             aux_pred_val: dict[str, list[np.ndarray]] = defaultdict(list)
             aux_target_val: dict[str, list[np.ndarray]] = defaultdict(list)
-            for val_batch, temporal_batch in enumerate(
-                _val_tbptt_plan, start=1
-            ):
+            for val_batch, temporal_batch in enumerate(_val_tbptt_plan, start=1):
                 (
                     lane_observations,
                     lane_labels,
@@ -3521,9 +3500,7 @@ def main() -> None:
                     )
                     fetched = lane_fetched[lane_index]
                     validation_y.append(fetched["y"].astype(np.int64))
-                    validation_is_attack.append(
-                        fetched["is_attack"].astype(bool)
-                    )
+                    validation_is_attack.append(fetched["is_attack"].astype(bool))
                     validation_is_ko.append(
                         (fetched["opt_attr"][..., WK_LO] >= 0.5).any(axis=1)
                     )
@@ -3535,9 +3512,7 @@ def main() -> None:
                     for key, value in aux_dict_all.items():
                         aux_pred_val[key].append(np.asarray(value, dtype=np.float32))
                     for key, value in aux_targets_all.items():
-                        aux_target_val[key].append(
-                            np.asarray(value, dtype=np.float32)
-                        )
+                        aux_target_val[key].append(np.asarray(value, dtype=np.float32))
                 if val_batch % 20 == 0:
                     mx.clear_cache()
                 _progress_bar.update(
@@ -3548,9 +3523,7 @@ def main() -> None:
 
             row_order = np.concatenate(validation_rows)
             row_permutation = np.argsort(row_order)
-            if not np.array_equal(
-                row_order[row_permutation], np.arange(n_val)
-            ):
+            if not np.array_equal(row_order[row_permutation], np.arange(n_val)):
                 raise RuntimeError(
                     "temporal validation did not cover every validation row exactly once"
                 )
@@ -3588,9 +3561,7 @@ def main() -> None:
                     for key, value in aux_dict.items():
                         aux_pred_val[key].append(np.asarray(value, dtype=np.float32))
                     for key, value in aux_targets.items():
-                        aux_target_val[key].append(
-                            np.asarray(value, dtype=np.float32)
-                        )
+                        aux_target_val[key].append(np.asarray(value, dtype=np.float32))
                 else:
                     lg, _, _ = model.logits_value(ob)
                 logits_parts.append(np.asarray(lg, dtype=np.float32))
@@ -3610,9 +3581,7 @@ def main() -> None:
             yb_np = np.concatenate(y_parts)
             vi_atk = np.concatenate(is_attack_parts)
             vi_ko = np.concatenate(is_ko_parts)
-            gv_np = (
-                np.concatenate(opt_group_parts, axis=0) if a.dedup else None
-            )
+            gv_np = np.concatenate(opt_group_parts, axis=0) if a.dedup else None
             aux_metrics = (
                 _aux_metrics(
                     {k: np.concatenate(v) for k, v in aux_pred_val.items()},
@@ -3630,9 +3599,7 @@ def main() -> None:
         top3 = np.argsort(-lg_np, axis=1)[:, :3]
         correct = np.argmax(lg_np, axis=1) == yb_np
         in_top3 = np.array([yb_np[i] in top3[i] for i in range(len(yb_np))])
-        preds.append(
-            np.stack([correct.astype(float), in_top3.astype(float)], axis=1)
-        )
+        preds.append(np.stack([correct.astype(float), in_top3.astype(float)], axis=1))
         am_all.append(np.argmax(lg_np, axis=1))
 
         _progress_bar.reset(
@@ -3664,7 +3631,12 @@ def main() -> None:
         # Clear large temporary arrays from memory
         try:
             if _use_tbptt:
-                del validation_memories, validation_rows, validation_logits, validation_y
+                del (
+                    validation_memories,
+                    validation_rows,
+                    validation_logits,
+                    validation_y,
+                )
                 del validation_is_attack, validation_is_ko, validation_opt_group
             else:
                 del logits_parts, y_parts, is_attack_parts, is_ko_parts, opt_group_parts
@@ -3755,7 +3727,8 @@ def main() -> None:
             _tb_writer.add_scalar("val/loss", float(vloss / max(tot, 1)), ep + 1)
             _tb_writer.add_scalar("val/epoch_time_s", float(ep_time), ep + 1)
             _tb_writer.add_scalar(
-                "train/running_loss", float(_running_loss / max(_running_n, 1)),
+                "train/running_loss",
+                float(_running_loss / max(_running_n, 1)),
                 ep + 1,
             )
             if aux_active:
@@ -3767,9 +3740,7 @@ def main() -> None:
             if aux_metrics is not None:
                 for _k, _v in aux_metrics.items():
                     _tb_writer.add_scalar(f"aux/{_k}", float(_v), ep + 1)
-            _tb_writer.add_scalar(
-                "train/lr", float(optimizer.learning_rate), ep + 1
-            )
+            _tb_writer.add_scalar("train/lr", float(optimizer.learning_rate), ep + 1)
             _tb_writer.add_scalar("train/gstep", int(gstep), ep + 1)
             _tb_writer.flush()
 
@@ -3789,6 +3760,7 @@ def main() -> None:
             f"[bc-train-mlx] best checkpoint exported to {a.export_final}",
             flush=True,
         )
+
     def _print_cache_report(tag: str, cache):
         if cache is None:
             return
