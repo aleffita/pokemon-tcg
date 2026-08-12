@@ -3,7 +3,7 @@
 The competition requires main.py and deck.csv at the root of the archive.
 This script also bundles:
   - rl/ (encoder, policy, etc. — needed by main.py)
-  - the MLX checkpoint converted strictly to a PyTorch FP16 artifact
+  - the MLX checkpoint converted strictly to a PyTorch FP32 artifact
 
 The transient training JSON is deliberately excluded. Architecture, encoder
 schema, would-KO inference settings, and training provenance travel inside the
@@ -34,7 +34,7 @@ SMOKE_TORCH_CHECKPOINT = os.path.join(
     ROOT, "model", "bc_model", "smoke", "bc_smoke_torch_fp16.pt"
 )
 MAIN_TORCH_CHECKPOINT = os.path.join(
-    ROOT, "model", "bc_model", "bc_best_torch_fp16.pt"
+    ROOT, "model", "bc_model", "bc_best_torch_fp32.pt"
 )
 SMOKE_SUBMISSION = os.path.join(
     ROOT,
@@ -53,7 +53,7 @@ SOURCE_CHECKPOINT_CANDIDATES = [
      "bc_best_mlx.pkl"),
 ]
 TORCH_CHECKPOINT_ARC = os.path.join(
-    "model", "bc_model", "bc_best_torch_fp16.pt"
+    "model", "bc_model", "bc_best_torch_fp32.pt"
 ).replace(os.sep, "/")
 
 
@@ -239,7 +239,7 @@ def main() -> None:
     files.append((converted, TORCH_CHECKPOINT_ARC))
     print(
         f"Checkpoint: {os.path.relpath(source_checkpoint, ROOT)} -> "
-        f"{TORCH_CHECKPOINT_ARC} (FP16, nlayers={cfg['nlayers']}, "
+        f"{TORCH_CHECKPOINT_ARC} (FP32, nlayers={cfg['nlayers']}, "
         f"scratch={cfg['scratch_registers']})"
     )
 
@@ -269,7 +269,7 @@ def _validate_archive(tar_path: str) -> None:
     layout Kaggle unpacks into /kaggle_simulations/agent/, so a path bug shows
     up here instead of on the ladder.
 
-    The behavioural check loads the pre-converted PyTorch FP16 artifact from
+    The behavioural check loads the pre-converted PyTorch FP32 artifact from
     the same flat layout used by the Kaggle sandbox.
     """
     import traceback

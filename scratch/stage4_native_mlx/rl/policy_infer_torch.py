@@ -21,7 +21,7 @@ from rl.encoder.enc_constants import N_META_BUCKETS
 from rl.policy import TokenTransformer, build_token_net
 from rl.token_schema import ARCH_VERSION, TOKEN_SCHEMA_VERSION, T_META_CTX, N_TTYPES
 
-TORCH_INFERENCE_FORMAT = "ptcg-torch-fp32-v1"
+TORCH_INFERENCE_FORMAT = "ptcg-torch-fp16-v1"
 
 # Checkpoint loading is STRICT: every key in the current model must appear in
 # the checkpoint with the exact expected shape. Legacy checkpoints (predating
@@ -48,7 +48,7 @@ def _checkpoint_static_features(
         return None, None
     if features is None or not isinstance(contract, dict):
         raise ValueError("checkpoint static feature payload is incomplete")
-    array = np.asarray(features, dtype=np.float32)
+    array = np.asarray(features, dtype=np.float16)
     expected_shape = tuple(int(value) for value in contract.get("shape", ()))
     if tuple(array.shape) != expected_shape:
         raise ValueError(
@@ -186,10 +186,10 @@ class TokenTransformerTorchInference(TokenTransformer):
         # Aux heads mirror (MLX writes these into the checkpoint; inference must
         # have them present for state_dict loading, even if it doesn't use them
         # at Kaggle runtime — the trainer wants them, the arena doesn't call them).
-        self.ko_head_aux = torch.nn.Linear(self.d, 1).to(torch.float32)
-        self.prize_head_aux = torch.nn.Linear(self.d, 1).to(torch.float32)
-        self.terminal_head_aux = torch.nn.Linear(self.d, 1).to(torch.float32)
-        self.return_head_aux = torch.nn.Linear(self.d, 1).to(torch.float32)
+        self.ko_head_aux = torch.nn.Linear(self.d, 1).to(torch.float16)
+        self.prize_head_aux = torch.nn.Linear(self.d, 1).to(torch.float16)
+        self.terminal_head_aux = torch.nn.Linear(self.d, 1).to(torch.float16)
+        self.return_head_aux = torch.nn.Linear(self.d, 1).to(torch.float16)
 
         # rl.policy.TokenTransformer (the base __init__ just ran) hardcodes its
         # OWN local _N_TTYPES=19 constant, which predates T_META_CTX=19. Resize
@@ -197,17 +197,17 @@ class TokenTransformerTorchInference(TokenTransformer):
         # token type has a row; old-checkpoint loaders pad the smaller table's
         # rows into this one instead of raising a shape mismatch.
         if self.type_emb.weight.shape[0] != N_TTYPES:
-            self.type_emb = torch.nn.Embedding(N_TTYPES, self.d).to(torch.float32)
+            self.type_emb = torch.nn.Embedding(N_TTYPES, self.d).to(torch.float16)
 
         # Meta feature consumption mirror (see TokenTransformerMLX): per-card meta
         # buckets share one embedding table across every card/unit stream; the
         # global day/opponent features are absorbed into a dedicated META_CTX
         # token rather than widening G (which would break scalar_proj's shape).
-        self.meta_bucket_emb = torch.nn.Embedding(N_META_BUCKETS, self.d).to(torch.float32)
-        self.agent_bucket_emb = torch.nn.Embedding(N_META_BUCKETS, self.d).to(torch.float32)
-        self.deck_bucket_emb = torch.nn.Embedding(N_META_BUCKETS, self.d).to(torch.float32)
-        self.day_proj = torch.nn.Linear(1, self.d).to(torch.float32)
-        self.meta_ctx_base = torch.nn.Parameter(torch.zeros(self.d, dtype=torch.float32))
+        self.meta_bucket_emb = torch.nn.Embedding(N_META_BUCKETS, self.d).to(torch.float16)
+        self.agent_bucket_emb = torch.nn.Embedding(N_META_BUCKETS, self.d).to(torch.float16)
+        self.deck_bucket_emb = torch.nn.Embedding(N_META_BUCKETS, self.d).to(torch.float16)
+        self.day_proj = torch.nn.Linear(1, self.d).to(torch.float16)
+        self.meta_ctx_base = torch.nn.Parameter(torch.zeros(self.d, dtype=torch.float16))
 
         # ``super`` rebuilt the same architecture. Keep the configured tables
         # and replace only the recurrent workspace dimensions.
@@ -217,7 +217,7 @@ class TokenTransformerTorchInference(TokenTransformer):
         self.learned_init = torch.nn.Parameter(torch.zeros(n_scratch, self.d))
         if static_card_features is not None:
             static_tensor = torch.as_tensor(
-                static_card_features, dtype=torch.float32
+                static_card_features, dtype=torch.float16
             )
             if self.card_feat is None:
                 raise ValueError(
@@ -394,7 +394,7 @@ class TokenTransformerTorchInference(TokenTransformer):
         else:
             value = self.value_head(vin).squeeze(-1)
         logits = torch.cat((opt_logits, submit), -1)
-        # FP32 cannot represent -1e9; -65504 is the finite equivalent and
+        # FP16 cannot represent -1e9; -65504 is the finite equivalent and
         # preserves the ordering/masking contract without overflowing.
         return logits.masked_fill(o["action_mask"] < 0.5, -65504.0), value, memory_out
 
@@ -411,8 +411,8 @@ class TokenTransformerTorchInference(TokenTransformer):
         }
 
 
-def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.float32):
-    """Load an MLX checkpoint into a strict FP32 PyTorch inference model."""
+def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.float16):
+    """Load an MLX checkpoint into a strict FP16 PyTorch inference model."""
     with open(path, "rb") as fh:
         state = pickle.load(fh)
     arch_cfg = checkpoint_arch_config(state)
@@ -510,18 +510,18 @@ def save_torch_inference_checkpoint(
     torch_path: str | Path,
     card_table: CardTable,
 ) -> dict[str, Any]:
-    """Strictly convert an MLX trainer checkpoint to portable PyTorch FP32."""
+    """Strictly convert an MLX trainer checkpoint to portable PyTorch FP16."""
     model, metadata = load_mlx_checkpoint(
-        mlx_path, card_table, dtype=torch.float32
+        mlx_path, card_table, dtype=torch.float16
     )
     state_dict = model.state_dict()
     bad_dtype = {
         key: str(value.dtype)
         for key, value in state_dict.items()
-        if value.is_floating_point() and value.dtype != torch.float32
+        if value.is_floating_point() and value.dtype != torch.float16
     }
     if bad_dtype:
-        raise ValueError(f"FP32 conversion left non-FP32 tensors: {bad_dtype}")
+        raise ValueError(f"FP16 conversion left non-FP16 tensors: {bad_dtype}")
     payload = {
         "format": TORCH_INFERENCE_FORMAT,
         "arch_config": {
@@ -535,7 +535,7 @@ def save_torch_inference_checkpoint(
         "inference_config": metadata["inference_config"],
         "training_config": metadata["training_config"],
         "static_card_features": (
-            model.card_feat.detach().to(torch.float32)
+            model.card_feat.detach().to(torch.float16)
             if metadata["static_feature_contract"] is not None
             else None
         ),
@@ -550,7 +550,7 @@ def load_torch_inference_checkpoint(
     path: str | Path,
     card_table: CardTable,
 ) -> tuple[TokenTransformerTorchInference, dict[str, Any]]:
-    """Load a pre-converted PyTorch checkpoint with exact keys, shapes and FP32."""
+    """Load a pre-converted PyTorch checkpoint with exact keys, shapes and FP16."""
     payload = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(payload, dict) or payload.get("format") != TORCH_INFERENCE_FORMAT:
         raise ValueError(
@@ -577,7 +577,7 @@ def load_torch_inference_checkpoint(
 
     model = TokenTransformerTorchInference(
         card_table, arch_cfg, static_features
-    ).to(dtype=torch.float32)
+    ).to(dtype=torch.float16)
     expected = model.state_dict()
 
     # STRICT load: any key mismatch (missing, unexpected, or shape) is a hard
@@ -599,9 +599,9 @@ def load_torch_inference_checkpoint(
                 f"shape mismatch for {key!r}: checkpoint "
                 f"{tuple(tensor.shape)} != model {tuple(expected[key].shape)}"
             )
-        if tensor.is_floating_point() and tensor.dtype != torch.float32:
+        if tensor.is_floating_point() and tensor.dtype != torch.float16:
             raise ValueError(
-                f"state_dict[{key!r}] is {tensor.dtype}, expected torch.float32"
+                f"state_dict[{key!r}] is {tensor.dtype}, expected torch.float16"
             )
     model.load_state_dict(state_dict, strict=True)
     model.eval()
@@ -612,11 +612,11 @@ def load_inference_checkpoint(
     path: str | Path,
     card_table: CardTable,
 ) -> tuple[TokenTransformerTorchInference, dict[str, Any]]:
-    """Load either the submission FP32 artifact or a local MLX trainer pickle."""
+    """Load either the submission FP16 artifact or a local MLX trainer pickle."""
     path = Path(path)
     if path.suffix == ".pt":
         return load_torch_inference_checkpoint(path, card_table)
-    return load_mlx_checkpoint(path, card_table, dtype=torch.float32)
+    return load_mlx_checkpoint(path, card_table, dtype=torch.float16)
 
 
 __all__ = [

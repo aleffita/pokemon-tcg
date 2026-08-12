@@ -1,7 +1,7 @@
 """BC agent for the PTCG AI Battle Challenge.
 
 PyTorch-only inference with autoregressive multi-select.
-Loads a strict FP32 PyTorch mirror of the MLX training checkpoint.
+Loads a strict FP16 PyTorch mirror of the MLX training checkpoint.
 Keeps per-side GameTracker + AbilityTracker for stateful encoding.
 
 Inference mode is selected via PTCG_INFERENCE_MODE env var:
@@ -53,8 +53,10 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
-import torch
-from rl.policy_infer_torch import load_inference_checkpoint
+import mlx.core as mx
+import mlx.nn as nn
+from rl.policy_mlx import build_token_net_mlx
+import pickle
 
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import TokenEncoder, GameTracker, AbilityTracker, SUBMIT_ACTION
@@ -73,8 +75,8 @@ _PERTURB_EPS = float(os.environ.get("PTCG_PERTURB_EPS", "0.05"))
 # ---- model checkpoint search ----
 _MODEL_PATH = None
 for candidate in [
-    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_torch_fp32.pt"),
-    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_torch_fp32.pt"),
+    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_torch_fp16.pt"),
+    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_torch_fp16.pt"),
     os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_mlx_final.pkl"),
     os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_mlx.pkl"),
     os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_final.pkl"),
@@ -91,18 +93,28 @@ _ENCODER = TokenEncoder(_CARD_TABLE)
 
 def _load_model():
     if _MODEL_PATH is None:
-        return None, {}, {
-            "version": 1, "seed": 0, "bc_would_ko": False, "bc_wk_nvar": 10,
-            "provenance": "no-checkpoint",
-        }
-    net, metadata = load_inference_checkpoint(_MODEL_PATH, _CARD_TABLE)
-    runtime_cfg = metadata["inference_config"]
-    print(f"[bc-agent] loaded PyTorch FP32 model {_MODEL_PATH} "
-          f"(nlayers={metadata['nlayers']}, "
-          f"scratch={metadata['scratch_registers']}, "
-          f"would_ko={runtime_cfg['bc_would_ko']}, "
-          f"mode={_INFERENCE_MODE})")
-    return net, metadata, runtime_cfg
+        return None, {}, {"version": 1, "seed": 0, "bc_would_ko": False, "bc_wk_nvar": 10, "provenance": "no-checkpoint"}
+    with open(_MODEL_PATH, "rb") as f:
+        state = pickle.load(f)
+    ckpt_cfg = state.get("arch_config", state.get("config", state.get("net_config", {})))
+    cfg = {"d_model": 128, "nhead": 4, "nlayers": 4, "static": False, "split_heads": False, "structured": True, "scratch_registers": 32, "value_atoms": 0, "value_vmax": 0.0}
+    for key in ("d_model", "nhead", "nlayers", "ff_dim", "static", "split_heads", "structured", "scratch_registers", "value_atoms", "value_vmax"):
+        if key in ckpt_cfg: cfg[key] = ckpt_cfg[key]
+    if "ff_dim" in ckpt_cfg: cfg["ff"] = ckpt_cfg["ff_dim"]
+    net = build_token_net_mlx(_CARD_TABLE, cfg)
+    model_state = state.get("model")
+    if model_state is not None:
+        if isinstance(model_state, dict): flat = nn.utils.tree_flatten(model_state)
+        else: flat = model_state
+        model_param_keys = {k for k, _ in nn.utils.tree_flatten(net.parameters())}
+        flat_filtered = [(k, v) for k, v in flat if k in model_param_keys]
+        flat_mlx = [(k, mx.array(v)) for k, v in flat_filtered]
+        tree = nn.utils.tree_unflatten(flat_mlx)
+        net.update(tree)
+    net.eval()
+    runtime_cfg = state.get("inference_config", {"version": 1, "seed": 0, "bc_would_ko": False, "bc_wk_nvar": 10, "provenance": "none"})
+    print(f"[bc-agent] loaded MLX model {_MODEL_PATH} (val_acc={state.get('val_acc', '?')})")
+    return net, ckpt_cfg, runtime_cfg
 
 
 _LOADED_MODEL, _MODEL_METADATA, _RUNTIME_DATA = _load_model()
@@ -153,22 +165,21 @@ def _build_tensors(encoded: dict, int_keys: set) -> dict:
     for k, v in encoded.items():
         arr = np.asarray(v)
         if k in int_keys:
-            ob[k] = torch.as_tensor(arr.astype(np.int64)).reshape(1, *arr.shape)
+            ob[k] = mx.array(arr.astype(np.int32)).reshape(1, *arr.shape)
         else:
-            ob[k] = torch.as_tensor(arr.astype(np.float32)).reshape(1, *arr.shape)
+            ob[k] = mx.array(arr.astype(np.float16)).reshape(1, *arr.shape)
     return ob
 
 
 def _logits_to_numpy(logits) -> np.ndarray:
-    return logits.detach().to(torch.float32).numpy().flatten()
+    return np.asarray(logits).flatten()
 
 
 # ---------- forward variants per mode ----------
 
 def _forward_baseline(ob, memory_in):
     """Standard single forward pass."""
-    with torch.inference_mode():
-        logits, _, memory_out = _LOADED_MODEL.logits_value(ob, memory_in=memory_in)
+    logits, _, memory_out = _LOADED_MODEL.logits_value(ob, memory_in=memory_in)
     return logits, memory_out
 
 
@@ -185,22 +196,22 @@ def _forward_b1(ob, memory_in):
 def _forward_b2(ob, memory_in):
     """B2: K deterministic perturbations of memory, mean of logits, middle perturbation memory committed."""
     if memory_in is None:
-        base = _LOADED_MODEL.learned_init.detach().unsqueeze(0).to(torch.float32)
+        base = _LOADED_MODEL.learned_init.detach().unsqueeze(0).to(torch.float16)
     else:
-        base = memory_in.detach().to(torch.float32)
+        base = memory_in.detach().to(torch.float16)
     shape = tuple(base.shape)
     logits_stack = []
     mem_stack = []
     with torch.inference_mode():
         for k in range(_LATENT_K):
             rng = np.random.default_rng(seed=1000 + k)
-            noise_np = (rng.standard_normal(shape) * _PERTURB_EPS).astype(np.float32)
+            noise_np = (rng.standard_normal(shape) * _PERTURB_EPS).astype(np.float16)
             noise = torch.from_numpy(noise_np)
             perturbed = base + noise
             logits_k, _, mem_k = _LOADED_MODEL.logits_value(ob, memory_in=perturbed)
             logits_stack.append(logits_k.to(torch.float32))
             mem_stack.append(mem_k)
-    mean_logits = torch.stack(logits_stack, dim=0).mean(dim=0).to(torch.float32)
+    mean_logits = torch.stack(logits_stack, dim=0).mean(dim=0).to(torch.float16)
     committed_memory = mem_stack[_LATENT_K // 2]
     return mean_logits, committed_memory
 

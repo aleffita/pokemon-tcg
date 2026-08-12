@@ -2600,7 +2600,7 @@ def main() -> None:
         static_features = getattr(model, "_card_feat_np", None)
         static_contract = None
         if static_features is not None:
-            static_array = np.asarray(static_features, dtype=np.float16)
+            static_array = np.asarray(static_features, dtype=np.float32)
             static_contract = {
                 "dtype": str(static_array.dtype),
                 "shape": list(static_array.shape),

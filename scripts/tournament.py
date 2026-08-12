@@ -871,30 +871,34 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                     our_module.reload_deck(deck_csv)
     else:
         # No sweep: run with default deck only
-        t0 = time.time()
-        w, l, d, replay_html, game_results = run_matchup(
-            env, our_agent, opp_agent, args.games)
-        elapsed = time.time() - t0
-        wr = w / max(w + l, 1) * 100
-        total_w += w; total_l += l; total_d += d
+        for label, opp_path in opponents:
+            opp_agent = resolve(opp_path)
+            t0 = time.time()
+            w, l, d, replay_html, game_results = run_matchup(
+                env, our_agent, opp_agent, args.games)
+            elapsed = time.time() - t0
+            wr = w / max(w + l, 1) * 100
+            total_w += w; total_l += l; total_d += d
 
-        if default_card_ids:
-            deck_id = _find_or_create_deck(db, default_card_ids)
-        else:
-            deck_id = None
+            if default_card_ids:
+                deck_id = _find_or_create_deck(db, default_card_ids)
+            else:
+                deck_id = None
 
-        deck_label = f"{label} [deck:{deck_id}]" if deck_id else label
-        rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
-        structured_rows.append({
-            "opponent_label": label,
-            "opponent_path": opp_path,
-            "deck_id": deck_id,
-            "wins": w, "losses": l, "draws": d,
-            "wr_pct": wr,
-            "elapsed_s": elapsed,
-            "error": None,
-        })
-        all_game_results.append((label, deck_id, game_results))
+            deck_label = f"{label} [deck:{deck_id}]" if deck_id else label
+            rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
+            structured_rows.append({
+                "opponent_label": label,
+                "opponent_path": opp_path,
+                "deck_id": deck_id,
+                "opp_deck_id": None,
+                "wins": w, "losses": l, "draws": d,
+                "wr_pct": wr,
+                "elapsed_s": elapsed,
+                "error": None,
+            })
+            all_game_results.append((label, deck_id, game_results))
+            print(f"{deck_label:32s} {w:5d} {l:6d} {d:6d}  {wr:5.1f}%  {elapsed:5.1f}s", flush=True)
         completed_blocks += 1
         elapsed_suite = time.time() - start_time
         avg_block = elapsed_suite / completed_blocks
