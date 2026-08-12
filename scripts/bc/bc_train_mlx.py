@@ -2272,9 +2272,11 @@ def main() -> None:
                 "[bc-train-mlx] WARNING: no arch_config in checkpoint (old format) — "
                 "proceeding without validation"
             )
+        
+        loaded_val_acc = float(state.get("val_acc", state.get("best_val_acc", 0.0)))
         print(
             f"[bc-train-mlx] resumed from {a.resume} (epoch {start_epoch}, "
-            f"val_acc={best:.4f}, gstep={gstep})"
+            f"val_acc={loaded_val_acc:.4f}, gstep={gstep})"
         )
 
     # Parameters and forward activations use FP16. Loss, reductions, gradient

@@ -18,7 +18,7 @@
   "warmup_steps": 150,
   "lr_min_ratio": 0.2,
   "max_grad_norm": 1.0,
-  "seed": 13,
+  "seed": 13971479023478,
   "optimizer": "muon_adamw",
   "optimizer_state": "reset",
   "scheduler_state": "reset",

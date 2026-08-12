@@ -869,42 +869,42 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                     with open(deck_csv, "w") as f:
                         f.write(original_deck)
                     our_module.reload_deck(deck_csv)
+    else:
+        # No sweep: run with default deck only
+        t0 = time.time()
+        w, l, d, replay_html, game_results = run_matchup(
+            env, our_agent, opp_agent, args.games)
+        elapsed = time.time() - t0
+        wr = w / max(w + l, 1) * 100
+        total_w += w; total_l += l; total_d += d
+
+        if default_card_ids:
+            deck_id = _find_or_create_deck(db, default_card_ids)
         else:
-            # No sweep: run with default deck only
-            t0 = time.time()
-            w, l, d, replay_html, game_results = run_matchup(
-                env, our_agent, opp_agent, args.games)
-            elapsed = time.time() - t0
-            wr = w / max(w + l, 1) * 100
-            total_w += w; total_l += l; total_d += d
+            deck_id = None
 
-            if default_card_ids:
-                deck_id = _find_or_create_deck(db, default_card_ids)
-            else:
-                deck_id = None
-
-            deck_label = f"{label} [deck:{deck_id}]" if deck_id else label
-            rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
-            structured_rows.append({
-                "opponent_label": label,
-                "opponent_path": opp_path,
-                "deck_id": deck_id,
-                "wins": w, "losses": l, "draws": d,
-                "wr_pct": wr,
-                "elapsed_s": elapsed,
-                "error": None,
-            })
-            all_game_results.append((label, deck_id, game_results))
-            completed_blocks += 1
-            elapsed_suite = time.time() - start_time
-            avg_block = elapsed_suite / completed_blocks
-            rem_blocks = max(0, total_blocks - completed_blocks)
-            eta_sec = int(avg_block * rem_blocks)
-            eta_m, eta_s = divmod(eta_sec, 60)
-            eta_h, eta_m = divmod(eta_m, 60)
-            eta_fmt = f"{eta_h}h{eta_m:02d}m" if eta_h else f"{eta_m}m{eta_s:02d}s"
-            print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s) | [{completed_blocks}/{total_blocks} ETA: {eta_fmt}]",
-                  flush=True)
+        deck_label = f"{label} [deck:{deck_id}]" if deck_id else label
+        rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
+        structured_rows.append({
+            "opponent_label": label,
+            "opponent_path": opp_path,
+            "deck_id": deck_id,
+            "wins": w, "losses": l, "draws": d,
+            "wr_pct": wr,
+            "elapsed_s": elapsed,
+            "error": None,
+        })
+        all_game_results.append((label, deck_id, game_results))
+        completed_blocks += 1
+        elapsed_suite = time.time() - start_time
+        avg_block = elapsed_suite / completed_blocks
+        rem_blocks = max(0, total_blocks - completed_blocks)
+        eta_sec = int(avg_block * rem_blocks)
+        eta_m, eta_s = divmod(eta_sec, 60)
+        eta_h, eta_m = divmod(eta_m, 60)
+        eta_fmt = f"{eta_h}h{eta_m:02d}m" if eta_h else f"{eta_m}m{eta_s:02d}s"
+        print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s) | [{completed_blocks}/{total_blocks} ETA: {eta_fmt}]",
+              flush=True)
 
     total_time = time.time() - start_time
     overall_wr = total_w / max(total_w + total_l, 1) * 100

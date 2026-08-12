@@ -437,16 +437,140 @@ def run_stage_3(s2_final: Path):
     package_and_swap(s3_final, "stage3")
     run_tournament("stage3_nosweep", s3_tourn_nosweep, ["--no-sweep"])
     run_tournament("stage3_sweep", s3_tourn_sweep, ["--sweep-source", "remote"])
+    return s3_final
+
+
+def run_stage_4(s3_final: Path):
+    print("\n" + "=" * 70)
+    print("  STAGE 4: ON top-100 (elite), last-4-days, 5ep, 80k/day, lr=1e-5")
+    print(f"  resume from stage 3 final: {s3_final}")
+    print("=" * 70)
+
+    s4_root = EXP_ROOT / "stage4"
+    s4_final = s4_root / "curriculum_v1_stage4.pkl"
+    s4_tourn = REPORTS_DIR / "stage4_tourn.json"
+
+    s4_root.mkdir(parents=True, exist_ok=True)
+
+    if s4_final.exists():
+        print(
+            f">>> stage 4 final checkpoint already exists at {s4_final} — skipping training"
+        )
+    else:
+        if s4_root.exists():
+            shutil.rmtree(s4_root)
+        s4_root.mkdir(parents=True, exist_ok=True)
+
+        t0 = time.time()
+        cmd = [
+            sys.executable,
+            "-m",
+            "scripts.bc.bc_train_mlx",
+            "--config",
+            str(CONFIG_FILE),
+            "--last-n-days",
+            "4",
+            "--max-rows-per-day",
+            "80000",
+            "--epochs",
+            "5",
+            "--top-elo",
+            "100",
+            "--lr",
+            "1e-5",
+            "--resume",
+            str(s3_final),
+            "--optimizer-state",
+            "reset",
+            "--scheduler-state",
+            "reset",
+            "--out",
+            str(s4_final),
+            "--checkpoint-every-epochs",
+            "1",
+        ]
+        run_command(cmd, check=True, log_file=s4_root / "_train.log")
+        dur = time.time() - t0
+        print(f">>> stage 4 training DONE in {format_duration(dur)}")
+
+        cache_spill = s4_root / ".cache_spill"
+        if cache_spill.exists():
+            shutil.rmtree(cache_spill, ignore_errors=True)
+
+    package_and_swap(s4_final, "stage4")
+    run_tournament("stage4", s4_tourn, ["--no-sweep"])
+    return s4_final
+
+
+def run_stage_5(s4_final: Path):
+    print("\n" + "=" * 70)
+    print("  STAGE 5: ON top-25 (apex), last-2-days, 5ep, all rows, lr=5e-6")
+    print(f"  resume from stage 4 final: {s4_final}")
+    print("=" * 70)
+
+    s5_root = EXP_ROOT / "stage5"
+    s5_final = s5_root / "curriculum_v1_stage5.pkl"
+    s5_tourn_apex = REPORTS_DIR / "stage5_tourn_apex.json"
+
+    s5_root.mkdir(parents=True, exist_ok=True)
+
+    if s5_final.exists():
+        print(
+            f">>> stage 5 final checkpoint already exists at {s5_final} — skipping training"
+        )
+    else:
+        if s5_root.exists():
+            shutil.rmtree(s5_root)
+        s5_root.mkdir(parents=True, exist_ok=True)
+
+        t0 = time.time()
+        cmd = [
+            sys.executable,
+            "-m",
+            "scripts.bc.bc_train_mlx",
+            "--config",
+            str(CONFIG_FILE),
+            "--last-n-days",
+            "2",
+            "--epochs",
+            "5",
+            "--top-elo",
+            "25",
+            "--lr",
+            "5e-6",
+            "--resume",
+            str(s4_final),
+            "--optimizer-state",
+            "reset",
+            "--scheduler-state",
+            "reset",
+            "--out",
+            str(s5_final),
+            "--checkpoint-every-epochs",
+            "1",
+        ]
+        run_command(cmd, check=True, log_file=s5_root / "_train.log")
+        dur = time.time() - t0
+        print(f">>> stage 5 training DONE in {format_duration(dur)}")
+
+        cache_spill = s5_root / ".cache_spill"
+        if cache_spill.exists():
+            shutil.rmtree(cache_spill, ignore_errors=True)
+
+    package_and_swap(s5_final, "stage5")
+    run_tournament("stage5_apex", s5_tourn_apex, ["--sweep-source", "remote", "--top-decks", "5", "--opp-top-decks", "3", "--emit-best-performing-deck"])
+    return s5_final
 
 
 def main():
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-    pre_suite_enrichment()
-    s1_final = run_stage_1()
-    s2_final = run_stage_2(s1_final)
-    run_stage_3(s2_final)
+    # Bypass Stages 1, 2, and 3 completely to skip unneeded tournaments.
+    # Start the overnight pipeline directly at Stage 4.
+    s3_final = EXP_ROOT / "stage3" / "curriculum_v1_stage3.pkl"
+    s4_final = run_stage_4(s3_final)
+    run_stage_5(s4_final)
 
     print("\n" + "=" * 70)
     print("  Curriculum V1 complete.")
