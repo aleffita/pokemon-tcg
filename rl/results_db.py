@@ -2136,6 +2136,10 @@ class ResultsDB:
                     r_invariant = r_smoothed + delta_abeliano
                     self.conn.execute(f"UPDATE {table} SET elo = ? WHERE rowid = ?", (r_invariant, r["rowid"]))
 
+    def load_kaggle_leaderboard(self, csv_text: str) -> None:
+        """Inject the raw Kaggle Leaderboard CSV string into the database cache."""
+        self._kaggle_leaderboard_cache = csv_text
+
     def populate_agent_elo_from_kaggle_leaderboard(
         self,
         competition: str = "pokemon-tcg-ai-battle",
@@ -2144,46 +2148,21 @@ class ResultsDB:
         """Populate ``agent_elo_daily(source='remote').elo`` with the REAL
         Kaggle leaderboard Score for each of our known agents.
 
-        Uses the ``kaggle`` Python API directly (no subprocess, no temp CSV
-        left behind). The Kaggle leaderboard endpoint is a live snapshot of
-        the competition ranking, not a per-day time series, so retroactive
-        fill uses today's Score for every ``day_id`` in ``day_ids`` (default:
-        every day in the ``days`` table). Agents whose name has no exact
-        match in the leaderboard receive no row and are naturally excluded
-        from the top-N curriculum filter.
+        Uses the pre-loaded ``_kaggle_leaderboard_cache`` string (must be
+        injected via ``load_kaggle_leaderboard`` before calling).
 
         Idempotent: replaces the ``(source='remote')`` slice per day before
-        inserting. ``games_played`` / ``wins`` / ``losses`` / ``draws`` are
-        stored as 0 because the Kaggle-published Score is not decomposable
-        into those counts.
-
-        Returns a dict of ``{TeamName: Score}`` for every matched agent, for
-        logging / diagnostics at the caller.
+        inserting.
         """
         import csv
         import io
-        import tempfile
-        import zipfile
-        from pathlib import Path
 
-        from kaggle.api.kaggle_api_extended import KaggleApi
-
-        api = KaggleApi()
-        api.authenticate()
-
-        with tempfile.TemporaryDirectory() as tmp:
-            api.competition_leaderboard_download(
-                competition, path=tmp, quiet=True
+        csv_text = getattr(self, "_kaggle_leaderboard_cache", None)
+        if csv_text is None:
+            raise RuntimeError(
+                "Kaggle Leaderboard not loaded into cache. "
+                "Call load_kaggle_leaderboard() before compute_daily_elos."
             )
-            zips = list(Path(tmp).glob("*.zip"))
-            if not zips:
-                raise RuntimeError(
-                    "kaggle competition_leaderboard_download produced no zip "
-                    f"under {tmp!r} for competition {competition!r}"
-                )
-            with zipfile.ZipFile(zips[0]) as zf:
-                inner = zf.namelist()[0]
-                csv_text = zf.read(inner).decode("utf-8")
 
         rows = list(csv.DictReader(io.StringIO(csv_text)))
         if not rows:

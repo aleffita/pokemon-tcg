@@ -84,7 +84,14 @@ def populate_cards(
                         "rule": _clean(row.get("Rule", "")),
                     }
 
-        for card in sorted(seen.values(), key=lambda value: value["card_id"]):
+        sorted_cards = sorted(seen.values(), key=lambda value: value["card_id"])
+        try:
+            from rich.progress import track
+            iterator = track(sorted_cards, description="[cyan]Populating cards...")
+        except ImportError:
+            iterator = sorted_cards
+
+        for card in iterator:
             db.add_card(**card)
 
         output(f"Populated {len(seen)} cards from {source.name}")

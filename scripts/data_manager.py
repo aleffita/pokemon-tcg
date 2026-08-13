@@ -76,40 +76,7 @@ def _is_downloaded(path: Path) -> bool:
     return path.stat().st_size >= MIN_SIZE_BYTES
 
 
-def list_datasets(api, prefix: str) -> list[str]:
-    """List all available datasets matching the prefix pattern.
 
-    Returns a sorted list of date strings (YYYY-MM-DD).
-    """
-    console.print(f"[cyan]Querying Kaggle for datasets with prefix:[/] {prefix}")
-    try:
-        datasets = api.dataset_list(search=prefix, sort_by="updated")
-    except Exception as exc:
-        console.print(f"[bold red]Failed to list datasets:[/] {exc}")
-        return []
-
-    dates: list[str] = []
-    for ds in datasets:
-        # Extract the date suffix from the dataset ref
-        ref = ds.ref  # e.g. "kaggle/pokemon-tcg-ai-battle-episodes-2026-07-25"
-        if ref.endswith(prefix):
-            continue
-        # The slug is prefix-YYYY-MM-DD; extract the date part
-        suffix = ref
-        if "/" in suffix:
-            suffix = suffix.split("/", 1)[1]
-        # Try to parse a date from the end of the slug
-        parts = suffix.rsplit("-", 3)  # ["...", "YYYY", "MM", "DD"]
-        if len(parts) >= 4:
-            date_candidate = "-".join(parts[-3:])
-            try:
-                datetime.strptime(date_candidate, "%Y-%m-%d")
-                dates.append(date_candidate)
-            except ValueError:
-                continue
-
-    dates.sort()
-    return dates
 
 
 def show_catalog(db_path: str, replay_zip_dir: str) -> None:
@@ -257,47 +224,16 @@ def download_dataset(api, prefix: str, date_str: str, replay_zip_dir: str, force
         ) as progress:
             task_id = progress.add_task(date_str, total=None)
 
-            # kaggle API download_file does not expose streaming progress,
-            # so we poll the file size while the download is in progress.
-            import threading
-
-            # Start the actual download in a background thread
-            download_error = [None]
-
-            def _do_download():
-                try:
-                    api.dataset_download_file(
-                        dataset=slug,
-                        file_name=None,  # download the full dataset
-                        path=str(staging_dir),
-                        force=True,
-                        quiet=True,
-                    )
-                except Exception as exc:
-                    download_error[0] = exc
-
-            thread = threading.Thread(target=_do_download, daemon=True)
-            thread.start()
-
-            # Poll file size until thread finishes. The staging dir is
-            # exclusive to this download, so any *.zip* file inside it is
-            # unambiguously the one currently being fetched.
-            last_size = 0
-            while thread.is_alive():
-                partials = list(staging_dir.glob("*.zip*"))
-                current = max((p.stat().st_size for p in partials), default=0)
-
-                if current > last_size:
-                    progress.update(task_id, completed=current, total=max(current, 1))
-                    last_size = current
-                time.sleep(0.5)
-
-            thread.join()
-
-            if download_error[0] is not None:
-                console.print(
-                    f"  [bold red]Failed:[/] {download_error[0]}"
+            try:
+                api.dataset_download_file(
+                    dataset=slug,
+                    file_name=None,  # download the full dataset
+                    path=str(staging_dir),
+                    force=True,
+                    quiet=True,
                 )
+            except Exception as exc:
+                console.print(f"  [bold red]Failed:[/] {exc}")
                 shutil.rmtree(staging_dir, ignore_errors=True)
                 return False
 
@@ -392,65 +328,59 @@ def main():
     console.print(f"  Prefix     : {prefix}")
     console.print()
 
-    # Authenticate with Kaggle
-    api = _get_api()
-
-    # List available datasets
-    dates = list_datasets(api, prefix)
-    if not dates:
-        console.print("[yellow]No datasets found on Kaggle matching the prefix.[/]")
-        sys.exit(0)
-
-    # Determine which dates to operate on
-    if args.list:
-        show_dataset_table(dates, replay_zip_dir)
-        sys.exit(0)
-
     if args.catalog:
         show_catalog(args.db, replay_zip_dir)
         sys.exit(0)
 
+    # Determine which dates to operate on purely locally
     if args.date:
         target_dates = [args.date]
     elif args.range:
         target_dates = _date_range(args.range[0], args.range[1])
-    elif args.all_:
-        target_dates = dates
+    elif args.all_ or args.list:
+        # 2026-07-14 is the epoch of our dataset collection
+        target_dates = _date_range("2026-07-14", (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"))
     else:
         # --last or default
-        target_dates = [dates[-1]] if dates else []
+        target_dates = [(datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")]
 
+    if args.list:
+        show_dataset_table(target_dates, replay_zip_dir)
+        sys.exit(0)
+
+    # Pre-flight check on disk before EVER touching the network
+    missing_dates = []
+    skipped = 0
     console.print(f"[bold]Dates to process:[/] {len(target_dates)}")
     for d in target_dates:
-        in_remote = "available" if d in dates else "[dim]not found[/]"
-        console.print(f"  {d}  ({in_remote})")
-    console.print()
+        lp = _local_path(replay_zip_dir, d)
+        if not args.force and _is_downloaded(lp):
+            size_mb = lp.stat().st_size / (1024 * 1024)
+            console.print(f"  [green]Skip[/] {d}  ({size_mb:.0f} MB already present)")
+            skipped += 1
+        else:
+            missing_dates.append(d)
+
+    if not missing_dates:
+        console.print("\n[bold]Summary:[/]")
+        console.print(f"  Skipped    : {skipped}")
+        console.print("  [green]All requested dates are present. No network calls made.[/]")
+        sys.exit(0)
+
+    # Only instantiate API if we actually need to download something
+    api = _get_api()
 
     # Download
     success = 0
-    skipped = 0
     failed = 0
 
-    for date_str in target_dates:
-        if date_str not in dates:
-            console.print(f"  [yellow]Skip[/] {date_str}  (not available on Kaggle)")
-            skipped += 1
-            continue
-
-        lp = _local_path(replay_zip_dir, date_str)
-        if not args.force and _is_downloaded(lp):
-            size_mb = lp.stat().st_size / (1024 * 1024)
-            console.print(
-                f"  [green]Skip[/] {date_str}  ({size_mb:.0f} MB already present)"
-            )
-            skipped += 1
-            continue
-
+    for date_str in missing_dates:
         ok = download_dataset(api, prefix, date_str, replay_zip_dir, force=args.force)
         if ok:
             success += 1
         else:
             failed += 1
+            break  # Crash-Early: abort queue on first network failure
 
     # Summary
     console.print()
@@ -458,10 +388,7 @@ def main():
     console.print(f"  Downloaded : {success}")
     console.print(f"  Skipped    : {skipped}")
     if failed:
-        console.print(f"  [red]Failed    : {failed}[/]")
-    console.print()
-
-    if failed:
+        console.print(f"  [red]Failed    : {failed} (Queue Aborted)[/]")
         sys.exit(1)
 
 

@@ -107,6 +107,8 @@ def process_zip(
     zip_path: str | Path,
     *,
     archive_date: str | None = None,
+    progress=None,
+    task_id=None,
 ) -> int:
     """Idempotently ingest match-level observations from one replay archive."""
 
@@ -117,6 +119,8 @@ def process_zip(
         episodes = sorted(
             name for name in replay_zip.namelist() if name.endswith(".json")
         )
+        if progress and task_id is not None:
+            progress.update(task_id, total=len(episodes))
         for member_name in episodes:
             raw_payload = replay_zip.read(member_name)
             source_digest = hashlib.sha256(raw_payload).hexdigest()
@@ -224,6 +228,8 @@ def process_zip(
                 if agent_id is not None:
                     db.touch_agent_seen(agent_id, day_id)
             processed += 1
+            if progress and task_id is not None:
+                progress.update(task_id, advance=1)
     return processed
 
 
@@ -259,16 +265,34 @@ def populate_replays(
 
     total = 0
     try:
-        for archive in sources:
-            if not archive.is_file():
-                raise FileNotFoundError(f"replay ZIP does not exist: {archive}")
-            count = process_zip(db, archive, archive_date=archive.stem)
-            total += count
-            output(f"  {archive.stem}: {count} episodes processed")
-        output(f"\nTotal: {total} episodes processed")
-        output("Computing card Elo...")
+        from rich.progress import Progress, TextColumn, BarColumn, MofNCompleteColumn, TimeRemainingColumn
+        from rich.console import Console
+        console = Console()
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            for archive in sources:
+                if not archive.is_file():
+                    raise FileNotFoundError(f"replay ZIP does not exist: {archive}")
+                task_id = progress.add_task(f"[cyan]Parsing {archive.stem}...", total=None)
+                count = process_zip(
+                    db,
+                    archive,
+                    archive_date=archive.stem,
+                    progress=progress,
+                    task_id=task_id,
+                )
+                total += count
+
+        console.print(f"\n[bold green]Total:[/] {total} episodes processed")
+        console.print("[cyan]Computing card Elo...[/]")
         db.compute_card_elo(source="remote")
-        output("Computing deck Elo...")
+        console.print("[cyan]Computing deck Elo...[/]")
         db.compute_deck_elo(source="remote")
         return total
     finally:

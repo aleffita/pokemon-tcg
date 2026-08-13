@@ -92,128 +92,139 @@ def populate_decks(
         )
 
     decks_added = 0
+    from rich.progress import Progress, TextColumn, BarColumn, MofNCompleteColumn
+    from rich.console import Console
+    console = Console()
 
-    # ---- 1. Our agent's deck (CSV) ----
-    agent_deck = source_root / "agent" / "deck.csv"
-    if agent_deck.exists():
-        card_ids = read_csv_deck(agent_deck)
-        if add_deck_from_flat(db, "agent_current", "agent", card_ids):
-            decks_added += 1
-            output(f"  agent_current: {len(card_ids)} cards")
-        else:
-            output(f"  SKIP agent_current: {len(card_ids)} cards (need 60)")
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task_agent = progress.add_task("[cyan]Agent Deck", total=1)
+        task_public = progress.add_task("[cyan]Public Agents", total=None)
+        task_starters = progress.add_task("[cyan]Starters", total=None)
+        task_kaggle = progress.add_task("[cyan]Kaggle", total=None)
+        task_meta = progress.add_task("[cyan]Meta", total=None)
+        task_gen = progress.add_task("[cyan]Generated", total=None)
+        task_train = progress.add_task("[cyan]Train", total=None)
 
-    # ---- 2. Public agents (CSV) ----
-    public_dir = source_root / "public_agents"
-    if public_dir.exists():
-        for deck_csv in sorted(public_dir.rglob("deck.csv")):
-            parent = deck_csv.parent
-            # Build name: prefix with parent category for uniqueness
-            if parent.parent.name == "starters":
-                name = f"starter_{parent.name}"
-                source = "starter"
-            elif parent.parent.name == "submissions":
-                name = f"sub_{parent.name}"
-                source = "submission"
-            else:
-                name = parent.name
-                source = "public_agent"
-
-            card_ids = read_csv_deck(deck_csv)
-            if add_deck_from_flat(db, name, source, card_ids):
+        # ---- 1. Our agent's deck (CSV) ----
+        agent_deck = source_root / "agent" / "deck.csv"
+        if agent_deck.exists():
+            card_ids = read_csv_deck(agent_deck)
+            if add_deck_from_flat(db, "agent_current", "agent", card_ids):
                 decks_added += 1
-                output(f"  {name}: {len(card_ids)} cards")
-            else:
-                output(f"  SKIP {name}: {len(card_ids)} cards (need 60)")
+        progress.update(task_agent, advance=1)
 
-    # ---- 3. Official starter decks (rl/deck/decks.py) ----
-    try:
-        from rl.deck.decks import DECKS, DECK_NAMES
-        for deck_name in sorted(DECK_NAMES):
-            card_ids = DECKS[deck_name]
-            name = f"starter_{deck_name}"
-            if add_deck_from_flat(db, name, "starter", card_ids, archetype=deck_name):
-                decks_added += 1
-                output(f"  {name}: {len(card_ids)} cards")
-            else:
-                output(f"  SKIP {name}: {len(card_ids)} cards (need 60)")
-    except Exception as e:
-        if strict:
-            raise
-        output(f"  Warning: could not load rl/deck/decks.py: {e}")
-
-    # ---- 4. Kaggle-mined decks (rl/deck/decks_kaggle.py) ----
-    # Import before decks_meta because decks_meta merges KAGGLE_DECKS into META
-    # at import time. We want the raw kaggle entries with a distinct source tag.
-    try:
-        from rl.deck.decks_kaggle import KAGGLE_DECKS
-        for archetype, card_ids in sorted(KAGGLE_DECKS.items()):
-            if add_deck_from_flat(db, archetype, "kaggle", card_ids, archetype=archetype):
-                decks_added += 1
-                output(f"  {archetype}: {len(card_ids)} cards")
-            else:
-                output(f"  SKIP {archetype}: {len(card_ids)} cards (need 60)")
-    except Exception as e:
-        if strict:
-            raise
-        output(f"  Warning: could not load rl/deck/decks_kaggle.py: {e}")
-
-    # ---- 5. Meta decks (rl/deck/decks_meta.py) ----
-    # META already includes KAGGLE_DECKS via self-merge at module level.
-    # Archetype keys are already prefixed (meta_aichi_*, meta2_*, meta3_*, meta4_*)
-    # so we use them directly as names. Duplicate names are silently skipped by
-    # INSERT OR IGNORE.
-    try:
-        from rl.deck.decks_meta import META, META2, META3, META4
-        for _meta_label, meta_dict in [
-            ("aichi", META),
-            ("meta2", META2),
-            ("meta3", META3),
-            ("meta4", META4),
-        ]:
-            for archetype, card_ids in sorted(meta_dict.items()):
-                if add_deck_from_flat(db, archetype, "meta", card_ids, archetype=archetype):
-                    decks_added += 1
-                    output(f"  {archetype}: {len(card_ids)} cards")
+        # ---- 2. Public agents (CSV) ----
+        public_dir = source_root / "public_agents"
+        if public_dir.exists():
+            csvs = list(public_dir.rglob("deck.csv"))
+            progress.update(task_public, total=len(csvs))
+            for deck_csv in csvs:
+                parent = deck_csv.parent
+                if parent.parent.name == "starters":
+                    name = f"starter_{parent.name}"
+                    source = "starter"
+                elif parent.parent.name == "submissions":
+                    name = f"sub_{parent.name}"
+                    source = "submission"
                 else:
-                    output(f"  SKIP {archetype}: {len(card_ids)} cards (need 60)")
-    except Exception as e:
-        if strict:
-            raise
-        output(f"  Warning: could not load rl/deck/decks_meta.py: {e}")
+                    name = parent.name
+                    source = "public_agent"
 
-    # ---- 6. Auto-generated archetypes (rl/deck/decks_generated.py) ----
-    try:
-        from rl.deck.decks_generated import GENERATED
-        for archetype, card_ids in sorted(GENERATED.items()):
-            name = f"generated_{archetype}"
-            if add_deck_from_flat(db, name, "generated", card_ids, archetype=archetype):
-                decks_added += 1
-                output(f"  {name}: {len(card_ids)} cards")
-            else:
-                output(f"  SKIP {name}: {len(card_ids)} cards (need 60)")
-    except Exception as e:
-        if strict:
-            raise
-        output(f"  Warning: could not load rl/deck/decks_generated.py: {e}")
+                card_ids = read_csv_deck(deck_csv)
+                if add_deck_from_flat(db, name, source, card_ids):
+                    decks_added += 1
+                progress.update(task_public, advance=1)
+        else:
+            progress.update(task_public, total=0)
 
-    # ---- 7. Training deck sets (rl/deck/decks_train.py) ----
-    # These overlap heavily with META/META2/META3/META4 (already added above).
-    # Only add the k-series entries (k01..k50) which are unique to this module.
-    try:
-        from rl.deck.decks_train import TRAIN_TOP50
-        for archetype, card_ids in sorted(TRAIN_TOP50.items()):
-            if archetype.startswith("k") and archetype[1:3].isdigit():
+        # ---- 3. Official starter decks (rl/deck/decks.py) ----
+        try:
+            from rl.deck.decks import DECKS, DECK_NAMES
+            progress.update(task_starters, total=len(DECK_NAMES))
+            for deck_name in sorted(DECK_NAMES):
+                card_ids = DECKS[deck_name]
+                name = f"starter_{deck_name}"
+                if add_deck_from_flat(db, name, "starter", card_ids, archetype=deck_name):
+                    decks_added += 1
+                progress.update(task_starters, advance=1)
+        except Exception as e:
+            if strict:
+                raise
+            output(f"  Warning: could not load rl/deck/decks.py: {e}")
+            progress.update(task_starters, total=0)
+
+        # ---- 4. Kaggle-mined decks (rl/deck/decks_kaggle.py) ----
+        try:
+            from rl.deck.decks_kaggle import KAGGLE_DECKS
+            progress.update(task_kaggle, total=len(KAGGLE_DECKS))
+            for archetype, card_ids in sorted(KAGGLE_DECKS.items()):
+                if add_deck_from_flat(db, archetype, "kaggle", card_ids, archetype=archetype):
+                    decks_added += 1
+                progress.update(task_kaggle, advance=1)
+        except Exception as e:
+            if strict:
+                raise
+            output(f"  Warning: could not load rl/deck/decks_kaggle.py: {e}")
+            progress.update(task_kaggle, total=0)
+
+        # ---- 5. Meta decks (rl/deck/decks_meta.py) ----
+        try:
+            from rl.deck.decks_meta import META, META2, META3, META4
+            total_meta = len(META) + len(META2) + len(META3) + len(META4)
+            progress.update(task_meta, total=total_meta)
+            for _meta_label, meta_dict in [
+                ("aichi", META),
+                ("meta2", META2),
+                ("meta3", META3),
+                ("meta4", META4),
+            ]:
+                for archetype, card_ids in sorted(meta_dict.items()):
+                    if add_deck_from_flat(db, archetype, "meta", card_ids, archetype=archetype):
+                        decks_added += 1
+                    progress.update(task_meta, advance=1)
+        except Exception as e:
+            if strict:
+                raise
+            output(f"  Warning: could not load rl/deck/decks_meta.py: {e}")
+            progress.update(task_meta, total=0)
+
+        # ---- 6. Auto-generated archetypes (rl/deck/decks_generated.py) ----
+        try:
+            from rl.deck.decks_generated import GENERATED
+            progress.update(task_gen, total=len(GENERATED))
+            for archetype, card_ids in sorted(GENERATED.items()):
+                name = f"generated_{archetype}"
+                if add_deck_from_flat(db, name, "generated", card_ids, archetype=archetype):
+                    decks_added += 1
+                progress.update(task_gen, advance=1)
+        except Exception as e:
+            if strict:
+                raise
+            output(f"  Warning: could not load rl/deck/decks_generated.py: {e}")
+            progress.update(task_gen, total=0)
+
+        # ---- 7. Training deck sets (rl/deck/decks_train.py) ----
+        try:
+            from rl.deck.decks_train import TRAIN_TOP50
+            targets = [a for a in TRAIN_TOP50 if a.startswith("k") and a[1:3].isdigit()]
+            progress.update(task_train, total=len(targets))
+            for archetype in sorted(targets):
+                card_ids = TRAIN_TOP50[archetype]
                 name = f"train_{archetype}"
                 if add_deck_from_flat(db, name, "train", card_ids, archetype=archetype):
                     decks_added += 1
-                    output(f"  {name}: {len(card_ids)} cards")
-                else:
-                    output(f"  SKIP {name}: {len(card_ids)} cards (need 60)")
-    except Exception as e:
-        if strict:
-            raise
-        output(f"  Warning: could not load rl/deck/decks_train.py: {e}")
+                progress.update(task_train, advance=1)
+        except Exception as e:
+            if strict:
+                raise
+            output(f"  Warning: could not load rl/deck/decks_train.py: {e}")
+            progress.update(task_train, total=0)
 
     # ---- Summary ----
     total = db.conn.execute("SELECT COUNT(*) FROM decks").fetchone()[0]
@@ -221,12 +232,12 @@ def populate_decks(
         "SELECT source, COUNT(*) FROM decks GROUP BY source ORDER BY source"
     ).fetchall()
 
-    output("\n=== Summary ===")
-    output(f"Decks added this run: {decks_added}")
-    output(f"Total decks in DB:    {total}")
-    output("By source:")
-    for source, cnt in by_source:
-        output(f"  {source}: {cnt}")
+    console.print("\n[bold]=== Summary ===[/]")
+    console.print(f"Decks added this run: {decks_added}")
+    console.print(f"Total decks in DB:    {total}")
+    console.print("By source:")
+    for source_val, cnt in by_source:
+        console.print(f"  {source_val}: {cnt}")
 
     if owns_db:
         db.close()

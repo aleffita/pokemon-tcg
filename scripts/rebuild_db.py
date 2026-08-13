@@ -293,33 +293,73 @@ def rebuild_results_database(
     staging_db = staging_dir / target_path.name
     database: ResultsDB | None = None
     try:
+        from rich.console import Console
+        console = Console()
         database = ResultsDB(staging_db)
+
+        console.print("[cyan][rebuild][/] Fetching live Kaggle Leaderboard...")
+        leaderboard_text = None
+        try:
+            from kaggle.api.kaggle_api_extended import KaggleApi
+            import zipfile
+            api = KaggleApi()
+            api.authenticate()
+            with tempfile.TemporaryDirectory() as tmp:
+                api.competition_leaderboard_download("pokemon-tcg-ai-battle", path=tmp, quiet=True)
+                zips = list(Path(tmp).glob("*.zip"))
+                if zips:
+                    with zipfile.ZipFile(zips[0]) as zf:
+                        inner = zf.namelist()[0]
+                        leaderboard_text = zf.read(inner).decode("utf-8")
+        except Exception as exc:
+            console.print(f"[bold red][!] Kaggle Leaderboard API fetch failed:[/] {exc}")
+            fallback_path = ROOT / "data" / "kaggle_leaderboard.csv"
+            console.print(f"[bold yellow][!] Attempting local physical fallback ({fallback_path})...[/]")
+            if fallback_path.exists():
+                leaderboard_text = fallback_path.read_text(encoding="utf-8")
+                console.print("[bold green][+] Fallback CSV loaded successfully.[/]")
+            else:
+                raise RuntimeError(
+                    f"Kaggle API failed and fallback {fallback_path} not found"
+                ) from exc
+
+        if leaderboard_text:
+            database.load_kaggle_leaderboard(leaderboard_text)
+
+        console.print("[cyan][rebuild][/] Populating cards from CSV...")
         cards_populated = populate_cards(
             database,
             csv_path=CSV_PATH,
             skip_existing=False,
         )
+        console.print(f"  [green]➔[/] Populated {cards_populated} cards.")
+
+        console.print("[cyan][rebuild][/] Populating decks from canonical definitions...")
         decks_populated = populate_decks(
             database,
             root=ROOT,
             skip_existing=False,
             strict=True,
         )
+        console.print(f"  [green]➔[/] Populated {decks_populated} decks.")
+
+        console.print("[cyan][rebuild][/] Populating replays from Kaggle ZIPs (this may take a while)...")
         replays_populated = populate_replays(
             database,
             zip_paths=list(replay_sources),
         )
+        console.print(f"  [green]➔[/] Populated {replays_populated} matches.")
         # Elo snapshots and meta features are part of the canonical rebuild.
         # A DB without them is not usable by the trainer / encoder even though
         # matches are populated -- do it here so the rebuild is self-contained.
         # source="remote" is the only source the meta catalog reads today
         # (see rl/encoder/meta_lookup.py); local tournament rebuilds keep
         # their own local elo computation via scripts/tournament.py.
-        print("[rebuild] assigning competition_day ordinals...")
+        console.print("[cyan][rebuild][/] Assigning competition_day ordinals...")
         database.refresh_competition_days()
-        print("[rebuild] computing rolling-forward daily elos (source=remote)...")
+        console.print("[cyan][rebuild][/] Computing rolling-forward daily elos (source=remote)...")
         database.compute_daily_elos(source="remote")
-        print("[rebuild] refreshing meta features (source=remote)...")
+        console.print("[cyan][rebuild][/] Refreshing meta features (source=remote)...")
         database.refresh_meta_features(source="remote")
         counts, integrity, fingerprint = validate_rebuilt_database(
             database.conn,
