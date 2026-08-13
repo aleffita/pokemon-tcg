@@ -13,13 +13,7 @@
 - **Seasons & Reset System**: Strongly-typed `seasons` table (`id`, `name`, `is_active`), with CLI controls `--new-season`, `--reset-local-elo`, and `--clear-local-matches`.
 - **Sample-Size Invariant Elo ($R_{\text{invariante}}$)**: Integrated Bradley-Terry MLE inversion, MD10 placement smoothing ($N_0 = 10$), and Softmax Abelian Group translation calibration ($\Delta R_{\text{Abeliano}}$) in `rl/results_db.py`.
 
-## Key Architectural Specs
-- `d_model`: 128
-- `heads`: 4
-- `layers`: 3
-- `ffn_dim`: 512
-- `scratch_registers`: 16
-- `max_options`: 192 (+ SUBMIT)
+
 
 ## Mathematical Framework: Sample-Size Invariant Elo ($R_{\text{invariante}}$)
 
@@ -63,6 +57,9 @@ $$R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}$$
 - **Strict Explicit Verification Before Action Directive**: When the Scientist requests an inspection, audit, or diagnostic verification, perform ONLY the requested inspection and report the exact empirical findings. Never proceed to unapproved code modifications, task terminations, or execution phases without explicit prior user ratification.
   *Rationale: Executing unapproved modifications during a diagnostic phase violates sequential integrity and risks invalidating running experiments.*
 
+- **Cognitive Coordination & Neurodivergence Pacing Directive**: Acknowledge the Scientist's neurodivergence (ADHD + 2e). The Scientist strictly commands the orchestration rhythm and time-boxing across multi-day tasks. Never preemptively execute downstream actions (e.g., submissions) while in an analytical phase.
+  *Rationale: Preemptive execution disrupts non-linear cognitive pacing and wastes analytical bandwidth.*
+
 ### II. Procedural, Execution & Safety Directives
 - **Sequential Integrity & Premature Optimization Directive**: Validate every architectural dependency and execution prerequisite in order before attempting performance optimization. Never skip diagnostic steps or introduce premature optimizations based on unverified assumptions.
   *Rationale: Premature optimization masks structural defects, bypasses validation steps, and introduces regression bugs.*
@@ -81,6 +78,9 @@ $$R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}$$
 
 - **Zero-Assumption CLI Execution Directive**: NEVER assume CLI flags or script arguments based on past behavior or memory. ALWAYS read the `argparse` definition (via grep) or run `--help` BEFORE proposing a command. Action before parameter verification is strictly prohibited.
   *Rationale: Alucinating script arguments wastes context window iterations and causes task execution failures, breaking the agentic workflow.*
+
+- **Native Tool Encorcement (Anti-Bash Search) Directive**: NEVER use `grep`, `find`, or `ls` as bash commands via `run_command`. ALWAYS use the harness native tools: `grep_search`, `list_dir`, and `view_file`.
+  *Rationale: Terminal-based search commands are brittle, format poorly in the harness, and break structural tool adherence.*
 
 - **True Assimilation & Anti-Lip-Service Directive**: NEVER state "I have assimilated the feedback" or similar lip-service phrases unless a tool call has been executed in that exact turn to durably write the new rule into `GEMINI.md`. Lip-service without memory mutation is a lie and breaks the chain of trust.
   *Rationale: Claiming to learn a rule without writing it to persistent memory causes immediate cross-session amnesia and breaks the agentic contract.*

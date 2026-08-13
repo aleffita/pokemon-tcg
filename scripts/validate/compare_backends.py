@@ -7,7 +7,7 @@ captured decision through both backends and reports per-component divergence.
 This does NOT use the replay JSON as ground truth: replays serialize some fields
 differently from the live engine, so observations are captured straight from the
 environment instead. FP32 is used for the numeric comparison to isolate model
-equivalence from FP16 rounding; the shipped agent still runs FP16.
+equivalence from FP32 rounding; the shipped agent still runs FP32.
 
 Usage::
 

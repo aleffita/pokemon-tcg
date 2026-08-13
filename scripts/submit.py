@@ -2,7 +2,7 @@
 optionally upload it to Kaggle.
 
 Packaging is delegated to scripts/build_submission.py — the single place that
-knows how to bundle the agent (self-describing PyTorch FP16 checkpoint and archive layout)
+knows how to bundle the agent (self-describing PyTorch FP32 checkpoint and archive layout)
 and validate the result. This module only adds the upload step.
 
 Usage:
@@ -115,7 +115,7 @@ def _describe_bundle(out_path: str) -> None:
     console.print(f"  sha256      {digest}…")
     console.print(f"  checkpoint  {checkpoint}")
     console.print(f"  deck        {len(deck_cards)} cards from agent/deck.csv")
-    backend = "PyTorch FP16" if checkpoint.endswith(".pt") else "unknown"
+    backend = "PyTorch FP32" if checkpoint.endswith(".pt") else "unknown"
     console.print(f"  backend     {backend}")
 
 
@@ -141,7 +141,7 @@ def main():
     p.add_argument(
         "--checkpoint",
         default=None,
-        help="Explicit MLX trainer checkpoint to convert into the PyTorch FP16 bundle",
+        help="Explicit MLX trainer checkpoint to convert into the PyTorch FP32 bundle",
     )
     p.add_argument(
         "--upload",
@@ -195,7 +195,7 @@ def main():
         console.print(f"  https://www.kaggle.com/competitions/{args.competition}/submissions")
         sys.exit(0)
 
-    message = args.message or f"PyTorch FP16 agent {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    message = args.message or f"PyTorch FP32 agent {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
     # 2. Confirm. Uploading is public, irreversible, and spends one of the
     # competition's daily submission slots.

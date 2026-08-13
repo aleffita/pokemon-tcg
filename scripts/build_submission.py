@@ -31,7 +31,7 @@ SUBMISSION_WORK_DIR = os.path.join(ROOT, "model", "submission_work")
 REQUIRED = ["main.py", "deck.csv"]
 SMOKE_CHECKPOINT_DIR = os.path.join(ROOT, "model", "checkpoint", "smoke")
 SMOKE_TORCH_CHECKPOINT = os.path.join(
-    ROOT, "model", "bc_model", "smoke", "bc_smoke_torch_fp16.pt"
+    ROOT, "model", "bc_model", "smoke", "bc_smoke_torch_fp32.pt"
 )
 MAIN_TORCH_CHECKPOINT = os.path.join(
     ROOT, "model", "bc_model", "bc_best_torch_fp32.pt"

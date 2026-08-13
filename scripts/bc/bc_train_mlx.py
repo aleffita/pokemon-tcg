@@ -3,7 +3,7 @@
 Same architecture as bc_train.py but uses MLX instead of PyTorch.
 Faster on M1/M2 via native Metal GPU (no MPS NaN bug).
 
-FP16-native: numeric features stay float16 end-to-end.
+FP32-native: numeric features stay float32 end-to-end.
 Gradient accumulation: --accum-steps K accumulates K microbatches before update.
 
 Data comes from the Parquet catalog (one Parquet file per day, registered in
@@ -106,7 +106,7 @@ def _sha256_file(path: str | os.PathLike[str]) -> str:
 
 
 class FP32StateMuon(optim.Muon):
-    """Muon with FP32 momentum and FP16 parameter storage."""
+    """Muon with FP32 momentum and FP32 parameter storage."""
 
     def init_single(self, parameter: mx.array, state: dict) -> None:
         state["v"] = mx.zeros(parameter.shape, dtype=mx.float32)
@@ -121,7 +121,7 @@ class FP32StateMuon(optim.Muon):
 
 
 class FP32StateAdamW(optim.AdamW):
-    """AdamW with FP32 moments and FP16 parameter storage."""
+    """AdamW with FP32 moments and FP32 parameter storage."""
 
     def init_single(self, parameter: mx.array, state: dict) -> None:
         state["m"] = mx.zeros(parameter.shape, dtype=mx.float32)
@@ -218,7 +218,7 @@ def _optimizer_contract(cfg) -> dict:
         "adamw_weight_decay": float(cfg.adamw_weight_decay),
         "structured_weight_decay": float(cfg.structured_weight_decay),
         "state_dtype": "float32",
-        "parameter_dtype": "float16",
+        "parameter_dtype": "float32",
         "routing_version": 2,
     }
 
@@ -2279,17 +2279,17 @@ def main() -> None:
             f"val_acc={loaded_val_acc:.4f}, gstep={gstep})"
         )
 
-    # Parameters and forward activations use FP16. Loss, reductions, gradient
+    # Parameters and forward activations use FP32. Loss, reductions, gradient
     # accumulation, and optimizer moments are promoted explicitly to FP32.
-    model.set_dtype(mx.float16)
+    model.set_dtype(mx.float32)
     mx.eval(model.parameters())
     parameter_dtypes = {
         str(parameter.dtype)
         for _, parameter in nn.utils.tree_flatten(model.parameters())
     }
-    if parameter_dtypes != {"mlx.core.float16"}:
+    if parameter_dtypes != {"mlx.core.float32"}:
         raise RuntimeError(
-            f"model parameters are not strictly FP16: {parameter_dtypes}"
+            f"model parameters are not strictly FP32: {parameter_dtypes}"
         )
 
     # ``--epochs`` is the number of epochs for THIS invocation. The checkpoint
@@ -2358,7 +2358,7 @@ def main() -> None:
         flush=True,
     )
 
-    # --- batch generator (C.1: FP16-native numeric features) ---
+    # --- batch generator (C.1: FP32-native numeric features) ---
     # `chunk` is a plain dict[str, np.ndarray] with row-aligned keys `keys` +
     # "y" (+ "opt_group" iff --dedup) (+ _AUX_COLUMNS iff aux_active) --
     # exactly what the pyarrow streaming re-chunker (_stream_train_microbatches)
@@ -2369,18 +2369,18 @@ def main() -> None:
     ) -> tuple[dict[str, mx.array], mx.array, dict[str, mx.array] | None]:
         ob = {
             k: mx.array(
-                np.asarray(chunk[k]).astype(np.int32 if k in int_keys else np.float16)
+                np.asarray(chunk[k]).astype(np.int32 if k in int_keys else np.float32)
             )
             for k in keys
         }
         if a.dedup:
             gb = mx.array(np.asarray(chunk["opt_group"]), dtype=mx.int32)
-            canon = (gb == mx.arange(gb.shape[1])[None, :]).astype(mx.float16)
+            canon = (gb == mx.arange(gb.shape[1])[None, :]).astype(mx.float32)
             ob["action_mask"] = ob["action_mask"] * canon
         if a.zero_wouldko:
             attr = np.asarray(ob["opt_attr"]).copy()
             attr[..., WK_LO:WK_HI] = 0.0
-            ob["opt_attr"] = mx.array(attr, dtype=mx.float16)
+            ob["opt_attr"] = mx.array(attr, dtype=mx.float32)
         yb = mx.array(np.asarray(chunk["y"]).astype(np.int32))
         aux_targets = None
         if aux_active and "aux_valid" in chunk:
@@ -2833,7 +2833,7 @@ def main() -> None:
                     {
                         key: mx.array(
                             fetched[key].astype(
-                                np.int32 if key in int_keys else np.float16
+                                np.int32 if key in int_keys else np.float32
                             )
                         )
                         for key in keys
@@ -2842,7 +2842,7 @@ def main() -> None:
                 if a.zero_wouldko:
                     attr = np.asarray(lane_observations[-1]["opt_attr"]).copy()
                     attr[..., WK_LO:WK_HI] = 0.0
-                    lane_observations[-1]["opt_attr"] = mx.array(attr, dtype=mx.float16)
+                    lane_observations[-1]["opt_attr"] = mx.array(attr, dtype=mx.float32)
                 lane_labels.append(mx.array(fetched["y"].astype(np.int32)))
                 if aux_active:
                     lane_aux_targets.append(
@@ -2862,7 +2862,7 @@ def main() -> None:
                 {
                     key: mx.array(
                         np.asarray(arrays[key][chunk_arr]).astype(
-                            np.int32 if key in int_keys else np.float16
+                            np.int32 if key in int_keys else np.float32
                         )
                     )
                     for key in keys
@@ -2871,7 +2871,7 @@ def main() -> None:
             if a.zero_wouldko:
                 attr = np.asarray(lane_observations[-1]["opt_attr"]).copy()
                 attr[..., WK_LO:WK_HI] = 0.0
-                lane_observations[-1]["opt_attr"] = mx.array(attr, dtype=mx.float16)
+                lane_observations[-1]["opt_attr"] = mx.array(attr, dtype=mx.float32)
             lane_labels.append(
                 mx.array(labels[label_base + chunk_arr].astype(np.int32))
             )

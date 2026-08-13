@@ -15,15 +15,15 @@ class _ScriptedModel:
 
     def logits_value(self, observation, memory_in=None):
         self.memory_inputs.append(memory_in)
-        logits = torch.full((1, N_ACTIONS), -100.0, dtype=torch.float16)
+        logits = torch.full((1, N_ACTIONS), -100.0, dtype=torch.float32)
         if self.calls == 0:
             logits[0, 1] = 10.0
             logits[0, SUBMIT_ACTION] = 20.0  # illegal before min_count
         else:
             logits[0, SUBMIT_ACTION] = 20.0
         self.calls += 1
-        memory_out = torch.full((1, 2, 3), float(self.calls), dtype=torch.float16)
-        return logits, torch.zeros(1, dtype=torch.float16), memory_out
+        memory_out = torch.full((1, 2, 3), float(self.calls), dtype=torch.float32)
+        return logits, torch.zeros(1, dtype=torch.float32), memory_out
 
 
 def test_multiselect_reencodes_and_advances_memory_once() -> None:
@@ -36,7 +36,7 @@ def test_multiselect_reencodes_and_advances_memory_once() -> None:
 
     def encode_step(picked: set[int]):
         seen_picked.append(set(picked))
-        opt_attr = torch.zeros(MAX_OPTIONS, OPT_STRUCT, dtype=torch.float16).numpy()
+        opt_attr = torch.zeros(MAX_OPTIONS, OPT_STRUCT, dtype=torch.float32).numpy()
         for index in picked:
             opt_attr[index, OPT_PICKED] = 1.0
         return {
@@ -44,7 +44,7 @@ def test_multiselect_reencodes_and_advances_memory_once() -> None:
             "opt_attr": opt_attr,
         }
 
-    incoming = torch.full((1, 2, 3), 7.0, dtype=torch.float16)
+    incoming = torch.full((1, 2, 3), 7.0, dtype=torch.float32)
     model = _ScriptedModel()
     actions, outgoing = agent_main._autoregressive_select(
         model,
@@ -59,7 +59,7 @@ def test_multiselect_reencodes_and_advances_memory_once() -> None:
     assert actions == [1]
     assert seen_picked == [set(), {1}]
     assert all(value is incoming for value in model.memory_inputs)
-    assert torch.equal(outgoing, torch.full((1, 2, 3), 2.0, dtype=torch.float16))
+    assert torch.equal(outgoing, torch.full((1, 2, 3), 2.0, dtype=torch.float32))
 
     first = encode_step(set())
     second = encode_step({1})
@@ -99,16 +99,16 @@ def test_would_ko_runs_once_per_decision() -> None:
             return {
                 "action_mask": build_mask(select, picked),
                 "opt_attr": torch.zeros(
-                    MAX_OPTIONS, OPT_STRUCT, dtype=torch.float16
+                    MAX_OPTIONS, OPT_STRUCT, dtype=torch.float32
                 ).numpy(),
             }
 
     class _OnePickModel:
         def logits_value(self, observation, memory_in=None):
-            logits = torch.full((1, N_ACTIONS), -100.0, dtype=torch.float16)
+            logits = torch.full((1, N_ACTIONS), -100.0, dtype=torch.float32)
             logits[0, 0] = 1.0
-            return logits, torch.zeros(1, dtype=torch.float16), torch.ones(
-                1, 2, 3, dtype=torch.float16
+            return logits, torch.zeros(1, dtype=torch.float32), torch.ones(
+                1, 2, 3, dtype=torch.float32
             )
 
     def annotate(observation, deck, encoder, n_var, rng):

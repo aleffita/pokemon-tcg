@@ -58,7 +58,7 @@ def _real_observation() -> dict[str, torch.Tensor]:
         and name != "episode_meta.npy"
     }
     return {
-        key: torch.as_tensor(value, dtype=torch.int64 if key in _INT_KEYS else torch.float16)
+        key: torch.as_tensor(value, dtype=torch.int64 if key in _INT_KEYS else torch.float32)
         for key, value in arrays.items()
     }
 
@@ -78,11 +78,11 @@ def test_checkpoint_config_is_authoritative() -> None:
     print("  PASS: checkpoint arch_config is loaded independently of JSON")
 
 
-def test_strict_fp16_load_and_forward() -> None:
+def test_strict_fp32_load_and_forward() -> None:
     model, cfg = load_mlx_checkpoint(CHECKPOINT, get_card_table())
     assert cfg["nlayers"] == len(model.encoder.layers)
     assert model.scratch.shape == (cfg["scratch_registers"], cfg["d_model"])
-    assert next(model.parameters()).dtype == torch.float16
+    assert next(model.parameters()).dtype == torch.float32
 
     obs = _real_observation()
     with torch.inference_mode():
@@ -90,14 +90,14 @@ def test_strict_fp16_load_and_forward() -> None:
     assert logits.shape == (1, N_ACTIONS)
     assert value.shape == (1,)
     assert memory.shape == (1, cfg["scratch_registers"], cfg["d_model"])
-    assert logits.dtype == torch.float16
-    assert memory.dtype == torch.float16
+    assert logits.dtype == torch.float32
+    assert memory.dtype == torch.float32
     assert torch.isfinite(logits).all()
     assert torch.isfinite(value).all()
     legal = obs["action_mask"] > 0.5
     assert torch.all(logits[legal] > -65504)
     assert torch.all(logits[~legal] == -65504)
-    print("  PASS: strict checkpoint load, FP16 forward, mask and memory shapes")
+    print("  PASS: strict checkpoint load, FP32 forward, mask and memory shapes")
 
 
 def test_padding_id_zero_is_zero() -> None:
@@ -117,7 +117,7 @@ def test_memory_is_persistent_and_shape_checked() -> None:
     assert memory1.shape == memory2.shape
     assert not torch.equal(memory1, memory2)
     try:
-        model.logits_value(obs, memory_in=torch.zeros(1, 4, cfg["d_model"], dtype=torch.float16))
+        model.logits_value(obs, memory_in=torch.zeros(1, 4, cfg["d_model"], dtype=torch.float32))
     except RuntimeError:
         pass
     else:
@@ -125,7 +125,7 @@ def test_memory_is_persistent_and_shape_checked() -> None:
     print("  PASS: memory_out feeds the next step and bad shape fails")
 
 
-def test_portable_fp16_checkpoint_round_trip_is_strict() -> None:
+def test_portable_fp32_checkpoint_round_trip_is_strict() -> None:
     card_table = get_card_table()
     with tempfile.TemporaryDirectory(prefix="ptcg_torch_checkpoint_") as out:
         path = os.path.join(out, "model.pt")
@@ -133,7 +133,7 @@ def test_portable_fp16_checkpoint_round_trip_is_strict() -> None:
         model, loaded_cfg = load_torch_inference_checkpoint(path, card_table)
         assert loaded_cfg == saved_cfg
         assert all(
-            not value.is_floating_point() or value.dtype == torch.float16
+            not value.is_floating_point() or value.dtype == torch.float32
             for value in model.state_dict().values()
         )
 
@@ -151,16 +151,16 @@ def test_portable_fp16_checkpoint_round_trip_is_strict() -> None:
             assert "unexpected" in str(exc)
         else:
             raise AssertionError("checkpoint with an unexpected tensor was accepted")
-    print("  PASS: portable artifact is all-FP16 and rejects state drift")
+    print("  PASS: portable artifact is all-FP32 and rejects state drift")
 
 
 def main() -> None:
     print("=== PyTorch inference mirror validation ===")
     test_checkpoint_config_is_authoritative()
-    test_strict_fp16_load_and_forward()
+    test_strict_fp32_load_and_forward()
     test_padding_id_zero_is_zero()
     test_memory_is_persistent_and_shape_checked()
-    test_portable_fp16_checkpoint_round_trip_is_strict()
+    test_portable_fp32_checkpoint_round_trip_is_strict()
     print("ALL PASSED")
 
 
@@ -170,8 +170,8 @@ if __name__ == "__main__":
 
 __all__ = [
     "test_checkpoint_config_is_authoritative",
-    "test_strict_fp16_load_and_forward",
+    "test_strict_fp32_load_and_forward",
     "test_padding_id_zero_is_zero",
     "test_memory_is_persistent_and_shape_checked",
-    "test_portable_fp16_checkpoint_round_trip_is_strict",
+    "test_portable_fp32_checkpoint_round_trip_is_strict",
 ]

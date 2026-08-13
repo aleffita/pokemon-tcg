@@ -125,29 +125,11 @@ def _read_deck_from_tar(tar_path: str) -> list[int] | None:
 
 def _find_or_create_deck(db, card_ids: list[int]) -> int:
     """Find an existing deck by card composition or create a new one. Returns deck_id.
-
-    Uses quantity-aware matching: overlap = sum(min(c1, c2)) for each card,
-    total = sum(max(c1, c2)) across all cards in both decks.
+    
+    Delegates to the strict cryptographic SHA256 digest of the database to guarantee
+    zero false-positive aggregations.
     """
-    from collections import Counter
-    card_counter = Counter(card_ids)
-    decks = db.conn.execute("SELECT id FROM decks").fetchall()
-    for (deck_id,) in decks:
-        known = db.conn.execute(
-            "SELECT card_id, quantity FROM deck_cards WHERE deck_id = ?", (deck_id,)
-        ).fetchall()
-        known_counter = Counter({cid: qty for cid, qty in known})
-        # Quantity-aware overlap: sum of min quantities per card
-        overlap = sum(min(card_counter.get(c, 0), known_counter.get(c, 0))
-                      for c in set(card_counter) | set(known_counter))
-        total = sum(max(card_counter.get(c, 0), known_counter.get(c, 0))
-                    for c in set(card_counter) | set(known_counter))
-        if total > 0 and overlap / total >= 0.9:
-            return deck_id
-    name = f"arena_deck_{hash(frozenset(card_counter.items())) % 100000}"
-    deck_id = db.add_deck(name, "arena", archetype=None)
-    db.add_deck_cards(deck_id, list(card_counter.items()))
-    return deck_id
+    return db.get_or_create_deck(card_ids, source="local")
 
 
 def _get_test_decks(db, source: str = "remote", n_top: int = 4, default_card_ids: list[int] | None = None) -> list[tuple[list[int], int | None]]:
@@ -585,10 +567,8 @@ def main():
                    help="Start a new sequential season in SQLite (deactivates current active season)")
     p.add_argument("--reset-local-elo", action="store_true", default=False,
                    help="Reset local Elo metrics to INITIAL_ELO without touching remote Kaggle Elo data")
-    p.add_argument("--clear-local-matches", action="store_true", default=False,
-                   help="Delete local match history without touching remote Kaggle replay matches")
-    p.add_argument("--top-decks", type=int, default=4,
-                   help="Number of top remote/local decks to include in sweep (default: 4)")
+    p.add_argument("--clear-local-matches", action="store_true", help="Delete local match history without touching remote Kaggle replay matches")
+    p.add_argument("--top-decks", type=int, default=4, help="Number of top remote/local decks to include in sweep (default: 4)")
     p.add_argument("--opp-top-decks", type=int, default=0,
                    help="Number of top remote/local decks to include in sweep for opponents (default: 0)")
     p.add_argument("--emit-best-performing-deck", nargs="?", const=True, default=False,
@@ -622,7 +602,7 @@ def main():
 
     if args.clear_local_matches:
         count = _db.clear_local_matches()
-        print(f"✓ Cleared {count} local match records (remote Kaggle replay matches preserved)")
+        print(f"Cleared {count} local matches.")
 
     if (args.new_season or args.reset_local_elo or args.clear_local_matches) and not args.agent and not args.smoke:
         _db.close()
@@ -1011,8 +991,11 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                                    reverse=True):
             wr = ds["w"] / max(ds["w"] + ds["l"], 1) * 100
             if deck_id == default_deck_id:
-                label_str = "[DEFAULT / SUBMISSION] (agent/deck.csv)"
-                elo_str = "-"
+                deck_row = db.conn.execute("SELECT name, archetype FROM decks WHERE id = ?", (deck_id,)).fetchone()
+                elo_row = db.conn.execute("SELECT elo FROM deck_elo WHERE deck_id = ? AND source = 'remote'", (deck_id,)).fetchone()
+                name_part = deck_row["name"] if deck_row and deck_row["name"] else f"deck_{deck_id}"
+                label_str = f"[NATIVE] {name_part}"
+                elo_str = f"{elo_row['elo']:.0f}" if elo_row and elo_row["elo"] else "-"
             else:
                 deck_row = db.conn.execute("SELECT name, archetype FROM decks WHERE id = ?", (deck_id,)).fetchone()
                 elo_row = db.conn.execute("SELECT elo FROM deck_elo WHERE deck_id = ? AND source = 'remote'", (deck_id,)).fetchone()

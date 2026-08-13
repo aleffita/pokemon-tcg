@@ -1,4 +1,4 @@
-"""Functional tests for FP16 training, optimizer routing, and sequential TBPTT."""
+"""Functional tests for FP32 training, optimizer routing, and sequential TBPTT."""
 
 from __future__ import annotations
 
@@ -54,18 +54,18 @@ class _RecurrentToy(nn.Module):
         super().__init__()
         self.scratch_tokens = 1
         self.d = 1
-        self.learned_init = mx.zeros((1, 1), dtype=mx.float16)
-        self.scale = mx.array([1.0], dtype=mx.float16)
+        self.learned_init = mx.zeros((1, 1), dtype=mx.float32)
+        self.scale = mx.array([1.0], dtype=mx.float32)
 
     def logits_value(self, observation, memory_in=None):
         batch_size = observation["x"].shape[0]
         x = observation["x"].reshape(batch_size, 1, 1)
         if memory_in is None:
-            memory_in = mx.zeros((batch_size, 1, 1), dtype=mx.float16)
+            memory_in = mx.zeros((batch_size, 1, 1), dtype=mx.float32)
         memory_out = memory_in + x * self.scale
         score = memory_out.reshape(batch_size)
         logits = mx.stack([score, -score], axis=-1)
-        return logits, mx.zeros((batch_size,), dtype=mx.float16), memory_out
+        return logits, mx.zeros((batch_size,), dtype=mx.float32), memory_out
 
 
 class BCTrainingSemanticTests(unittest.TestCase):
@@ -73,26 +73,26 @@ class BCTrainingSemanticTests(unittest.TestCase):
         self.assertTrue(
             _use_muon_parameter(
                 "encoder.layers.0.ff.layers.0.weight",
-                mx.zeros((4, 4), dtype=mx.float16),
+                mx.zeros((4, 4), dtype=mx.float32),
             )
         )
         self.assertFalse(
             _use_muon_parameter(
-                "card_emb.weight", mx.zeros((8, 4), dtype=mx.float16)
+                "card_emb.weight", mx.zeros((8, 4), dtype=mx.float32)
             )
         )
         self.assertFalse(
             _use_muon_parameter(
-                "value_head.weight", mx.zeros((1, 4), dtype=mx.float16)
+                "value_head.weight", mx.zeros((1, 4), dtype=mx.float32)
             )
         )
         self.assertFalse(
-            _use_muon_parameter("hidden.bias", mx.zeros((4,), dtype=mx.float16))
+            _use_muon_parameter("hidden.bias", mx.zeros((4,), dtype=mx.float32))
         )
 
-    def test_optimizer_keeps_parameters_fp16_and_moments_fp32(self):
+    def test_optimizer_keeps_parameters_fp32_and_moments_fp32(self):
         model = _OptimizerFixture()
-        model.set_dtype(mx.float16)
+        model.set_dtype(mx.float32)
         optimizer = _build_optimizer(_optimizer_config())
         optimizer.init(model.trainable_parameters())
         grads = nn.utils.tree_map(
@@ -104,7 +104,7 @@ class BCTrainingSemanticTests(unittest.TestCase):
 
         self.assertTrue(
             all(
-                parameter.dtype == mx.float16
+                parameter.dtype == mx.float32
                 for _, parameter in nn.utils.tree_flatten(model.parameters())
             )
         )
@@ -118,9 +118,9 @@ class BCTrainingSemanticTests(unittest.TestCase):
 
     def test_accumulated_loss_sums_normalize_exactly_once(self):
         model = nn.Linear(2, 2)
-        model.set_dtype(mx.float16)
+        model.set_dtype(mx.float32)
         features = mx.array(
-            [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=mx.float16
+            [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=mx.float32
         )
         labels = mx.array([0, 1, 0], dtype=mx.int32)
 
@@ -160,7 +160,7 @@ class BCTrainingSemanticTests(unittest.TestCase):
     def test_tbptt_unrolls_memory_sequentially_inside_chunk(self):
         model = _RecurrentToy()
         observations = {
-            "x": mx.array([[1.0], [2.0], [3.0]], dtype=mx.float16)
+            "x": mx.array([[1.0], [2.0], [3.0]], dtype=mx.float32)
         }
         labels = mx.array([0, 0, 0], dtype=mx.int32)
 
@@ -212,14 +212,14 @@ class BCTrainingSemanticTests(unittest.TestCase):
         mx.eval(lane_logits)
         np.testing.assert_array_equal(
             np.asarray(lane_logits[0])[:, 0],
-            np.asarray([1.0, 2.0, 5.0], dtype=np.float16),
+            np.asarray([1.0, 2.0, 5.0], dtype=np.float32),
         )
 
     def test_temporal_batch_keeps_episode_memories_isolated(self):
         model = _RecurrentToy()
         lane_observations = [
-            {"x": mx.array([[1.0], [2.0]], dtype=mx.float16)},
-            {"x": mx.array([[10.0], [20.0]], dtype=mx.float16)},
+            {"x": mx.array([[1.0], [2.0]], dtype=mx.float32)},
+            {"x": mx.array([[10.0], [20.0]], dtype=mx.float32)},
         ]
         lane_labels = [
             mx.array([0, 0], dtype=mx.int32),
@@ -237,18 +237,18 @@ class BCTrainingSemanticTests(unittest.TestCase):
 
         np.testing.assert_array_equal(
             np.asarray(memory).reshape(-1),
-            np.asarray([3.0, 30.0], dtype=np.float16),
+            np.asarray([3.0, 30.0], dtype=np.float32),
         )
         np.testing.assert_array_equal(
             np.asarray(lane_logits[0])[:, 0],
-            np.asarray([1.0, 3.0], dtype=np.float16),
+            np.asarray([1.0, 3.0], dtype=np.float32),
         )
         np.testing.assert_array_equal(
             np.asarray(lane_logits[1])[:, 0],
-            np.asarray([10.0, 30.0], dtype=np.float16),
+            np.asarray([10.0, 30.0], dtype=np.float32),
         )
 
-    def test_real_policy_forward_is_fp16_with_sixteen_registers(self):
+    def test_real_policy_forward_is_fp32_with_sixteen_registers(self):
         if not os.path.isfile(
             os.path.join(REAL_SMOKE_DATASET, "__labels__.npy")
         ):
@@ -272,7 +272,7 @@ class BCTrainingSemanticTests(unittest.TestCase):
         int_keys = set(TokenEncoder(card_table).int_keys)
         observation = {
             key: mx.array(
-                value.astype(np.int32 if key in int_keys else np.float16)
+                value.astype(np.int32 if key in int_keys else np.float32)
             )
             for key, value in arrays.items()
         }
@@ -288,13 +288,13 @@ class BCTrainingSemanticTests(unittest.TestCase):
                 "scratch_registers": 16,
             },
         )
-        model.set_dtype(mx.float16)
+        model.set_dtype(mx.float32)
         logits, value, memory = model.logits_value(observation)
         mx.eval(logits, value, memory)
 
-        self.assertEqual(logits.dtype, mx.float16)
-        self.assertEqual(value.dtype, mx.float16)
-        self.assertEqual(memory.dtype, mx.float16)
+        self.assertEqual(logits.dtype, mx.float32)
+        self.assertEqual(value.dtype, mx.float32)
+        self.assertEqual(memory.dtype, mx.float32)
         self.assertEqual(memory.shape, (1, 16, 128))
         self.assertTrue(np.isfinite(np.asarray(logits)).all())
         legal = np.flatnonzero(arrays["action_mask"][0] > 0.5)
