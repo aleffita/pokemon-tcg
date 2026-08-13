@@ -1593,6 +1593,7 @@ class ResultsDB:
         participants: Sequence[MatchParticipant],
         our_agent_id: int | None = None,
         opp_agent_id: int | None = None,
+        recompute_elo: bool = True,
     ) -> int:
         if len(source_observation_digest) != 64:
             raise ValueError("source_observation_digest must be full SHA-256")
