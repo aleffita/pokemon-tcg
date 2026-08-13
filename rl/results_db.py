@@ -1755,7 +1755,8 @@ class ResultsDB:
                 """,
                 (receipt_key, source_observation_digest, match_id),
             )
-        self.compute_daily_elos(source)
+        if recompute_elo:
+            self.compute_daily_elos(source)
         return match_id
 
     def _resolve_latest_day_id(self, source: str) -> int:

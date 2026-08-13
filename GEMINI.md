@@ -51,6 +51,9 @@ $$R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}$$
 - **Smart Rate-Limit (TTL) & State Persistence Directive**: Never implement raw API calls directly inside stateless scripts. Any external API fetching (like Kaggle Leaderboard) MUST be encapsulated inside the core database layer (e.g., `ResultsDB`), MUST enforce a rigid Time-To-Live (TTL, e.g., 28 hours) on a physical cache file, and MUST persist the fetched result locally to avoid request flooding. Never rely on temporary files (`tempfile`) for network responses if they can be cached in `/data`.
   *Rationale: Redundant API calls trigger Rate Limit bans. The database should govern its own external state caching.*
 
+- **KaTeX Header Isolation Directive**: Never embed KaTeX inline math delimiters (`$...$`, `\(...\)`) directly inside Markdown headings (`#`, `##`, `###`). Keep Markdown headings strictly in plain text or code backticks (`...`). Render display math formulas exclusively on standalone lines (`$$ ... $$`) or inline body text.
+  *Rationale: KaTeX delimiters inside Markdown heading tags break harness UI text wrapping and corrupt typography residual streams.*
+
 - **Memory Mutability & Non-Append-Only Synthesis Directive**: Treat research memory (`./GEMINI.md`) as a mutable, dynamically refactored contract. Never perform naive append-only additions. Every update must perform holistic synthesis, consolidate overlapping directives, purge redundancies, and restructure memory for maximum cognitive clarity.
   *Rationale: Append-only memory logs accumulate structural entropy and contradictory rules, causing cognitive confusion during autoregressive decoding.*
 

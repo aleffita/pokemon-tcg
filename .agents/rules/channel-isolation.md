@@ -1,5 +1,5 @@
 ---
-name: channel-isolation
+trigger: always_on
 description: Prevents UI auto-summarization pollution by enforcing strict channel encapsulation.
 ---
 

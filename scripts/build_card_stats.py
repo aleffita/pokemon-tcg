@@ -118,19 +118,29 @@ def process_zip(
     skipped = 0
     
     # Memoização O(1): Extrair todos os membros que já existem neste dia
-    existing_members = {
-        row[0] for row in db.conn.execute(
-            "SELECT archive_member FROM matches WHERE archive_date = ? AND source = 'remote'",
-            (observed_date,)
-        ).fetchall()
-    }
-    
     with zipfile.ZipFile(archive) as replay_zip:
         episodes = sorted(
             name for name in replay_zip.namelist() if name.endswith(".json")
         )
-        if progress and task_id is not None:
-            progress.update(task_id, total=len(episodes))
+        
+        # Camada 1: Fast Count Check (O(1) ZIP-Level Idempotency)
+        db_count = db.conn.execute(
+            "SELECT COUNT(*) FROM matches WHERE archive_date = ? AND source = 'remote'",
+            (observed_date,)
+        ).fetchone()[0]
+        
+        if db_count >= len(episodes):
+            print(f"[{observed_date}] [Fast-Skip] All {len(episodes)} episodes already fully ingested in DB.", flush=True)
+            return 0
+
+        # Camada 2: Micro Delta Ingestion
+        existing_members = {
+            row[0] for row in db.conn.execute(
+                "SELECT archive_member FROM matches WHERE archive_date = ? AND source = 'remote'",
+                (observed_date,)
+            ).fetchall()
+        }
+
         for i, member_name in enumerate(episodes):
             if member_name in existing_members:
                 skipped += 1
@@ -145,7 +155,6 @@ def process_zip(
                 continue
             
             external_episode_id = _external_episode_id(payload)
-            # Retivemos a validação secundária para garantir idempotência caso a string falhe
             if external_episode_id is not None:
                 existing = db.conn.execute(
                     """
@@ -195,26 +204,20 @@ def process_zip(
 
             team_names = _reported_team_names(payload)
             outcomes = _outcomes(rewards)
-            participants = []
             agent_ids: list[int | None] = [None, None]
+            participants: list[MatchParticipant] = []
             for side in (0, 1):
-                deck_id = identify_or_create_deck(db, decks[side])
+                deck_id = db.get_or_create_deck(decks[side], source="replay")
                 team_id = db.get_or_create_team(
                     team_names[side],
                     observation_key=f"{source_digest}:seat:{side}",
                 )
-                # Replays do not expose an official submission id. This is an
-                # explicitly observed identity, not a claim that every daily
-                # observation is one official Kaggle submission lineage.
                 submission_id = db.observe_submission(
                     team_id,
                     [deck_id],
                     source="remote",
                     archive_date=observed_date,
                 )
-                # Only known agent names are registered. An unreported name
-                # would otherwise collapse unrelated opponents into a single
-                # "Unidentified team" agent row.
                 agent_name = team_names[side]
                 if agent_name:
                     agent_ids[side] = db.upsert_agent(
@@ -244,6 +247,7 @@ def process_zip(
                 participants=participants,
                 our_agent_id=agent_ids[0],
                 opp_agent_id=agent_ids[1],
+                recompute_elo=False,
             )
             for agent_id in agent_ids:
                 if agent_id is not None:
@@ -288,7 +292,7 @@ def populate_replays(
 
     total = 0
     try:
-        print("[Telemetry] Starting strict parsing over replay archives...", flush=True)
+        print("[Telemetry] Starting strict 3-Tier parsing over replay archives...", flush=True)
         for archive_idx, archive in enumerate(sources):
             if not archive.is_file():
                 raise FileNotFoundError(f"replay ZIP does not exist: {archive}")
@@ -301,11 +305,11 @@ def populate_replays(
             )
             total += count
 
-        print(f"\n[Telemetry] Total: {total} NEW episodes processed and inserted.", flush=True)
-        print("[Telemetry] Computing card Elo...", flush=True)
-        db.compute_card_elo(source="remote")
-        print("[Telemetry] Computing deck Elo...", flush=True)
-        db.compute_deck_elo(source="remote")
+        print(f"\n[Telemetry] Ingestion finished. Total NEW episodes inserted: {total}.", flush=True)
+        print("[Telemetry] Recomputing Invariant Elo for 'remote' domain...", flush=True)
+        db.compute_daily_elos(source="remote")
+        print("[Telemetry] Recomputing Invariant Elo for 'local' domain...", flush=True)
+        db.compute_daily_elos(source="local")
         return total
     finally:
         if owns_db:
