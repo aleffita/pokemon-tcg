@@ -15,13 +15,13 @@ We implement **N-Dimensional Rotary Positional Embeddings (RoPEND)** to map the 
 ## 3. The "Apex Predator" Mechanics (Airgap Hacking)
 The agent will break out of the "Vending Machine" paradigm via two systemic hacks:
 - **Temporal Awakening:** The inference script (`act()`) reads the OS clock via `datetime.now(UTC)`. If `Date >= 2026-08-16`, the agent activates the **Apex Mode Token**, recognizing that the meta is frozen and every opponent is a static target.
-- **The Elo Anchor (Stochastic Inference):** The Kaggle sandbox is ephemeral (memoryless between matches). Instead of saving state, the agent *derives* its expected current standing statistically in real-time. On August 16th, a protocol submission injects the exact Anchor Elo. During inference, the agent combines: 1) The Anchor Elo, 2) Days passed since Aug 16 (via OS clock), 3) Expected match volume distribution, and 4) The *current* opponent's estimated Elo (via Aux Heads). With this, it mathematically infers its expected leaderboard standing dynamically, altering its mid/late-game MoE routing (e.g., clutching vs. safe play) without needing to persist data between runs.
+- **The Elo Anchor (Stochastic Inference):** The Kaggle sandbox is ephemeral (memoryless between matches). Instead of saving state, the agent *derives* its expected current standing statistically in real-time. On August 16th, a protocol submission injects the exact Anchor Elo. During inference, the agent combines: 1) The Anchor Elo, 2) Days passed since Aug 16 (via OS clock), 3) Expected match volume distribution, and 4) The *current* opponent's estimated Elo (via Aux Heads). With this, it mathematically infers its expected leaderboard standing dynamically, altering its mid/late-game MoE routing.
 
 ## 4. Architectural Paradigms
 - **Autoregressive Draft:** The first output of the network is the prediction of its own 60-card deck (Data Augmentation). It learns the synergy of its vehicle before making the first move.
-- **Surgical Freezing (Controlled Forgetting):** To bypass Logit Distillation noise, we use Transfer Learning. We freeze the base TBPTT registers and semantic Aux Heads from the Hero checkpoint, unlocking only the Decision Trunk. This trains instantly on the M3 Pro while purging "garbage superpopulation" habits.
+- **Base Model Initialization:** The "Hero" checkpoint is a legacy architecture and CANNOT be used for Logit Distillation or surgical freezing. The correct path is to train a new Base Model from scratch (or upcycle from the highly compatible Curriculum V1 Stage 4) using the new architecture. Once the Base Model is validated, it is expanded into the MoE router.
 
 ## 5. ETL & The Elite Pool
 The dataset will NOT be a raw dump. It will be an adversarial extraction of the **Elite Pool**:
 - Filtering only matches where at least one agent is Elo >= 1100 (approx. ~100k matches).
-- Data will be strictly orthogonal to prevent gradient confusion across Elo bands (avoiding the "Wood Wall" noise).
+- Data will be strictly orthogonal to prevent gradient confusion across Elo bands.
