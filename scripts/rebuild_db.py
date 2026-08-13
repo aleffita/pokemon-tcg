@@ -297,34 +297,8 @@ def rebuild_results_database(
         console = Console()
         database = ResultsDB(staging_db)
 
-        console.print("[cyan][rebuild][/] Fetching live Kaggle Leaderboard...")
-        leaderboard_text = None
-        try:
-            from kaggle.api.kaggle_api_extended import KaggleApi
-            import zipfile
-            api = KaggleApi()
-            api.authenticate()
-            with tempfile.TemporaryDirectory() as tmp:
-                api.competition_leaderboard_download("pokemon-tcg-ai-battle", path=tmp, quiet=True)
-                zips = list(Path(tmp).glob("*.zip"))
-                if zips:
-                    with zipfile.ZipFile(zips[0]) as zf:
-                        inner = zf.namelist()[0]
-                        leaderboard_text = zf.read(inner).decode("utf-8")
-        except Exception as exc:
-            console.print(f"[bold red][!] Kaggle Leaderboard API fetch failed:[/] {exc}")
-            fallback_path = ROOT / "data" / "kaggle_leaderboard.csv"
-            console.print(f"[bold yellow][!] Attempting local physical fallback ({fallback_path})...[/]")
-            if fallback_path.exists():
-                leaderboard_text = fallback_path.read_text(encoding="utf-8")
-                console.print("[bold green][+] Fallback CSV loaded successfully.[/]")
-            else:
-                raise RuntimeError(
-                    f"Kaggle API failed and fallback {fallback_path} not found"
-                ) from exc
-
-        if leaderboard_text:
-            database.load_kaggle_leaderboard(leaderboard_text)
+        console.print("[cyan][rebuild][/] Syncing Kaggle Leaderboard (TTL 28h)...")
+        database.sync_kaggle_leaderboard()
 
         console.print("[cyan][rebuild][/] Populating cards from CSV...")
         cards_populated = populate_cards(

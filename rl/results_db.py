@@ -2136,6 +2136,43 @@ class ResultsDB:
                     r_invariant = r_smoothed + delta_abeliano
                     self.conn.execute(f"UPDATE {table} SET elo = ? WHERE rowid = ?", (r_invariant, r["rowid"]))
 
+    def sync_kaggle_leaderboard(self, ttl_hours: int = 28) -> None:
+        """Smart sync with Kaggle Leaderboard honoring a TTL to prevent API rate limits."""
+        import time
+        import tempfile
+        import zipfile
+        root_path = Path(__file__).resolve().parent.parent
+        csv_path = root_path / "data" / "kaggle_leaderboard.csv"
+        
+        if csv_path.exists():
+            age_seconds = time.time() - csv_path.stat().st_mtime
+            if age_seconds < ttl_hours * 3600:
+                self.load_kaggle_leaderboard(csv_path.read_text(encoding="utf-8"))
+                return
+        
+        try:
+            from kaggle.api.kaggle_api_extended import KaggleApi
+            api = KaggleApi()
+            api.authenticate()
+            with tempfile.TemporaryDirectory() as tmp:
+                api.competition_leaderboard_download("pokemon-tcg-ai-battle", path=tmp, quiet=True)
+                zips = list(Path(tmp).glob("*.zip"))
+                if zips:
+                    with zipfile.ZipFile(zips[0]) as zf:
+                        inner = zf.namelist()[0]
+                        leaderboard_text = zf.read(inner).decode("utf-8")
+                        csv_path.parent.mkdir(parents=True, exist_ok=True)
+                        csv_path.write_text(leaderboard_text, encoding="utf-8")
+                        self.load_kaggle_leaderboard(leaderboard_text)
+                        return
+        except Exception as exc:
+            print(f"[!] Kaggle API fetch failed: {exc}. Attempting expired fallback...", flush=True)
+
+        if csv_path.exists():
+            self.load_kaggle_leaderboard(csv_path.read_text(encoding="utf-8"))
+        else:
+            raise RuntimeError(f"Kaggle Leaderboard fetch failed and no cache found at {csv_path}")
+
     def load_kaggle_leaderboard(self, csv_text: str) -> None:
         """Inject the raw Kaggle Leaderboard CSV string into the database cache."""
         self._kaggle_leaderboard_cache = csv_text

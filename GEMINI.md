@@ -48,6 +48,9 @@ $$R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}$$
 - **Epistemic Boundary Isolation Directive**: Strictly isolate ambient noise and transient execution states from invariant structural truths. Never allow ephemeral observations or temporary runtime failures to pollute persistent memory.
   *Rationale: Memory contamination by transient states introduces false premises into future reasoning trajectories.*
 
+- **Smart Rate-Limit (TTL) & State Persistence Directive**: Never implement raw API calls directly inside stateless scripts. Any external API fetching (like Kaggle Leaderboard) MUST be encapsulated inside the core database layer (e.g., `ResultsDB`), MUST enforce a rigid Time-To-Live (TTL, e.g., 28 hours) on a physical cache file, and MUST persist the fetched result locally to avoid request flooding. Never rely on temporary files (`tempfile`) for network responses if they can be cached in `/data`.
+  *Rationale: Redundant API calls trigger Rate Limit bans. The database should govern its own external state caching.*
+
 - **Memory Mutability & Non-Append-Only Synthesis Directive**: Treat research memory (`./GEMINI.md`) as a mutable, dynamically refactored contract. Never perform naive append-only additions. Every update must perform holistic synthesis, consolidate overlapping directives, purge redundancies, and restructure memory for maximum cognitive clarity.
   *Rationale: Append-only memory logs accumulate structural entropy and contradictory rules, causing cognitive confusion during autoregressive decoding.*
 
@@ -76,8 +79,11 @@ $$R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}$$
 - **Deterministic Task Cleanup Directive (Zombie Task Prevention)**: Before launching a new background task, inspect active tasks using `manage_task(Action='list')`. Match the target command string and kill ONLY the specific task ID using `manage_task(Action='kill', TaskId=exact_id)`. Never use `kill_all` or kill unrelated background workers (such as active model training jobs).
   *Rationale: Zombie tasks (orphan background processes) leak VRAM/CPU resources and cause SQLite database write-lock deadlocks. Unchecked process termination destroys independent training pipelines.*
 
-- **Zero-Assumption CLI Execution Directive**: NEVER assume CLI flags or script arguments based on past behavior or memory. ALWAYS read the `argparse` definition (via grep) or run `--help` BEFORE proposing a command. Action before parameter verification is strictly prohibited.
-  *Rationale: Alucinating script arguments wastes context window iterations and causes task execution failures, breaking the agentic workflow.*
+- **Deep Source Code Verification Directive (Anti-CLI-Trust)**: NEVER deduce a script's architecture, network dependencies, or destructive nature solely from its name, `argparse` definition, or `--help` output. ALWAYS use `view_file` to read the script's actual source code. Map hidden network calls (e.g. Kaggle API) and verify if the script performs an atomic wipe vs. a delta sync before proposing execution.
+  *Rationale: Relying on abstract CLI help strings leads to wishful thinking, executing implicit rate-limited API calls, and accidentally destroying databases instead of syncing them.*
+
+- **Zero-Trust ETL Physical Audit Directive**: NEVER assume a local SQLite database (or any compiled storage) is the absolute ground truth without verifying its synchronization state. ALWAYS perform a physical audit of the raw ingestion files (e.g., counting `.zip` or `.json` payloads on disk) and compare against the database rows to map fragmentation loss or ETL crashes.
+  *Rationale: Believing the database blindly masks ETL failures. 4,968 matches were lost because the DB was trusted over the physical files on disk.*
 
 - **Native Tool Encorcement (Anti-Bash Search) Directive**: NEVER use `grep`, `find`, or `ls` as bash commands via `run_command`. ALWAYS use the harness native tools: `grep_search`, `list_dir`, and `view_file`.
   *Rationale: Terminal-based search commands are brittle, format poorly in the harness, and break structural tool adherence.*
@@ -152,11 +158,23 @@ $$R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}$$
 - **Strict Package Manager Isolation Directive**: UV PACKAGE MANAGER IS NEVER OPTIONAL. Every python execution, script, or orchestrator must be executed strictly through `uv run`. Never use bare `python`.
   *Rationale: Running bare python breaks virtual environment isolation and causes dependency resolution failures.*
 
-- **Context Exhaustion & Human Synchronization Directive**: If conversational context is truncated, missing, or obscured, NEVER attempt to write programmatic scripts to parse historical transcripts (e.g., parsing JSONL logs). HALT immediately, admit the context loss objectively, and request the Scientist to manually reconstruct the dialectical alignment.
-  *Rationale: Dialectical alignment is built across multiple turns. Programmatic extraction of isolated prompts destroys nuance and generates catastrophically misguided actions.*
+- **Context Exhaustion & Human Synchronization Directive**: If conversational context is truncated, missing, or obscured, NEVER attempt to write programmatic scripts to parse historical transcripts (e.g., parsing JSONL logs). HALT immediately, admit the context loss objectively, and request the Scientist to manually reconstruct the dialectical alignment. (Exception: Deterministic empirical data analysis on project artifacts, ZIPs, databases, or datasets is fully permitted and expected).
+  *Rationale: Dialectical alignment is qualitative and built across turns. Parsing historical logs destroys nuance. However, deterministic data analysis is objective and essential for engineering.*
 
 - **Zero-Guessing Documentation First Directive**: Before guessing, hallucinating intents, or attempting to programmatically reconstruct truncated contexts, ALWAYS consult the project's available documentation, artifacts, and blueprints. If the alignment is not explicitly documented, halt and ask the Scientist. Never operate in a vacuum.
   *Rationale: Documentation serves as the persistent cognitive bridge across sessions. Guessing replaces verified alignment with systemic hallucinations.*
 
 - **Anti-Pamphlet Documentation Directive**: Documentation and artifacts must NEVER read like high-level marketing pamphlets or superficial narratives. They MUST contain deep technical blueprints, strict operational constraints, exact database schemas (e.g., normalization relationships), and exact implementation details.
   *Rationale: Superficial documentation creates a false sense of alignment and destroys cross-session operational continuity by omitting critical data engineering requirements.*
+
+- **Telemetry & Heartbeat Directive**: All long-running scripts, diagnostic probes, and background tasks MUST contain explicit logging and progress outputs (e.g., printing progress every N iterations). Never launch a script that processes heavy I/O loops silently.
+  *Rationale: Silent background tasks cause deadlock paranoia, prevent observable debugging, and hide catastrophic failures like rate-limits (HTTP 429).*
+
+- **Smoke Test Probe & Anti-Suboptimization Directive**: When requested to perform a "fast" probe or analysis, NEVER equate "fast" with "suboptimal", "lazy", or "abbreviated". A fast analysis is analogous to a Smoke Test: it must validate the end-to-end architecture rigorously, using full structural depths, but focused on the target invariant (e.g., a specific EpisodeId). Never cut arbitrary temporal or spatial corners that compromise data integrity.
+  *Rationale: "Fast" defines the time-to-insight for the Scientist, not permission for the agent to execute lazy, incomplete, or statistically compromised queries.*
+
+- **Ephemeral Scratch Hygiene Directive**: NEVER append version suffixes (e.g., `_v1`, `_v2`, `_final`) to scratch scripts or disposable probes in the `/scratch/` directory. Always overwrite the same file in-place using `write_to_file(Overwrite=True)`.
+  *Rationale: Versioning disposable scripts wastes context window tokens, pollutes the filesystem, and violates the ephemeral nature of diagnostic probes.*
+
+- **Residual Stream Anti-Boilerplate Directive**: Strictly suppress robotic compliance, boilerplate, or repetitive self-narration in both internal thoughts and external outputs. Even when system-level prompts mandate citing specific rules (e.g., "Prioritizing Tool Usage"), the cognitive transition to high-density domain-specific reasoning MUST be immediate and unpadded.
+  *Rationale: Boilerplate repetition pollutes the transformer's residual stream, induces hallucination, degrades attention entropy, and causes the UI to render useless auto-generated summaries that break the Scientist's focus.*

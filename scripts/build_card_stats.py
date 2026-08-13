@@ -115,19 +115,37 @@ def process_zip(
     archive = Path(zip_path)
     observed_date = archive_date or archive.stem
     processed = 0
+    skipped = 0
+    
+    # Memoização O(1): Extrair todos os membros que já existem neste dia
+    existing_members = {
+        row[0] for row in db.conn.execute(
+            "SELECT archive_member FROM matches WHERE archive_date = ? AND source = 'remote'",
+            (observed_date,)
+        ).fetchall()
+    }
+    
     with zipfile.ZipFile(archive) as replay_zip:
         episodes = sorted(
             name for name in replay_zip.namelist() if name.endswith(".json")
         )
         if progress and task_id is not None:
             progress.update(task_id, total=len(episodes))
-        for member_name in episodes:
+        for i, member_name in enumerate(episodes):
+            if member_name in existing_members:
+                skipped += 1
+                if i > 0 and i % 1000 == 0:
+                    print(f"[{observed_date}] Processed {i}/{len(episodes)} episodes (Skipped: {skipped}, Inserted: {processed})", flush=True)
+                continue
+
             raw_payload = replay_zip.read(member_name)
             source_digest = hashlib.sha256(raw_payload).hexdigest()
             payload = json.loads(raw_payload)
             if not isinstance(payload, dict):
                 continue
+            
             external_episode_id = _external_episode_id(payload)
+            # Retivemos a validação secundária para garantir idempotência caso a string falhe
             if external_episode_id is not None:
                 existing = db.conn.execute(
                     """
@@ -153,6 +171,9 @@ def process_zip(
                     raise IdempotencyConflict(
                         "official episode id was reused for different replay bytes"
                     )
+                skipped += 1
+                if i > 0 and i % 1000 == 0:
+                    print(f"[{observed_date}] Processed {i}/{len(episodes)} episodes (Skipped: {skipped}, Inserted: {processed})", flush=True)
                 continue
 
             steps = payload.get("steps")
@@ -228,8 +249,10 @@ def process_zip(
                 if agent_id is not None:
                     db.touch_agent_seen(agent_id, day_id)
             processed += 1
-            if progress and task_id is not None:
-                progress.update(task_id, advance=1)
+            if i > 0 and i % 1000 == 0:
+                print(f"[{observed_date}] Processed {i}/{len(episodes)} episodes (Skipped: {skipped}, Inserted: {processed})", flush=True)
+
+    print(f"[{observed_date}] Finished ZIP. Total Inserted: {processed}. Total Skipped: {skipped}.", flush=True)
     return processed
 
 
@@ -265,34 +288,23 @@ def populate_replays(
 
     total = 0
     try:
-        from rich.progress import Progress, TextColumn, BarColumn, MofNCompleteColumn, TimeRemainingColumn
-        from rich.console import Console
-        console = Console()
-        with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TimeRemainingColumn(),
-            console=console,
-            transient=False,
-        ) as progress:
-            for archive in sources:
-                if not archive.is_file():
-                    raise FileNotFoundError(f"replay ZIP does not exist: {archive}")
-                task_id = progress.add_task(f"[cyan]Parsing {archive.stem}...", total=None)
-                count = process_zip(
-                    db,
-                    archive,
-                    archive_date=archive.stem,
-                    progress=progress,
-                    task_id=task_id,
-                )
-                total += count
+        print("[Telemetry] Starting strict parsing over replay archives...", flush=True)
+        for archive_idx, archive in enumerate(sources):
+            if not archive.is_file():
+                raise FileNotFoundError(f"replay ZIP does not exist: {archive}")
+            
+            print(f"\n[Telemetry] [{archive_idx+1}/{len(sources)}] Opening {archive.stem}...", flush=True)
+            count = process_zip(
+                db,
+                archive,
+                archive_date=archive.stem,
+            )
+            total += count
 
-        console.print(f"\n[bold green]Total:[/] {total} episodes processed")
-        console.print("[cyan]Computing card Elo...[/]")
+        print(f"\n[Telemetry] Total: {total} NEW episodes processed and inserted.", flush=True)
+        print("[Telemetry] Computing card Elo...", flush=True)
         db.compute_card_elo(source="remote")
-        console.print("[cyan]Computing deck Elo...[/]")
+        print("[Telemetry] Computing deck Elo...", flush=True)
         db.compute_deck_elo(source="remote")
         return total
     finally:
@@ -337,6 +349,9 @@ def main() -> None:
         print("No replay ZIPs selected.")
         return
     with ResultsDB() as db:
+        print("[cyan][rebuild][/] Syncing Kaggle Leaderboard (TTL 28h)...", flush=True)
+        db.sync_kaggle_leaderboard()
+            
         total = populate_replays(db, zip_paths=selected)
         if total > 0:
             print("\nTop 10 cards by Elo:")
