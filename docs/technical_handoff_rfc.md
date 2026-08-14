@@ -203,6 +203,7 @@ $$
 | **Skill Wikifita** | [`.agents/skills/wikifita/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/wikifita/SKILL.md) | Skill para manutenção e consulta à base canônica Wikifita |
 | **Skill Results API** | [`.agents/skills/ptcg-results-api/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-results-api/SKILL.md) | Skill para extração de métricas de banco e Elo |
 | **Skill MoE Architecture** | [`.agents/skills/ptcg-moe-architecture/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-moe-architecture/SKILL.md) | Skill para a arquitetura MoE e RoPEND |
+| **Cross-Harness & Tokenizer Guide** | [`docs/cross_harness_and_tokenizer_adaptation.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/cross_harness_and_tokenizer_adaptation.md) | Guia de portabilidade de modelos, tokenizadores e índice de arquivos |
 
 ---
 
@@ -230,6 +231,7 @@ Rather than allowing the multi-agent swarm to execute until ungraceful token tru
 |                          - Metanoia Suite (Specs 01..06)                                          |
 |                          - Master Blueprint (PROJECT.md & TEST_INFRA.md)                          |
 |                          - Wikifita PageRank Isomorphism                                          |
+|                          - Cross-Harness Adaptation Spec (docs/cross_harness_...)                 |
 |                                      │                                                            |
 |                                      ▼                                                            |
 |  [Incoming Reasoning Agents] ──► GPT-5.6 Sol / DeepSeek-V4-Pro / Codex / Claude 3.7               |
@@ -238,3 +240,26 @@ Rather than allowing the multi-agent swarm to execute until ungraceful token tru
 |  [Target Deployment] ────────► Locked Meta Submission (August 16, 2026)                           |
 +───────────────────────────────────────────────────────────────────────────────────────────────────+
 ```
+
+---
+
+## 8. Cross-Harness Adaptation & Transcript Filesystem Directory
+
+For incoming reasoning agents operating in different harness environments (e.g. Claude Code, Codex CLI, Cursor, AutoGen, LangGraph), all physical session transcripts and multi-agent survey paths are indexed below:
+
+### 8.1. Antigravity Brain Transcripts & Logs
+- **Main Session Logs (Compact JSONL)**: `/Users/alefita/.gemini/antigravity-cli/brain/9189fa2e-93c2-4a04-9bf0-6d090880de27/.system_generated/logs/transcript.jsonl`
+- **Main Session Raw Untruncated (Full JSONL)**: `/Users/alefita/.gemini/antigravity-cli/brain/9189fa2e-93c2-4a04-9bf0-6d090880de27/.system_generated/logs/transcript_full.jsonl`
+- **Deck Analyst Subagent**: `/Users/alefita/.gemini/antigravity-cli/brain/687d75b1-19ff-4999-a56e-c5d40d869f0f/.system_generated/logs/transcript.jsonl`
+- **Migration Engineer Subagent**: `/Users/alefita/.gemini/antigravity-cli/brain/245904ec-c5c7-4dca-a796-e04db0afb510/.system_generated/logs/transcript.jsonl`
+- **Teamwork Sentinel Subagent**: `/Users/alefita/.gemini/antigravity-cli/brain/da74ca6c-c155-4353-82d1-5c5695a60da1/.system_generated/logs/transcript.jsonl`
+- **Teamwork Orchestrator Subagent**: `/Users/alefita/.gemini/antigravity-cli/brain/cd851a4f-6875-4819-9f25-1b23dd14cc1b/.system_generated/logs/transcript.jsonl`
+
+### 8.2. Workspace Survey Artifacts & Blueprints (`.agents/`)
+- **Survey Request**: [`.agents/ORIGINAL_REQUEST.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/ORIGINAL_REQUEST.md)
+- **Sentinel Memory**: [`.agents/sentinel_1/BRIEFING.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/sentinel_1/BRIEFING.md)
+- **Orchestrator Blueprints**: [`.agents/orchestrator_1/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/orchestrator_1/) (`BRIEFING.md`, `DISPATCH.md`, `progress.md`)
+- **Milestone 1 Track (Neural Architecture)**: [`.agents/sub_orch_m1/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/sub_orch_m1/), [`.agents/m1_exp_contract/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/m1_exp_contract/), [`.agents/m1_exp_moe/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/m1_exp_moe/), [`.agents/m1_exp_ropend/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/m1_exp_ropend/), [`.agents/m1_worker_1/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/m1_worker_1/)
+- **Milestone 2 Track (Dataset & Oracles)**: [`.agents/sub_orch_m2/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/sub_orch_m2/), [`.agents/explorer_m2_dataset/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/explorer_m2_dataset/), [`.agents/explorer_m2_db/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/explorer_m2_db/), [`.agents/explorer_m2_oracle/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/explorer_m2_oracle/)
+- **Milestone 3 Track (PageRank & Spectral Math)**: [`.agents/sub_orch_m3/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/sub_orch_m3/), [`.agents/sub_orch_m3/explorer_1/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/sub_orch_m3/explorer_1/), `explorer_2/`, `explorer_3/`
+- **Testing & E2E Verification**: [`.agents/test_writer_tier1/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/test_writer_tier1/) .. `tier4/`, [`.agents/orch_e2e/`](file:///Users/alefita/workdir/pokemon-tcg/.agents/orch_e2e/)
