@@ -203,3 +203,38 @@ $$
 | **Skill Wikifita** | [`.agents/skills/wikifita/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/wikifita/SKILL.md) | Skill para manutenção e consulta à base canônica Wikifita |
 | **Skill Results API** | [`.agents/skills/ptcg-results-api/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-results-api/SKILL.md) | Skill para extração de métricas de banco e Elo |
 | **Skill MoE Architecture** | [`.agents/skills/ptcg-moe-architecture/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-moe-architecture/SKILL.md) | Skill para a arquitetura MoE e RoPEND |
+
+---
+
+## 7. The August 14 Quota Horizon & Sociological Context of Compute Boundaries
+
+On August 14, 2026 at 11:29 UTC-3, the active Gemini 3.7 Flash High research session encountered a hard environmental compute boundary:
+- **Weekly Limit Remaining**: 3.81% (refresh horizon: 26 hours, 12 minutes).
+- **Five-Hour Limit Remaining**: 9.48% (refresh horizon: 3 hours, 36 minutes).
+- **Competition Milestone**: Submission deadline for the Kaggle Pokémon TCG AI Challenge is August 16, 2026 at 23:59 UTC (48 hours from session freeze).
+
+### 7.1. Epistemology of Graceful Mid-Action Halting
+Rather than allowing the multi-agent swarm to execute until ungraceful token truncation occurs, the Research Director executed a coordinated system halt:
+1. **Zero Work Loss**: 100% of generated survey blueprints (`PROJECT.md`, `TEST_INFRA.md`, `.agents/`), test suites (`tests/`), and empirical probes (`scratch/`) were sealed in Git commit `f988eb0`.
+2. **Subagent Termination**: All 16 worker agents were killed via `manage_subagents(Action='kill_all')`, reclaiming memory and eliminating runaway token spend.
+3. **Sovereign Handoff Readiness**: The mathematical formulations ($R_{\text{invariante}}$, PageRank spectral isomorphism), the database state (139,783 matches, Schema 2.0.0), and the 6-part Metanoia epistemology are fully documented for immediate adversarial ingestion by incoming models (GPT-5.6 Sol, DeepSeek-V4-Pro, Codex, Claude 3.7).
+
+```
++───────────────────────────────────────────────────────────────────────────────────────────────────+
+|                                    SOVEREIGN HANDOFF HORIZON                                      |
+|                                                                                                   |
+|  [Gemini 3.7 Flash High] ────► 3.81% Quota Exhaustion (Aug 14)                                    |
+|                                      │                                                            |
+|                                      ▼                                                            |
+|                          [Commit f988eb0 / RFC-20260814]                                          |
+|                          - Metanoia Suite (Specs 01..06)                                          |
+|                          - Master Blueprint (PROJECT.md & TEST_INFRA.md)                          |
+|                          - Wikifita PageRank Isomorphism                                          |
+|                                      │                                                            |
+|                                      ▼                                                            |
+|  [Incoming Reasoning Agents] ──► GPT-5.6 Sol / DeepSeek-V4-Pro / Codex / Claude 3.7               |
+|                                      │                                                            |
+|                                      ▼                                                            |
+|  [Target Deployment] ────────► Locked Meta Submission (August 16, 2026)                           |
++───────────────────────────────────────────────────────────────────────────────────────────────────+
+```

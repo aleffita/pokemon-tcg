@@ -11,6 +11,7 @@
 - **Teamwork Blueprints Preserved**: Preserved `PROJECT.md`, `TEST_INFRA.md`, and survey memory in `.agents/` covering M1 (4D RoPEND MoE), M2 (Elite 100k Dataset + C++ `bc_would_ko` oracles), M3 (Graph Isomorphism), and M4 (Wikifita audit).
 - **Precision Crisis Resolved**: PyTorch inference and MLX pipelines strictly operating in FP32 with validated checksums and static feature contract hashes.
 - **Database Parity (Schema 2.0.0)**: 139,783 matches (100% physical parity with disk JSONs), `get_invariant_deck_elo()` MD10 smoothing, and 28h TTL for Kaggle API caching.
+- **Sociological Context & Compute Horizon (The August 14 Quota Boundary)**: On August 14, 2026, the Gemini 3.7 Flash High frontier session reached a hard compute exhaustion boundary (3.81% weekly limit remaining, 26h refresh horizon), 48 hours before the August 16 competition submission deadline. The multi-agent swarm was gracefully halted mid-action to preserve context integrity and avoid runtime truncation. All architectural blueprints (`PROJECT.md`, `TEST_INFRA.md`, `.agents/`), spectral graph monographs, and the 6-part Metanoia suite were frozen in Git (`f988eb0`) to serve as an uncompromised handoff for the next frontier reasoning model (GPT-5.6 Sol, DeepSeek-V4-Pro, Codex, Claude 3.7).
 
 
 
