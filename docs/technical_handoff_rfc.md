@@ -1,18 +1,19 @@
-# RFC-20260814: Comprehensive Technical Handoff & Epistemological Blueprint
+# RFC-20260814: Master Technical Handoff & Sovereign Research Blueprint
+
 **Project**: Kaggle Pokémon TCG AI Battle Challenge  
 **Team**: Fitalabs AI Research  
 **Authors**: Research Director & Alefita (Lead AI Scientist)  
 **Date**: August 14, 2026  
-**Document Classification**: Technical RFC / IEEE Convention Paper / System Handoff  
+**Document Classification**: Technical RFC / IEEE Convention Paper / Master System Index  
 **Target Ingestion Models**: GPT-5.6 Sol, DeepSeek-V4-Pro, Codex, Claude 3.7 Sonnet / Flash  
 
 ---
 
 ## Executive Summary & Abstract
 
-This document establishes the authoritative, end-to-end technical handoff for the **Pokémon TCG AI Battle Challenge** codebase. It bridges four weeks of empirical research, architectural refactoring, and machine learning breakthroughs conducted on Apple Silicon (M3 Pro 24GB Unified Memory). 
+This document establishes the sovereign, authoritative technical handoff for the **Pokémon TCG AI Battle Challenge** codebase. It bridges four weeks of empirical research, mathematical proofs, and architectural breakthroughs conducted on Apple Silicon (M3 Pro 24GB Unified Memory). 
 
-The mission of this repository is to engineer an autonomous, competitive neural agent capable of dominating the **"Locked Meta" Evaluation Phase (August 16–31, 2026)** of the Kaggle Pokémon TCG Challenge.
+The goal of this repository is to build and deploy an autonomous, competitive neural policy capable of dominating the **"Locked Meta" Evaluation Phase (August 16–31, 2026)** of the Kaggle Pokémon TCG Challenge.
 
 ```
 +---------------------------------------------------------------------------------------------------+
@@ -125,47 +126,43 @@ The repository contains 23 distinct TensorBoard logging directories tracking los
 
 ---
 
-## 3. Data Engineering & ETL Architecture
+## 3. Deep Technical Architecture Modules (The 3 Levels of Depth)
 
-### 3.1. 3-Tier Synchronization Engine (`scripts/build_card_stats.py`)
-To eliminate $O(N)$ filesystem scanning and prevent CPU deadlocks during bulk ingestion:
+For deep technical implementation specifications, consult the following dedicated monographs:
 
-```
-[Sync Entrypoint: tcg-build-card-stats]
-   │
-   ├── 1. db.sync_kaggle_leaderboard(ttl_hours=28)
-   │      ├── Check mtime on data/kaggle_leaderboard.csv
-   │      └── Age < 28h ? Read Cache (0 API calls) : Fetch API & Persist
-   │
-   ├── 2. Daily Archive Ingestion Loop:
-   │      ├── Tier 1 (Macro Fast-Skip): COUNT(matches) == len(zip) ? Skip ZIP (0.001s)
-   │      └── Tier 2 (Micro Delta): If gap exists, fetch existing_members set, 
-   │                                parse missing JSONs with recompute_elo=False
-   │
-   └── 3. Tier 3 (Decoupled Global Recomputation):
-          ├── db.compute_daily_elos(source="remote")
-          └── db.compute_daily_elos(source="local")
-```
+### Level 1 Depth: Neural Engine & Tokenization
+Detailed specification of tensor shapes, Vortex stream aggregation, Muon Newton-Schulz iterations, and TBPTT scratch register recurrence.
+* Reference: [`docs/neural_engine_and_tokenization_spec.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/neural_engine_and_tokenization_spec.md)
 
-### 3.2. Mathematical Framework: Sample-Size Invariant Elo
+### Level 2 Depth: Dataset Compilation & Oracle Pipeline
+Detailed specification of replay ingestion, off-by-one pointer shifts, C++ engine oracle simulations (`would_ko`), telescoping backward rewards, and Parquet KV Cache memory management.
+* Reference: [`docs/dataset_compilation_and_oracle_pipeline.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/dataset_compilation_and_oracle_pipeline.md)
 
-The system rejects raw Elo ($R_{\text{raw}}$) in favor of the **Sample-Size Invariant Elo ($R_{\text{invariante}}$)**:
+### Level 3 Depth: Empirical Ablations & Game-Theoretic Meta Analysis
+Deep empirical analysis of the 420-match cross-stage tournament, mathematical proof of the decoupling between validation accuracy and game-theoretic win rate, and the FP16 underflow root-cause analysis.
+* Reference: [`docs/empirical_ablation_monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/empirical_ablation_monograph.md)
 
-#### 1. Bradley-Terry Asymptotic Logistic Inversion
+---
+
+## 4. Mathematical Framework: Sample-Size Invariant Elo
+
+The system rejects raw Elo in favor of the **Sample-Size Invariant Elo**:
+
+### 1. Bradley-Terry Asymptotic Logistic Inversion
 Given win rate $w = \frac{W}{N}$, clipped to $[0.02, 0.98]$:
 
 $$
 \hat{R}_{\infty} = 600.0 + 400.0 \cdot \log_{10}\left( \frac{w}{1 - w} \right)
 $$
 
-#### 2. MD10 Placement Smoothing ($N_0 = 10$)
+### 2. MD10 Placement Smoothing ($N_0 = 10$)
 Regularizes small-sample estimates ($N < 10$) toward the base prior $R_0 = 600.0$:
 
 $$
 R_{\text{smoothed}} = \left(\frac{N}{N + 10}\right) \cdot \hat{R}_{\infty} + \left(\frac{10}{N + 10}\right) \cdot 600.0
 $$
 
-#### 3. Softmax Abelian Group Translation ($\Delta R_{\text{Abeliano}}$)
+### 3. Softmax Abelian Group Translation ($\Delta R_{\text{Abeliano}}$)
 Computes the global translation isomorphism bridging local tournament performance to the official Kaggle ladder scale across overlapping deck set $\mathcal{C}$:
 
 $$
@@ -176,54 +173,11 @@ $$
 \Delta R_{\text{Abeliano}} = \sum_{k \in \mathcal{C}} \alpha_k \cdot \left( R_k^{\text{remote}} - \hat{R}_{k,\infty}^{\text{local}} \right)
 $$
 
-#### 4. Final Scale Invariant Metric
+### 4. Final Scale Invariant Metric
 
 $$
 R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}
 $$
-
----
-
-## 4. Neural Architecture & Training Engine
-
-```
-+---------------------------------------------------------------------------------------------------+
-|                               TRANSFORMER DECODER TOPOLOGY                                        |
-|                                                                                                   |
-|  Input State ----> [19 Type Embeddings + Vortex Unit Aggregator]                                 |
-|                               |                                                                   |
-|                               v                                                                   |
-|                    [Bayesian GameTracker Shadows]                                                 |
-|                    (drawable_emb, hand_certain_emb)                                               |
-|                               |                                                                   |
-|                               v                                                                   |
-|                    [4x Transformer Decoder Layers] <==== [Scratch Registers / TBPTT Memory]       |
-|                    (D=128, N_heads=4, SwiGLU / MLP)                                               |
-|                               |                                                                   |
-|        +----------------------+----------------------+----------------------+                     |
-|        |                      |                      |                      |                     |
-|        v                      v                      v                      v                     |
-|  [Action Logits]      [Winner Prediction]     [Prize Delta Head]     [Energy Attachment]          |
-|  (Cross-Entropy)      (Binary BCE)            (MSE Regression)       (Categorical CE)             |
-+---------------------------------------------------------------------------------------------------+
-```
-
-### 4.1. Permutation Invariance & Spatial Tokenizer
-* **Abolition of 1D Sequence RoPE**: Card order in hand/bench is arbitrary. 1D sequence RoPE was eliminated in favor of **19 Spatial Type Embeddings** (`T_SELF_HAND`, `T_OPP_ACTIVE`, `T_STADIUM`, `T_SELF_BENCH_1..5`, etc.).
-* **Vortex Unit Aggregator (`_unit_stream`)**: Condenses a multi-card Pokémon entity (Base + Evolutions + Attached Energies + Tools + Damage Counters + Status) into a single dense token vector:
-
-$$
-\mathcal{U}_{\text{Vortex}} = \text{Base}_{\text{emb}} + \sum_{i=1}^{n} \text{PreEvo}_{\text{emb}} + \text{Tool}_{\text{emb}} + \sum_{j=1}^{e} \text{Energy}_{\text{emb}} + \text{UnitProj}(\text{Damage}, \text{Status})
-$$
-
-### 4.2. Bayesian GameTracker (Imperfect Information Modeling)
-* **Shadow Tokens (`drawable_emb`)**: Assigns probability embeddings to cards remaining in deck based on public game history.
-* **Certainty Markers (`hand_certain_emb`)**: Tracks unrevealed opponent cards vs publicly tracked cards, preventing tactical hallucinations against opponent bluffs.
-
-### 4.3. Unified Memory Optimization: `_ParquetRowGroupCache`
-To prevent SSD thrashing on Apple Silicon M3 Pro during TBPTT training:
-* Implements a 3-tier hierarchical cache: **Hot Zone** (active memory), **Transient Zone** (LRU), and **SSD Spill** (`.cache_spill/`).
-* Provides $O(1)$ batch delivery for sequential multi-step episodes.
 
 ---
 
@@ -258,33 +212,23 @@ During inference, when `datetime.now(UTC) >= 2026-08-16`, the agent activates th
 
 ---
 
-## 6. Open Engineering Roadmap & Next Sprints
+## 6. Comprehensive Documentation & Knowledge Index
 
-### Sprint 1: Clean Base Model (V2) & GRPO Alignment
-1. **Dataset Compilation**: Extract the **Elite Match Pool** ($\text{Elo} \ge 1100$, ~100k matches) with corrected auxiliary targets and RoPEND metadata.
-2. **Base Training**: Train Clean Base Model V2 (or initialize from Stage 4 FP32).
-3. **GRPO / RL Self-Play**: Deploy Group Relative Policy Optimization against `first_sub` to break the 17.1% BC saturation ceiling.
-
-### Sprint 2: MoE Router & Final Submission Packaging
-1. **MoE Expansion**: Freeze base representation layers; train Softmax gating network over specialized experts (Aggro, Control, Mirror).
-2. **PyTorch Export**: Package into `submission_apex.tar.gz` with FP32 feature contracts.
-3. **Verification**: Run `scripts/tournament.py` (500 matches vs `first_sub`) to confirm win rate $> 60\%$.
-
----
-
-## 7. Artifact & Documentation Index
-
-| File | Purpose |
-| :--- | :--- |
-| [`docs/Pokemon_TCG_AI_Monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/Pokemon_TCG_AI_Monograph.md) | Comprehensive 8-chapter academic monograph of the project |
-| [`docs/abelian_group_elo_formulation.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/abelian_group_elo_formulation.md) | Algebraic proof of Bradley-Terry translation invariance |
-| [`docs/database_schema.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/database_schema.md) | Full Mermaid ERD & SQLite Schema 2.0.0 specification |
-| [`docs/etl_architecture_and_auditing.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/etl_architecture_and_auditing.md) | Blueprint for Zero-Trust ETL and disk auditing |
-| [`docs/normalization_heuristics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/normalization_heuristics.md) | Cantor diagonal L1/L2 entity resolution rules |
-| [`docs/kaggle_platform_dynamics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/kaggle_platform_dynamics.md) | Analysis of Kaggle's 95% unexported replay sampling bias |
-| [`docs/architecture/moe_pipeline_blueprint.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/moe_pipeline_blueprint.md) | MoE, RoPEND, and Apex Mode architectural contract |
-| [`docs/architecture/01_ropend_theory.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/01_ropend_theory.md) | 4D Rotary Positional Embedding mathematical derivation |
-| [`docs/architecture/02_stochastic_elo_inference.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/02_stochastic_elo_inference.md) | Bayesian in-game Elo estimation formulas |
-| [`rl/results_db.py`](file:///Users/alefita/workdir/pokemon-tcg/rl/results_db.py) | Core SQLite declarative database layer & Invariant Elo |
-| [`scripts/build_card_stats.py`](file:///Users/alefita/workdir/pokemon-tcg/scripts/build_card_stats.py) | 3-Tier Idempotent ETL synchronization engine |
-| [`scripts/tournament.py`](file:///Users/alefita/workdir/pokemon-tcg/scripts/tournament.py) | Multi-model ablation benchmark & tournament runner |
+| Document | File Path | Scope & Focus |
+| :--- | :--- | :--- |
+| **Master Handoff RFC** | [`docs/technical_handoff_rfc.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/technical_handoff_rfc.md) | Sovereign master index and end-to-end technical specification |
+| **Level 1: Neural Engine Spec** | [`docs/neural_engine_and_tokenization_spec.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/neural_engine_and_tokenization_spec.md) | Concrete tensor shapes, Vortex stream math, Muon split optimization |
+| **Level 2: Dataset & Oracle Spec** | [`docs/dataset_compilation_and_oracle_pipeline.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/dataset_compilation_and_oracle_pipeline.md) | ETL realignments, C++ would_ko oracles, KV cache, RoPEND schema |
+| **Level 3: Empirical Ablations** | [`docs/empirical_ablation_monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/empirical_ablation_monograph.md) | 420-match matrix, Val Acc decoupling proof, FP16 numerical underflow |
+| **Academic Monograph** | [`docs/Pokemon_TCG_AI_Monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/Pokemon_TCG_AI_Monograph.md) | 8-chapter complete project monograph |
+| **Abelian Group Elo Formulation** | [`docs/abelian_group_elo_formulation.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/abelian_group_elo_formulation.md) | Algebraic proof of Bradley-Terry translation invariance |
+| **SQLite Schema & ERD** | [`docs/database_schema.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/database_schema.md) | Full Mermaid ERD and Schema 2.0.0 table definitions |
+| **ETL Architecture & Auditing** | [`docs/etl_architecture_and_auditing.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/etl_architecture_and_auditing.md) | Zero-Trust disk auditing and 3-Tier idempotency model |
+| **Entity Normalization Heuristics** | [`docs/normalization_heuristics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/normalization_heuristics.md) | Cantor diagonal L1/L2 entity resolution rules |
+| **Kaggle Platform Dynamics** | [`docs/kaggle_platform_dynamics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/kaggle_platform_dynamics.md) | Analysis of the 95% missing match export bias |
+| **MoE Pipeline Blueprint** | [`docs/architecture/moe_pipeline_blueprint.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/moe_pipeline_blueprint.md) | MoE, RoPEND, and Apex Mode architectural contract |
+| **RoPEND Theory** | [`docs/architecture/01_ropend_theory.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/01_ropend_theory.md) | Mathematical derivation of 4D Rotary Positional Embeddings |
+| **Stochastic Elo Inference** | [`docs/architecture/02_stochastic_elo_inference.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/02_stochastic_elo_inference.md) | Bayesian in-game Elo estimation formulas |
+| **Core Database Engine** | [`rl/results_db.py`](file:///Users/alefita/workdir/pokemon-tcg/rl/results_db.py) | Declarative SQLite schema, Invariant Elo, 28h TTL cache |
+| **ETL Replay Synchronization** | [`scripts/build_card_stats.py`](file:///Users/alefita/workdir/pokemon-tcg/scripts/build_card_stats.py) | 3-Tier Idempotent replay synchronization engine |
+| **Ablation Tournament Runner** | [`scripts/tournament.py`](file:///Users/alefita/workdir/pokemon-tcg/scripts/tournament.py) | Multi-model benchmark orchestrator with subprocess isolation |
