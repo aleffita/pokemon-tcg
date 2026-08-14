@@ -128,6 +128,9 @@ The meta-analysis of the agentic workflow and harness engineering is documented 
 4. **Tensorized Scaling & Subagent Swarms**: 3D scaling tensor (Vertical reasoning depth, Horizontal subagent swarms, Orthogonal domain isolation), context redaction with provenance ledgers (Buzz / ArXiv:2608.09867 / Headroom), and Terence Tao's mathematical counterproof parallels.  
    * Reference: [`docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md)
 
+5. **The HALT Protocol & Hypersigil Epistemology**: The HALT operator as the zero-entropy boundary breaking hallucination loops, Jungian metanoic integration, Grant Morrison hypersigils as executable latent constraints, the Kurukshetra / Thrinacia archetypes, and Gemma 4 / Gemini special token control mechanics.  
+   * Reference: [`docs/metanoia/05_the_halt_protocol_and_hypersigil_epistemology.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/05_the_halt_protocol_and_hypersigil_epistemology.md)
+
 ---
 
 ## 5. Mathematical Framework: Sample-Size Invariant Elo
@@ -177,14 +180,15 @@ $$
 | **Level 3: Empirical Ablations** | [`docs/empirical_ablation_monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/empirical_ablation_monograph.md) | 420-match matrix, Val Acc decoupling proof, FP16 numerical underflow |
 | **Metanoia 01: Channel Protocol** | [`docs/metanoia/01_channel_protocol_and_cognitive_swarm.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/01_channel_protocol_and_cognitive_swarm.md) | State machine, Co-Scientist compression, anti-pollution rules |
 | **Metanoia 02: Rule Provenance** | [`docs/metanoia/02_rule_provenance_and_epistemic_evolution.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/02_rule_provenance_and_epistemic_evolution.md) | Epistemological laws, ASD-STE100, CLAUDE.md to GEMINI.md lineage |
-| **Metanoia 03: Model Adherence** | [`docs/metanoia/03_model_adherence_and_failure_mode_analysis.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/03_model_adherence_and_failure_mode_analysis.md) | Failure mode taxonomy across Gemini 3.1..3.7 families |
-| **Metanoia 04: Tensorized Scaling** | [`docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md) | 3D cognitive tensor, Buzz/Headroom context ledger, Tao counterproofs |
-| **Academic Monograph** | [`docs/Pokemon_TCG_AI_Monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/Pokemon_TCG_AI_Monograph.md) | 8-chapter complete project monograph |
-| **Abelian Group Elo Formulation** | [`docs/abelian_group_elo_formulation.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/abelian_group_elo_formulation.md) | Algebraic proof of Bradley-Terry translation invariance |
-| **SQLite Schema & ERD** | [`docs/database_schema.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/database_schema.md) | Full Mermaid ERD and Schema 2.0.0 table definitions |
-| **ETL Architecture & Auditing** | [`docs/etl_architecture_and_auditing.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/etl_architecture_and_auditing.md) | Zero-Trust disk auditing and 3-Tier idempotency model |
-| **Entity Normalization Heuristics** | [`docs/normalization_heuristics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/normalization_heuristics.md) | Cantor diagonal L1/L2 entity resolution rules |
-| **Kaggle Platform Dynamics** | [`docs/kaggle_platform_dynamics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/kaggle_platform_dynamics.md) | Analysis of the 95% missing match export bias |
-| **MoE Pipeline Blueprint** | [`docs/architecture/moe_pipeline_blueprint.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/moe_pipeline_blueprint.md) | MoE, RoPEND, and Apex Mode architectural contract |
-| **Modernized PTCG Results Skill** | [`.agents/skills/ptcg-results-api/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-results-api/SKILL.md) | Updated skill for Schema 2.0.0, Invariant Elo, 28h TTL |
-| **Modernized MoE Architecture Skill** | [`.agents/skills/ptcg-moe-architecture/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-moe-architecture/SKILL.md) | Updated skill for 4D RoPEND, Draft, Apex Mode |
+| **Metanoia 03: Model Adherence** | [`docs/metanoia/03_model_adherence_and_failure_mode_analysis.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/03_model_adherence_and_failure_mode_analysis.md) | Taxonomia de falhas de modelos (Gemini 3.1..3.7) |
+| **Metanoia 04: Tensorized Scaling** | [`docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md) | Tensor 3D, Ledger de Buzz/Headroom, Tao counterproofs |
+| **Metanoia 05: HALT & Hypersigils** | [`docs/metanoia/05_the_halt_protocol_and_hypersigil_epistemology.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/05_the_halt_protocol_and_hypersigil_epistemology.md) | HALT zero-entropy boundary, Jung, Hypersigils, Gemma 4 tokenization |
+| **Academic Monograph** | [`docs/Pokemon_TCG_AI_Monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/Pokemon_TCG_AI_Monograph.md) | Monografia acadêmica completa em 8 capítulos |
+| **Abelian Group Elo Formulation** | [`docs/abelian_group_elo_formulation.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/abelian_group_elo_formulation.md) | Prova algébrica da invariância de escala Bradley-Terry |
+| **SQLite Schema & ERD** | [`docs/database_schema.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/database_schema.md) | Full Mermaid ERD e schema SQLite 2.0.0 completo |
+| **Arquitetura ETL & Auditoria** | [`docs/etl_architecture_and_auditing.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/etl_architecture_and_auditing.md) | Modelo Zero-Trust e auditoria física de 139.783 replays |
+| **Heurísticas de Normalização** | [`docs/normalization_heuristics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/normalization_heuristics.md) | Resolução de entidades L1/L2 e Diagonal de Cantor |
+| **Dinâmica da Plataforma Kaggle** | [`docs/kaggle_platform_dynamics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/kaggle_platform_dynamics.md) | Análise de viés dos 95% de replays não exportados |
+| **Blueprint MoE & Apex Mode** | [`docs/architecture/moe_pipeline_blueprint.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/moe_pipeline_blueprint.md) | Blueprint do roteamento MoE e ativação em 16 de Agosto |
+| **Skill Results API** | [`.agents/skills/ptcg-results-api/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-results-api/SKILL.md) | Skill para extração de métricas de banco e Elo |
+| **Skill MoE Architecture** | [`.agents/skills/ptcg-moe-architecture/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-moe-architecture/SKILL.md) | Skill para a arquitetura MoE e RoPEND |
