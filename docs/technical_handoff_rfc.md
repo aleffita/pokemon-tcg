@@ -51,6 +51,8 @@ The incoming Lead Scientist must leverage the following persistent filesystem pa
   `/Users/alefita/.gemini/antigravity-cli/brain/9189fa2e-93c2-4a04-9bf0-6d090880de27/.system_generated/logs/transcript_full.jsonl`
 * **Scratch Probes & Diagnostic Scripts**:  
   `/Users/alefita/.gemini/antigravity-cli/brain/9189fa2e-93c2-4a04-9bf0-6d090880de27/scratch/`
+* **Teamwork Prompt Draft Artifact**:  
+  `/Users/alefita/.gemini/antigravity-cli/brain/9189fa2e-93c2-4a04-9bf0-6d090880de27/prompt_draft.md`
 
 ### 1.2. TensorBoard Experiment Runs (`runs/`)
 The repository contains 23 distinct TensorBoard logging directories tracking loss curves, auxiliary heads, gradient norms, and learning rates:
@@ -136,7 +138,7 @@ The meta-analysis of the agentic workflow, tokenization geometry, and harness en
 
 ---
 
-## 5. Mathematical Framework: Sample-Size Invariant Elo
+## 5. Mathematical Framework: Sample-Size Invariant Elo & PageRank
 
 The system rejects raw Elo in favor of the **Sample-Size Invariant Elo**:
 
@@ -171,6 +173,9 @@ $$
 R_{\text{invariante}}(N) = R_{\text{smoothed}} + \Delta R_{\text{Abeliano}}
 $$
 
+### 5. Spectral PageRank & Abelian Graph Invariance
+* Reference: [`docs/pagerank_and_abelian_graph_invariance.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/pagerank_and_abelian_graph_invariance.md)
+
 ---
 
 ## 6. Comprehensive Documentation & Knowledge Index
@@ -178,6 +183,7 @@ $$
 | Document | File Path | Scope & Focus |
 | :--- | :--- | :--- |
 | **Master Handoff RFC** | [`docs/technical_handoff_rfc.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/technical_handoff_rfc.md) | Sovereign master index and end-to-end technical specification |
+| **PageRank & Abelian Invariance** | [`docs/pagerank_and_abelian_graph_invariance.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/pagerank_and_abelian_graph_invariance.md) | Graph-theoretic isomorphism between PageRank and Invariant Elo |
 | **Level 1: Neural Engine Spec** | [`docs/neural_engine_and_tokenization_spec.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/neural_engine_and_tokenization_spec.md) | Concrete tensor shapes, Vortex stream math, Muon split optimization |
 | **Level 2: Dataset & Oracle Spec** | [`docs/dataset_compilation_and_oracle_pipeline.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/dataset_compilation_and_oracle_pipeline.md) | ETL realignments, C++ would_ko oracles, KV cache, RoPEND schema |
 | **Level 3: Empirical Ablations** | [`docs/empirical_ablation_monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/empirical_ablation_monograph.md) | 420-match matrix, Val Acc decoupling proof, FP16 numerical underflow |
