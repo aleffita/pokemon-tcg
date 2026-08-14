@@ -4,35 +4,35 @@
 **Team**: Fitalabs AI Research  
 **Authors**: Research Director & Alefita (Lead AI Scientist)  
 **Date**: August 14, 2026  
-**Document Classification**: Technical RFC / IEEE Convention Paper / Master System Index  
+**Document Classification**: Technical RFC / IEEE Convention Paper / Master Knowledge Index  
 **Target Ingestion Models**: GPT-5.6 Sol, DeepSeek-V4-Pro, Codex, Claude 3.7 Sonnet / Flash  
 
 ---
 
 ## Executive Summary & Abstract
 
-This document establishes the sovereign, authoritative technical handoff for the **Pokémon TCG AI Battle Challenge** codebase. It bridges four weeks of empirical research, mathematical proofs, and architectural breakthroughs conducted on Apple Silicon (M3 Pro 24GB Unified Memory). 
+This document establishes the sovereign, authoritative technical handoff for the **Pokémon TCG AI Battle Challenge** codebase. It bridges four weeks of empirical research, mathematical proofs, architectural breakthroughs, and agentic governance evolution conducted on Apple Silicon (M3 Pro 24GB Unified Memory). 
 
 The goal of this repository is to build and deploy an autonomous, competitive neural policy capable of dominating the **"Locked Meta" Evaluation Phase (August 16–31, 2026)** of the Kaggle Pokémon TCG Challenge.
 
 ```
-+---------------------------------------------------------------------------------------------------+
++───────────────────────────────────────────────────────────────────────────────────────────────────+
 |                                 FITALABS RESEARCH EVOLUTION                                       |
 |                                                                                                   |
-|  [July 27] first_sub (67.16% WR) ---> [Aug 03] Curriculum V1 (BC Pretraining)                      |
-|                                                    |                                              |
+|  [July 27] first_sub (67.16% WR) ───► [Aug 03] Curriculum V1 (BC Pretraining)                      |
+|                                                    │                                              |
 |                                       [Aug 12] FP16 Precision Crisis                              |
 |                                       (Underflow 3.3% WR -> FP32 Hash Migration)                  |
-|                                                    |                                              |
+|                                                    │                                              |
 |                                       [Aug 12] Ablation Matrix (420 matches/stage)                |
 |                                       (Discovery: Val Acc decoupled from Win Rate)                |
-|                                                    |                                              |
+|                                                    │                                              |
 |                                       [Aug 13] 3-Tier Idempotent ETL & Abelian Elo                |
 |                                       (139,783 matches synced, 0 residual discrepancy)            |
-|                                                    |                                              |
-|                                       [Aug 14+] Magnum Opus MoE + RoPEND + GRPO                   |
+|                                                    │                                              |
+|                                       [Aug 14+] Magnum Opus MoE + RoPEND + Metanoia Suite         |
 |                                       (Apex Mode Activation for Locked Meta)                      |
-+---------------------------------------------------------------------------------------------------+
++───────────────────────────────────────────────────────────────────────────────────────────────────+
 ```
 
 ---
@@ -74,55 +74,23 @@ The repository contains 23 distinct TensorBoard logging directories tracking los
 
 ---
 
-## 2. Chronological Git & Research Trajectory (July 27 – August 14, 2026)
+## 2. Lineage & Provenance of Historical Documents (`CLAUDE.md`)
 
-### Phase I: Inception & The First Sub Anchor (July 27)
-* **Milestone**: Deployment of `first_sub_kaggle_2707.tar.gz`.
-* **Empirical Outcome**: Achieved a verified **67.16% Win Rate** on the Kaggle public leaderboard (Leaderboard Score ~1200+).
-* **Role**: Serves as our permanent **Teacher Model** and empirical benchmark anchor for all ablation tournaments.
+An exhaustive audit of `CLAUDE.md` establishes its exact historical chronology:
 
-### Phase II: Behavioral Cloning Curriculum V1 (July 28 – August 07)
-* **Architecture**: 4-Layer Transformer Decoder, $D=128$, 19 Type Embeddings, Muon + AdamW split optimizer, streaming TBPTT over Parquet files.
-* **Curriculum Design**:
-  * *Stage 1*: Full historical replay corpus (all Elo ratings).
-  * *Stage 2*: High-Elo replays (Kaggle score $\ge 600$).
-  * *Stage 3*: Elite tier replays (Top 100 ladder).
-  * *Stage 4*: Loss-corrected Top 100 fine-tuning (5 epochs).
-* **The Auxiliary Loss Corruption Bug**: During Stages 1–3, auxiliary classification heads (winner prediction, prize delta, would_ko) had misaligned loss scaling, backpropagating chaotic gradients into the shared trunk. Stage 4 was retrained with corrected loss weights.
+```
+2026-07-23 ────────────────► 2026-07-25 ────────────────► 2026-07-16..22 ──────────► 2026-08-06..07 ──────────► 2026-08-07 ──────────► 2026-08-08+
+PyTorch Reference            Repo Initialization          Historical BC Pipeline       BC Curriculum Suite         Current Phase Log        Antigravity Migration
+`reference/mikaelzinho-      `tcg-pokemon-agent-          - Checkpoints v1, v2         Ablations (1d-5d,           - Strict Split (MLX      - Living `GEMINI.md`
+pytorch/`                    mlx-port.zip`                - Submissions (889.7 LB)     1-10ep, top-elo)            Train / PyTorch Infer)   - `.agents/rules/`
+Drive ID: 1IwESPm29...       Drive ID: 1R3wCNKX...        - M1 Air 8GB CPU bounds      - Best: 5d_10ep_OFF (21%)   - Parquet KV Cache       - Metanoia Suite
+```
 
-### Phase III: The FP16 Precision Crisis (August 12)
-* **Incident**: The native MLX model scored 45.0% WR vs random baseline. When exported to PyTorch (`build_submission.py`), win-rate collapsed catastrophically to **3.3% WR** (0.0% vs `first_sub`).
-* **Root Cause Diagnosis**: Because the neural network is compact (~15MB), FP16 quantization during PyTorch inference caused numerical underflow in attention Softmax and LayerNorm, zeroing decision logits.
-* **Remediation**:
-  1. Converted PyTorch inference (`rl/policy_infer_torch.py`) to strict **`float32`**.
-  2. Updated `scripts/bc/bc_train_mlx.py` to generate SHA256 contract hashes over FP32 static feature arrays.
-  3. Surgically repacked all stage checkpoints (`stage1_fp32.tar.gz` to `stage4_fp32.tar.gz`) to update the cryptographic contract without losing learned weights.
-  4. Restored win-rate to 35.0%–45.0% immediately.
-
-### Phase IV: The Cross-Stage Ablation Matrix (August 12–13)
-* **Tournament Setup**: Orchestrated a massive $3 \times 5$ deck sweep (420 matches per stage) pitting Stages 1, 2, 3, and 4 against the Top 5 decks of `first_sub`.
-* **Results**:
-  * Stage 1: 14.3% Overall WR (Peak: 22.9% on Yan Deck #633).
-  * Stage 2: 15.2% Overall WR (Peak: 26.4% on Yan Deck #633).
-  * Stage 3: 13.8% Overall WR (Peak: 22.9% on Yan Deck #633).
-  * **Stage 4: 17.1% Overall WR (Peak: 27.9% on Yan Deck #633)**.
-* **The Epistemological Breakthrough (The "Verstappen in an Aston Martin" Thesis)**:
-  * Pure Behavioral Cloning saturated at 17.1% vs `first_sub`.
-  * **Validation Accuracy and Win Rate are decoupled**: A model can achieve 78% next-token prediction accuracy imitating mediocre human play while getting crushed by an optimal agent.
-  * **Vehicle vs. Pilot**: Deck composition dictates the theoretical win ceiling. Deck #633 achieved 27.9% WR, whereas the submission default Deck #251 scored only 12.9% WR under the exact same neural weights.
-
-### Phase V: Entity Normalization & Kaggle Sampling Discovery (August 13)
-* **The Problem**: 144 high-volume teams abruptly stopped appearing in replay dumps prior to the August 10 merge deadline, raising fears of mass bans (~12% platform collapse).
-* **The Cantor Diagonal & Footprint Resolution (L1/L2)**:
-  * L1 (Leaderboard Cross-Match): Proved that **142 out of 144 teams** simply merged into consolidated teams (e.g., Fitalabs), causing Kaggle's 2-active-submission limit to deactivate their legacy `EpisodeIds`.
-  * L2 (Deck Footprint Correlation): Resolved 1 additional team via 60-card array fingerprint tracking.
-  * Only 1 true extinction event remained across the entire competition ("Dieter", 1,068 matches).
-* **Kaggle Sampling Bias**: Discovered that Kaggle only exports **1.05% to 5.57%** of daily ladder matches. 95% of active games remain unexported.
-
-### Phase VI: 3-Tier Idempotent ETL & Abelian Elo (August 13–14)
-* **Parity Crisis**: Physical audit revealed 4,968 missing matches in `results.db` due to previous ETL script crashes.
-* **Refactoring**: Built a 3-tier idempotent synchronization engine with a 28h TTL Kaggle API cache.
-* **Outcome**: Ingested all missing matches, achieving **100.0% exact parity** (139,783 matches in SQLite = 139,783 JSONs on disk).
+### Provenance Audit Milestones
+1. **2026-07-23 (PyTorch Reference Snapshot)**: Sourced from `tcg-pokemon-agent-main.zip` (Drive ID: `1IwESPm29-6bGByS6qHcrPchhR2-QjEld`), vendored locally at `reference/mikaelzinho-pytorch/` as read-only architectural reference.
+2. **2026-07-25 (Repository Initialization)**: Sourced from `tcg-pokemon-agent-mlx-port.zip` (Drive ID: `1R3wCNKXlnJ5jEHbYtqkjyQ_aOkxvEe_x`), migrating PyTorch to Apple Silicon MLX.
+3. **2026-08-07 (Phase Log Freeze)**: Completed the BC Curriculum Suite, established the MLX Training / PyTorch Inference split, implemented the Parquet KV Cache, and froze `CLAUDE.md` as an authoritative historical archive.
+4. **2026-08-08 onwards (Antigravity Suite Migration)**: Shifted governance from static markdown (`CLAUDE.md`) to the self-evolving cognitive contract (`GEMINI.md`), modular rule enforcement (`.agents/rules/`), and the Metanoia cognitive swarm framework.
 
 ---
 
@@ -144,7 +112,25 @@ Deep empirical analysis of the 420-match cross-stage tournament, mathematical pr
 
 ---
 
-## 4. Mathematical Framework: Sample-Size Invariant Elo
+## 4. The Metanoia Suite: Agentic Architecture & Governance
+
+The meta-analysis of the agentic workflow and harness engineering is documented in the `docs/metanoia/` subfolder:
+
+1. **The Channel Protocol & Cognitive Swarm**: Formal state-machine definition (`INIT` $\to$ `GENERATE` $\to$ `DEBATE` $\to$ `RANK` $\to$ `EVOLVE` $\to$ `META_REVIEW`), anti-pollution boundaries, and DeepMind Co-Scientist mathematical correspondence.  
+   * Reference: [`docs/metanoia/01_channel_protocol_and_cognitive_swarm.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/01_channel_protocol_and_cognitive_swarm.md)
+
+2. **Rule Provenance & Epistemic Evolution**: Philosophical laws (Poincaré Incubation, Parity Law, Metanoia, Zero-Trust), ASD-STE100 specifications, and transition from `CLAUDE.md` to `GEMINI.md`.  
+   * Reference: [`docs/metanoia/02_rule_provenance_and_epistemic_evolution.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/02_rule_provenance_and_epistemic_evolution.md)
+
+3. **Model Adherence & Failure Mode Pathology**: Empirical evaluation of model families (Gemini 3.1 Pro, 3.5 Flash, 3.6 Flash vs. 3.7 Flash High), KaTeX-Markdown collision mechanics, channel preamble leakage, and sycophancy expungement.  
+   * Reference: [`docs/metanoia/03_model_adherence_and_failure_mode_analysis.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/03_model_adherence_and_failure_mode_analysis.md)
+
+4. **Tensorized Scaling & Subagent Swarms**: 3D scaling tensor (Vertical reasoning depth, Horizontal subagent swarms, Orthogonal domain isolation), context redaction with provenance ledgers (Buzz / ArXiv:2608.09867 / Headroom), and Terence Tao's mathematical counterproof parallels.  
+   * Reference: [`docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md)
+
+---
+
+## 5. Mathematical Framework: Sample-Size Invariant Elo
 
 The system rejects raw Elo in favor of the **Sample-Size Invariant Elo**:
 
@@ -181,37 +167,6 @@ $$
 
 ---
 
-## 5. Magnum Opus Blueprint: RoPEND, MoE & Apex Mode
-
-Designed specifically to exploit the **Locked Meta Phase (August 16–31)**:
-
-### 5.1. N-Dimensional Rotary Positional Embeddings (RoPEND)
-Decomposes embedding dimension $D=128$ into 4 orthogonal 32-dim sub-vectors:
-1. **$c_1$ (Match Step)**: Discrete game turn progression.
-2. **$c_2$ (Meta-Epoch)**: Calendar day offset from competition start.
-3. **$c_3$ (Urgency / Clock)**: Normalized remaining game compute time (countdown from 600s).
-4. **$c_4$ (Elo / Hierarchy)**: Estimated continuous ranking.
-
-The attention inner product computes relative distance across all 4 axes simultaneously:
-
-$$
-\langle \mathbf{q}', \mathbf{k}' \rangle = \sum_{i=1}^4 \mathbf{q}_i^\top R_{\Theta_i, c_i^k - c_i^q} \mathbf{k}_i
-$$
-
-### 5.2. Ephemeral Sandbox Stochastic Elo Inference
-Because Kaggle sandboxes are stateless (memoryless between games), the agent computes its expected global rank in real time:
-
-$$
-R_{\text{internal}} = \alpha (R_0 + f(\Delta T)) + (1 - \alpha) \hat{R}_{\text{opp}}
-$$
-
-Where $R_0$ is the hardcoded August 16 anchor Elo, $\Delta T$ is derived via `datetime.now(UTC)`, and $\hat{R}_{\text{opp}}$ is inferred in-game by the opponent modeling auxiliary head.
-
-### 5.3. Apex Mode Trigger (Airgap Strategy)
-During inference, when `datetime.now(UTC) >= 2026-08-16`, the agent activates the **Apex Mode Token**, shifting the MoE router from exploratory play to exploitative, deterministic meta-countering.
-
----
-
 ## 6. Comprehensive Documentation & Knowledge Index
 
 | Document | File Path | Scope & Focus |
@@ -220,6 +175,10 @@ During inference, when `datetime.now(UTC) >= 2026-08-16`, the agent activates th
 | **Level 1: Neural Engine Spec** | [`docs/neural_engine_and_tokenization_spec.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/neural_engine_and_tokenization_spec.md) | Concrete tensor shapes, Vortex stream math, Muon split optimization |
 | **Level 2: Dataset & Oracle Spec** | [`docs/dataset_compilation_and_oracle_pipeline.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/dataset_compilation_and_oracle_pipeline.md) | ETL realignments, C++ would_ko oracles, KV cache, RoPEND schema |
 | **Level 3: Empirical Ablations** | [`docs/empirical_ablation_monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/empirical_ablation_monograph.md) | 420-match matrix, Val Acc decoupling proof, FP16 numerical underflow |
+| **Metanoia 01: Channel Protocol** | [`docs/metanoia/01_channel_protocol_and_cognitive_swarm.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/01_channel_protocol_and_cognitive_swarm.md) | State machine, Co-Scientist compression, anti-pollution rules |
+| **Metanoia 02: Rule Provenance** | [`docs/metanoia/02_rule_provenance_and_epistemic_evolution.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/02_rule_provenance_and_epistemic_evolution.md) | Epistemological laws, ASD-STE100, CLAUDE.md to GEMINI.md lineage |
+| **Metanoia 03: Model Adherence** | [`docs/metanoia/03_model_adherence_and_failure_mode_analysis.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/03_model_adherence_and_failure_mode_analysis.md) | Failure mode taxonomy across Gemini 3.1..3.7 families |
+| **Metanoia 04: Tensorized Scaling** | [`docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md) | 3D cognitive tensor, Buzz/Headroom context ledger, Tao counterproofs |
 | **Academic Monograph** | [`docs/Pokemon_TCG_AI_Monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/Pokemon_TCG_AI_Monograph.md) | 8-chapter complete project monograph |
 | **Abelian Group Elo Formulation** | [`docs/abelian_group_elo_formulation.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/abelian_group_elo_formulation.md) | Algebraic proof of Bradley-Terry translation invariance |
 | **SQLite Schema & ERD** | [`docs/database_schema.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/database_schema.md) | Full Mermaid ERD and Schema 2.0.0 table definitions |
@@ -227,8 +186,5 @@ During inference, when `datetime.now(UTC) >= 2026-08-16`, the agent activates th
 | **Entity Normalization Heuristics** | [`docs/normalization_heuristics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/normalization_heuristics.md) | Cantor diagonal L1/L2 entity resolution rules |
 | **Kaggle Platform Dynamics** | [`docs/kaggle_platform_dynamics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/kaggle_platform_dynamics.md) | Analysis of the 95% missing match export bias |
 | **MoE Pipeline Blueprint** | [`docs/architecture/moe_pipeline_blueprint.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/moe_pipeline_blueprint.md) | MoE, RoPEND, and Apex Mode architectural contract |
-| **RoPEND Theory** | [`docs/architecture/01_ropend_theory.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/01_ropend_theory.md) | Mathematical derivation of 4D Rotary Positional Embeddings |
-| **Stochastic Elo Inference** | [`docs/architecture/02_stochastic_elo_inference.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/02_stochastic_elo_inference.md) | Bayesian in-game Elo estimation formulas |
-| **Core Database Engine** | [`rl/results_db.py`](file:///Users/alefita/workdir/pokemon-tcg/rl/results_db.py) | Declarative SQLite schema, Invariant Elo, 28h TTL cache |
-| **ETL Replay Synchronization** | [`scripts/build_card_stats.py`](file:///Users/alefita/workdir/pokemon-tcg/scripts/build_card_stats.py) | 3-Tier Idempotent replay synchronization engine |
-| **Ablation Tournament Runner** | [`scripts/tournament.py`](file:///Users/alefita/workdir/pokemon-tcg/scripts/tournament.py) | Multi-model benchmark orchestrator with subprocess isolation |
+| **Modernized PTCG Results Skill** | [`.agents/skills/ptcg-results-api/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-results-api/SKILL.md) | Updated skill for Schema 2.0.0, Invariant Elo, 28h TTL |
+| **Modernized MoE Architecture Skill** | [`.agents/skills/ptcg-moe-architecture/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-moe-architecture/SKILL.md) | Updated skill for 4D RoPEND, Draft, Apex Mode |
