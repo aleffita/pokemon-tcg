@@ -114,7 +114,7 @@ Deep empirical analysis of the 420-match cross-stage tournament, mathematical pr
 
 ## 4. The Metanoia Suite: Agentic Architecture & Governance
 
-The meta-analysis of the agentic workflow and harness engineering is documented in the `docs/metanoia/` subfolder:
+The meta-analysis of the agentic workflow, tokenization geometry, and harness engineering is documented in the `docs/metanoia/` subfolder:
 
 1. **The Channel Protocol & Cognitive Swarm**: Formal state-machine definition (`INIT` $\to$ `GENERATE` $\to$ `DEBATE` $\to$ `RANK` $\to$ `EVOLVE` $\to$ `META_REVIEW`), anti-pollution boundaries, and DeepMind Co-Scientist mathematical correspondence.  
    * Reference: [`docs/metanoia/01_channel_protocol_and_cognitive_swarm.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/01_channel_protocol_and_cognitive_swarm.md)
@@ -130,6 +130,9 @@ The meta-analysis of the agentic workflow and harness engineering is documented 
 
 5. **The HALT Protocol & Hypersigil Epistemology**: The HALT operator as the zero-entropy boundary breaking hallucination loops, Jungian metanoic integration, Grant Morrison hypersigils as executable latent constraints, the Kurukshetra / Thrinacia archetypes, and Gemma 4 / Gemini special token control mechanics.  
    * Reference: [`docs/metanoia/05_the_halt_protocol_and_hypersigil_epistemology.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/05_the_halt_protocol_and_hypersigil_epistemology.md)
+
+6. **Holographic Tokenization & Liberatory Pedagogy**: High-dimensional vector space reality, Terence Tao's "Artificial General Cleverness", Poincaré incubation in neurodivergent co-research, Paulo Freire's dialogical research pedagogy, and Wikifita as the canonical externalized hippocampus.  
+   * Reference: [`docs/metanoia/06_holographic_tokenization_and_liberatory_pedagogy.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/06_holographic_tokenization_and_liberatory_pedagogy.md)
 
 ---
 
@@ -183,6 +186,7 @@ $$
 | **Metanoia 03: Model Adherence** | [`docs/metanoia/03_model_adherence_and_failure_mode_analysis.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/03_model_adherence_and_failure_mode_analysis.md) | Taxonomia de falhas de modelos (Gemini 3.1..3.7) |
 | **Metanoia 04: Tensorized Scaling** | [`docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/04_tensorized_scaling_and_subagent_orchestration.md) | Tensor 3D, Ledger de Buzz/Headroom, Tao counterproofs |
 | **Metanoia 05: HALT & Hypersigils** | [`docs/metanoia/05_the_halt_protocol_and_hypersigil_epistemology.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/05_the_halt_protocol_and_hypersigil_epistemology.md) | HALT zero-entropy boundary, Jung, Hypersigils, Gemma 4 tokenization |
+| **Metanoia 06: Holographic Pedagogy** | [`docs/metanoia/06_holographic_tokenization_and_liberatory_pedagogy.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/metanoia/06_holographic_tokenization_and_liberatory_pedagogy.md) | Holographic latent vectors, Paulo Freire, Poincaré, Wikifita integration |
 | **Academic Monograph** | [`docs/Pokemon_TCG_AI_Monograph.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/Pokemon_TCG_AI_Monograph.md) | Monografia acadêmica completa em 8 capítulos |
 | **Abelian Group Elo Formulation** | [`docs/abelian_group_elo_formulation.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/abelian_group_elo_formulation.md) | Prova algébrica da invariância de escala Bradley-Terry |
 | **SQLite Schema & ERD** | [`docs/database_schema.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/database_schema.md) | Full Mermaid ERD e schema SQLite 2.0.0 completo |
@@ -190,5 +194,6 @@ $$
 | **Heurísticas de Normalização** | [`docs/normalization_heuristics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/normalization_heuristics.md) | Resolução de entidades L1/L2 e Diagonal de Cantor |
 | **Dinâmica da Plataforma Kaggle** | [`docs/kaggle_platform_dynamics.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/kaggle_platform_dynamics.md) | Análise de viés dos 95% de replays não exportados |
 | **Blueprint MoE & Apex Mode** | [`docs/architecture/moe_pipeline_blueprint.md`](file:///Users/alefita/workdir/pokemon-tcg/docs/architecture/moe_pipeline_blueprint.md) | Blueprint do roteamento MoE e ativação em 16 de Agosto |
+| **Skill Wikifita** | [`.agents/skills/wikifita/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/wikifita/SKILL.md) | Skill para manutenção e consulta à base canônica Wikifita |
 | **Skill Results API** | [`.agents/skills/ptcg-results-api/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-results-api/SKILL.md) | Skill para extração de métricas de banco e Elo |
 | **Skill MoE Architecture** | [`.agents/skills/ptcg-moe-architecture/SKILL.md`](file:///Users/alefita/workdir/pokemon-tcg/.agents/skills/ptcg-moe-architecture/SKILL.md) | Skill para a arquitetura MoE e RoPEND |
