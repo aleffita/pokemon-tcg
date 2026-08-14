@@ -23,6 +23,9 @@ Thumbs.db
 engine/
 runs/
 model/
+*.db
+*.db-shm
+*.db-wal
 
 # === RL ===
 data/

@@ -5,13 +5,12 @@
 - **Current Objective**: Transition from Behavioral Cloning (BC) Curriculum V1 to GRPO (Group Relative Policy Optimization) and Reinforcement Learning Policy Alignment on Apple Silicon (M3 Pro 24GB).
 - **Core Strategy**: BC Pre-training → Parity & Semantic corrections → Recurrent registers (TBPTT) → Elo-oriented Evaluation → GRPO / RL Alignment.
 
-## Current State (as of 2026-08-12)
-- **Precision Crisis Resolved**: PyTorch inference was collapsing due to FP16 underflow (dropping to 3.3% WR). The pipeline (`build_submission.py`, `rl/policy_infer_torch.py`, and `bc_train_mlx.py`) has been migrated to strict FP32. Existing checkpoints were surgically repacked to update their `static_feature_contract` to FP32 hashes.
-- **Ablation Matrix Preparation**: We are orchestrating a cross-stage baseline tournament. Stages 1, 2, 3 (loss-corrupted aux heads) and Stage 4 (corrected, 5 epochs top-100) will battle `first_sub` on a 3x5 deck matrix. This baseline will inform the next training strategy: rapid new initialization vs GRPO/PPO distillation (Teacher: `first_sub`).
-- **MLX Trainer Core**: Native FP16 trainer (`scripts/bc/bc_train_mlx.py`) with Muon + AdamW split optimizer, gradient accumulation, parquet KV cache, Tensorboard logging, and checkpoint resume support.
-- **Benchmark Orchestrator**: Multi-model evaluation script (`scripts/tournament.py` & `experiments/run_full_sweeps.py`) featuring OS subprocess isolation, dynamic ETA tracking, asymmetric opponent deck sweeps (`--opp-top-decks`), best deck CSV auto-export (`--emit-best-performing-deck`), disaggregated OVERALL metrics, atomic SQLite Elo updates, and $N \times M$ unnested matrix table layout.
-- **Seasons & Reset System**: Strongly-typed `seasons` table (`id`, `name`, `is_active`), with CLI controls `--new-season`, `--reset-local-elo`, and `--clear-local-matches`.
-- **Sample-Size Invariant Elo ($R_{\text{invariante}}$)**: Integrated Bradley-Terry MLE inversion, MD10 placement smoothing ($N_0 = 10$), and Softmax Abelian Group translation calibration ($\Delta R_{\text{Abeliano}}$) in `rl/results_db.py`.
+## Current State (as of 2026-08-14)
+- **Metanoia Monograph Suite (Specs 01..06)**: Sealed in `docs/metanoia/`, formalizing the Channel Protocol state machine, Co-Scientist mathematical correspondence, failure mode pathology, 3D tensor scaling, the HALT escape operator, and holographic tokenization.
+- **Wikifita Canonical Integration & Spectral PageRank**: Integrated `wikifita` skill with live link to `~/Claude/wikifita/`, resolved Docker daemon virtualization (native Apple Virtualization Framework + Rosetta), and authored `docs/pagerank_and_abelian_graph_invariance.md` proving the graph isomorphism with Bradley-Terry Abelian Elo.
+- **Teamwork Blueprints Preserved**: Preserved `PROJECT.md`, `TEST_INFRA.md`, and survey memory in `.agents/` covering M1 (4D RoPEND MoE), M2 (Elite 100k Dataset + C++ `bc_would_ko` oracles), M3 (Graph Isomorphism), and M4 (Wikifita audit).
+- **Precision Crisis Resolved**: PyTorch inference and MLX pipelines strictly operating in FP32 with validated checksums and static feature contract hashes.
+- **Database Parity (Schema 2.0.0)**: 139,783 matches (100% physical parity with disk JSONs), `get_invariant_deck_elo()` MD10 smoothing, and 28h TTL for Kaggle API caching.
 
 
 
