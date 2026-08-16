@@ -7,7 +7,11 @@ checkpoint and initialize/reset phase state, but never enter the training loop.
 import copy
 import pickle
 from pathlib import Path
+from types import SimpleNamespace
 
+import mlx.core as mx
+import mlx.nn as nn
+import numpy as np
 import pytest
 
 from rl.packed_data import (
@@ -16,6 +20,8 @@ from rl.packed_data import (
     build_resume_identity,
 )
 from scripts.bc.bc_train_mlx import (
+    _apply_optimizer_step,
+    _build_optimizer,
     _load_resume_setup,
     _prepare_training_phases,
 )
@@ -49,6 +55,32 @@ class _RecordingOptimizer:
         assert params == {"weight": 0}
         self.init_calls += 1
         self.state = {"fresh": True}
+
+
+class _TinyUpdateModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.hidden = nn.Linear(2, 2)
+
+
+def _micro_optimizer_config():
+    return SimpleNamespace(
+        optimizer="muon_adamw",
+        lr=1e-3,
+        lr_schedule="linear",
+        lr_min_ratio=0.1,
+        muon_momentum=0.95,
+        muon_weight_decay=0.01,
+        adamw_betas=[0.9, 0.999],
+        adamw_eps=1e-8,
+        adamw_weight_decay=0.01,
+        structured_weight_decay=0.1,
+    )
+
+
+def _tree_snapshots(tree):
+    mx.eval(tree)
+    return [np.asarray(value).copy() for _, value in nn.utils.tree_flatten(tree)]
 
 
 def _identity(*, seed=17, dedup=True, tbptt_chunk=16, backend=None):
@@ -203,6 +235,94 @@ def test_production_resume_setup_rejects_partial_identity(tmp_path):
             optimizer_state="reset",
             scheduler_state="reset",
         )
+
+
+@pytest.mark.parametrize("phase_setup", ["fresh", "reset"])
+def test_production_optimizer_scheduler_micro_update_mutates_state_and_advances(
+    tmp_path, phase_setup
+):
+    cfg = _micro_optimizer_config()
+    model = _TinyUpdateModel()
+    model.set_dtype(mx.float32)
+    optimizer = _build_optimizer(cfg)
+    reset_checkpoint = None
+    if phase_setup == "reset":
+        reset_checkpoint = tmp_path / "reset.pkl"
+        reset_checkpoint.write_bytes(b"phase-reset-fixture")
+
+    phase = _prepare_training_phases(
+        optimizer,
+        model,
+        state={},
+        resume_path=reset_checkpoint,
+        optimizer_state="reset",
+        scheduler_state="reset",
+        optimizer_contract={"name": "micro"},
+        configured_total_steps=4,
+        run_optimizer_steps=2,
+    )
+    assert phase.optimizer_resumed is False
+    assert (phase.optimizer_phase_step, phase.scheduler_phase_step) == (0, 0)
+    optimizer.learning_rate = cfg.lr
+    before_parameters = _tree_snapshots(model.parameters())
+    before_state = _tree_snapshots(optimizer.state)
+    gradients = nn.utils.tree_map(
+        lambda parameter: mx.ones(parameter.shape, dtype=mx.float32),
+        model.trainable_parameters(),
+    )
+
+    first = _apply_optimizer_step(
+        optimizer,
+        model,
+        gradients,
+        2,
+        gstep=0,
+        optimizer_phase_step=phase.optimizer_phase_step,
+        scheduler_phase_step=phase.scheduler_phase_step,
+        scheduler_total_steps=phase.scheduler_total_steps,
+        lr=cfg.lr,
+        lr_schedule=cfg.lr_schedule,
+        warmup_steps=0,
+        lr_min_ratio=cfg.lr_min_ratio,
+        max_grad_norm=10.0,
+    )
+    second = _apply_optimizer_step(
+        optimizer,
+        model,
+        gradients,
+        2,
+        gstep=first.gstep,
+        optimizer_phase_step=first.optimizer_phase_step,
+        scheduler_phase_step=first.scheduler_phase_step,
+        scheduler_total_steps=phase.scheduler_total_steps,
+        lr=cfg.lr,
+        lr_schedule=cfg.lr_schedule,
+        warmup_steps=0,
+        lr_min_ratio=cfg.lr_min_ratio,
+        max_grad_norm=10.0,
+    )
+
+    assert (first.gstep, first.optimizer_phase_step, first.scheduler_phase_step) == (
+        1,
+        1,
+        1,
+    )
+    assert (second.gstep, second.optimizer_phase_step, second.scheduler_phase_step) == (
+        2,
+        2,
+        2,
+    )
+    assert second.learning_rate != first.learning_rate
+    after_parameters = _tree_snapshots(model.parameters())
+    after_state = _tree_snapshots(optimizer.state)
+    assert any(
+        not np.array_equal(before, after)
+        for before, after in zip(before_parameters, after_parameters)
+    )
+    assert any(
+        not np.array_equal(before, after)
+        for before, after in zip(before_state, after_state)
+    )
 
 
 @pytest.mark.parametrize("field", ["source", "selection", "split", "seed", "dedup", "tbptt", "backend"])

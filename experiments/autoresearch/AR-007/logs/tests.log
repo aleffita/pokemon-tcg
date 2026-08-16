@@ -1,0 +1,6 @@
+$ uv run --locked pytest -q tests/test_packed_data.py tests/test_packed_tbptt_integration.py tests/test_trainer_resume_integration.py scripts/validate/test_checkpoint.py
+...................................................                      [100%]
+51 passed in 0.64s
+
+$ git diff --check
+# passed

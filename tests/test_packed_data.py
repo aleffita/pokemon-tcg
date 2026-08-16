@@ -427,6 +427,16 @@ def test_approved_stage4_root_accepts_only_canonical_path_and_sha256(
     assert APPROVED_STAGE4_ROOT_SHA256 == "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b"
 
 
+def test_approved_stage4_root_rejects_project_relative_candidate_from_wrong_cwd(
+    tmp_path, monkeypatch
+):
+    root = Path(__file__).resolve().parents[1] / "experiments/autoresearch/root/stage4_root.pkl"
+    project_root = root.parents[3]
+    monkeypatch.chdir(tmp_path)
+    candidate = Path("experiments/autoresearch/root/stage4_root.pkl")
+    assert approved_stage4_root_matches(candidate, repo_root=project_root) is False
+
+
 def test_resume_identity_rejects_mismatch_and_handles_legacy_policy():
     identity = _resume_identity()
     assert validate_resume_identity(identity, identity, packed=True) == "validated"

@@ -15,6 +15,8 @@ from scripts.bc.bc_train_mlx import (
     _batched_sequential_tbptt_loss,
     _build_tbptt_decision_groups,
     _build_tbptt_plan,
+    _iter_packed_validation_batches,
+    _iter_tbptt_prefetch_batches,
     _load_temporal_batch,
 )
 
@@ -144,3 +146,82 @@ def test_packed_production_temporal_loader_relabels_and_consumes_tbptt_sequentia
     assert seen_rows == [0, 1, 2, 5, 3, 4]
     assert seen_labels == [0, 0, 1, 1, 2, 0]
     assert sorted(int(np.asarray(value).reshape(-1)[0]) for value in memories.values()) == [1, 1, 2]
+
+
+def test_packed_production_prefetch_and_validation_entry_paths_are_traversable(
+    tmp_path,
+):
+    arrays = _write_store(tmp_path)
+    store = PackedArrayStore(tmp_path, columns=list(arrays))
+    meta = {name: arrays[name] for name in ("episode_id", "side", "step_id")}
+    plan = _build_tbptt_plan(
+        _build_tbptt_decision_groups(meta, len(arrays["episode_id"])),
+        chunk_size=1,
+        row_budget=3,
+    )
+    cache_backend = (
+        store,
+        np.zeros(len(arrays["y"]), dtype=np.int32),
+        np.zeros(len(arrays["y"]), dtype=np.int32),
+        np.arange(len(arrays["y"]), dtype=np.int32),
+    )
+
+    train_batches = list(
+        _iter_tbptt_prefetch_batches(
+            plan,
+            keys=["action_mask"],
+            int_keys=set(),
+            aux_active=False,
+            zero_wouldko=False,
+            cache_backend=cache_backend,
+        )
+    )
+    assert len(train_batches) == len(plan)
+    train_rows = [
+        int(row)
+        for temporal_batch, *_ in train_batches
+        for chunk in temporal_batch
+        for decision in chunk.decisions
+        for row in decision
+    ]
+    assert train_rows == [0, 1, 2, 5, 3, 4]
+
+    validation_batches = list(
+        _iter_packed_validation_batches(
+            plan,
+            keys=["action_mask"],
+            int_keys=set(),
+            aux_active=False,
+            zero_wouldko=False,
+            cache_backend=cache_backend,
+        )
+    )
+    assert len(validation_batches) == len(plan)
+    seen_validation_rows = []
+    for temporal_batch, loaded in validation_batches:
+        (
+            lane_observations,
+            lane_labels,
+            decision_lengths,
+            lane_rows,
+            lane_aux_targets,
+            lane_fetched,
+        ) = loaded
+        assert lane_aux_targets is None
+        assert lane_fetched is not None
+        _, memory_out = _batched_sequential_tbptt_loss(
+            _SequentialProbeModel(),
+            lane_observations,
+            lane_labels,
+            decision_lengths,
+            [None for _ in temporal_batch],
+        )
+        mx.eval(memory_out)
+        seen_validation_rows.extend(
+            int(row) for rows in lane_rows for row in rows
+        )
+        assert all(
+            fetched["y"].shape[0] == len(rows)
+            for fetched, rows in zip(lane_fetched, lane_rows)
+        )
+    assert seen_validation_rows == [0, 1, 2, 5, 3, 4]

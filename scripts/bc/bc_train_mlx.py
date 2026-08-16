@@ -264,6 +264,17 @@ class _TrainingPhaseSetup:
     scheduler_total_steps: int
 
 
+@dataclass(frozen=True)
+class _OptimizerStepResult:
+    """Counters returned by one production optimizer/scheduler update."""
+
+    gstep: int
+    optimizer_phase_step: int
+    scheduler_phase_step: int
+    grad_norm: float
+    learning_rate: float
+
+
 def _load_resume_setup(
     resume_path: str | os.PathLike[str] | None,
     *,
@@ -856,6 +867,78 @@ def _to_fp32_grads(grads):
             gradient.astype(mx.float32) if gradient is not None else gradient
         ),
         grads,
+    )
+
+
+def _clip_grads(grads, max_norm):
+    """Clip gradients in the MLX graph and return the pre-clip norm."""
+    flat = [g.reshape(-1) for _, g in nn.utils.tree_flatten(grads) if g is not None]
+    if not flat:
+        return grads, 0.0
+    grad_norm = mx.sqrt(sum(mx.sum(g**2) for g in flat))
+    if max_norm <= 0:
+        mx.eval(grad_norm)
+        return grads, float(grad_norm)
+    scale = mx.where(
+        grad_norm > max_norm,
+        max_norm / mx.maximum(grad_norm, 1e-6),
+        1.0,
+    )
+    grads = nn.utils.tree_map(
+        lambda g: (g * scale) if g is not None else g,
+        grads,
+    )
+    mx.eval(grads, grad_norm)
+    return grads, float(grad_norm)
+
+
+def _apply_optimizer_step(
+    optimizer,
+    model,
+    grads,
+    n_examples: int,
+    *,
+    gstep: int,
+    optimizer_phase_step: int,
+    scheduler_phase_step: int,
+    scheduler_total_steps: int,
+    lr: float,
+    lr_schedule: str,
+    warmup_steps: int,
+    lr_min_ratio: float,
+    max_grad_norm: float,
+) -> _OptimizerStepResult:
+    """Apply the exact production optimizer-step and scheduler semantics."""
+    if n_examples <= 0:
+        raise ValueError("optimizer steps require at least one example")
+    gstep += 1
+    optimizer_phase_step += 1
+    scheduler_phase_step += 1
+    grads = nn.utils.tree_map(
+        lambda gradient: (
+            gradient / n_examples if gradient is not None else gradient
+        ),
+        grads,
+    )
+    grads, grad_norm = _clip_grads(grads, max_grad_norm)
+    if lr_schedule != "none":
+        optimizer.learning_rate = lr_at(
+            scheduler_phase_step,
+            scheduler_total_steps,
+            lr,
+            lr_schedule,
+            warmup_steps,
+            lr_min_ratio,
+        )
+    optimizer.update(model, grads)
+    mx.eval(model.parameters())
+    mx.eval(optimizer.state)
+    return _OptimizerStepResult(
+        gstep=gstep,
+        optimizer_phase_step=optimizer_phase_step,
+        scheduler_phase_step=scheduler_phase_step,
+        grad_norm=grad_norm,
+        learning_rate=float(optimizer.learning_rate),
     )
 
 
@@ -1670,6 +1753,79 @@ def _load_temporal_batch(
         lane_rows,
         lane_aux_targets,
     )
+
+
+def _iter_tbptt_prefetch_batches(
+    tbptt_plan: list[list[_TBPTTChunk]],
+    *,
+    keys: list[str],
+    int_keys: set[str],
+    aux_active: bool,
+    zero_wouldko: bool,
+    cache_backend: tuple,
+):
+    """Yield the production packed train iterator with one-step prefetch."""
+
+    def load_one(temporal_batch):
+        return _load_temporal_batch(
+            temporal_batch,
+            keys=keys,
+            int_keys=int_keys,
+            aux_active=aux_active,
+            zero_wouldko=zero_wouldko,
+            source="tbptt-cache",
+            cache_backend=cache_backend,
+        )
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="tbptt-prefetch") as pool:
+        if not tbptt_plan:
+            return
+        current_future = pool.submit(load_one, tbptt_plan[0])
+        for index, temporal_batch in enumerate(tbptt_plan):
+            next_future = (
+                pool.submit(load_one, tbptt_plan[index + 1])
+                if index + 1 < len(tbptt_plan)
+                else None
+            )
+            (
+                lane_observations,
+                lane_labels,
+                lane_decision_lengths,
+                _,
+                lane_aux_targets,
+            ) = current_future.result()
+            yield (
+                temporal_batch,
+                lane_observations,
+                lane_labels,
+                lane_decision_lengths,
+                lane_aux_targets,
+            )
+            current_future = next_future
+
+
+def _iter_packed_validation_batches(
+    validation_plan: list[list[_TBPTTChunk]],
+    *,
+    keys: list[str],
+    int_keys: set[str],
+    aux_active: bool,
+    zero_wouldko: bool,
+    cache_backend: tuple,
+):
+    """Yield the production packed validation loader entry with fetched rows."""
+    for temporal_batch in validation_plan:
+        loaded = _load_temporal_batch(
+            temporal_batch,
+            keys=keys,
+            int_keys=int_keys,
+            aux_active=aux_active,
+            zero_wouldko=zero_wouldko,
+            source="tbptt-cache",
+            cache_backend=cache_backend,
+            emit_fetched=True,
+        )
+        yield temporal_batch, loaded
 
 
 def _stream_train_microbatches(
@@ -3080,23 +3236,6 @@ def main() -> None:
         out_path = Path(a.out)
         return str(out_path.with_name(f"{out_path.stem}_latest{out_path.suffix}"))
 
-    # --- graph-safe gradient clipping (C.3) ---
-    def clip_grads(grads, max_norm):
-        """Clip gradients in MLX graph (no float() calls). Returns
-        ``(clipped_grads, grad_norm_pre_clip)`` -- caller decides whether to
-        use the norm (currently only tensorboard emits it)."""
-        flat = [g.reshape(-1) for _, g in nn.utils.tree_flatten(grads) if g is not None]
-        if not flat:
-            return grads, 0.0
-        gn = mx.sqrt(sum(mx.sum(g**2) for g in flat))
-        if max_norm <= 0:
-            mx.eval(gn)
-            return grads, float(gn)
-        scale = mx.where(gn > max_norm, max_norm / mx.maximum(gn, 1e-6), 1.0)
-        grads = nn.utils.tree_map(lambda g: (g * scale) if g is not None else g, grads)
-        mx.eval(grads, gn)
-        return grads, float(gn)
-
     # --- train step with gradient accumulation (C.2) ---
     def train_step_accum(ob: dict, yb: mx.array, aux_targets: dict | None):
         """Forward + backward for one microbatch using an FP32 loss sum."""
@@ -3120,33 +3259,27 @@ def main() -> None:
     def optimizer_step(grads, n_examples):
         """Normalize accumulated grads, clip, update optimizer, advance gstep."""
         nonlocal gstep, optimizer_phase_step, scheduler_phase_step
-        if n_examples <= 0:
-            raise ValueError("optimizer steps require at least one example")
-        gstep += 1
-        optimizer_phase_step += 1
-        scheduler_phase_step += 1
-        # Normalize by total examples (FP32 reduction)
-        grads = nn.utils.tree_map(
-            lambda g: (g / n_examples) if g is not None else g, grads
+        result = _apply_optimizer_step(
+            optimizer,
+            model,
+            grads,
+            n_examples,
+            gstep=gstep,
+            optimizer_phase_step=optimizer_phase_step,
+            scheduler_phase_step=scheduler_phase_step,
+            scheduler_total_steps=scheduler_total_steps,
+            lr=a.lr,
+            lr_schedule=a.lr_schedule,
+            warmup_steps=warmup_steps,
+            lr_min_ratio=a.lr_min_ratio,
+            max_grad_norm=a.max_grad_norm,
         )
-        # Clip (C.3: graph-safe, no float())
-        grads, grad_norm = clip_grads(grads, a.max_grad_norm)
-        # LR schedule on optimizer step (C.4)
-        if a.lr_schedule != "none":
-            optimizer.learning_rate = lr_at(
-                scheduler_phase_step,
-                scheduler_total_steps,
-                a.lr,
-                a.lr_schedule,
-                warmup_steps,
-                a.lr_min_ratio,
-            )
-        optimizer.update(model, grads)
-        mx.eval(model.parameters())
-        mx.eval(optimizer.state)
-        _last_step_metrics["grad_norm"] = grad_norm
-        _last_step_metrics["lr"] = float(optimizer.learning_rate)
-        _last_step_metrics["scheduler_phase_step"] = int(scheduler_phase_step)
+        gstep = result.gstep
+        optimizer_phase_step = result.optimizer_phase_step
+        scheduler_phase_step = result.scheduler_phase_step
+        _last_step_metrics["grad_norm"] = result.grad_norm
+        _last_step_metrics["lr"] = result.learning_rate
+        _last_step_metrics["scheduler_phase_step"] = result.scheduler_phase_step
         _last_step_metrics["n_examples"] = int(n_examples)
 
     # Compile stable shuffled-batch forward/backward; clipping stays outside.
@@ -3167,62 +3300,6 @@ def main() -> None:
     # (pyarrow.dataset.Scanner reads ahead internally). There is no separate
     # slab/thread/queue prefetch step; the hierarchical row-group cache
     # (see _ParquetRowGroupCache) owns cross-batch retention.
-
-    # ---- F.3: TBPTT batch generator ----
-
-    def _tbptt_batches():
-        """Yield the exact packed temporal batches used by the work plan,
-        with one-step lookahead: while MLX is running forward+backward on
-        step N the pool submits ``_load_temporal_batch`` for step N+1, so
-        the row_group decode (pyarrow C++ → releases the GIL) overlaps with
-        GPU compute. Cache capacity is 6 row_groups so the prefetched entry
-        does not evict what step N is still reading.
-        """
-
-        def _load_one(temporal_batch):
-            return _load_temporal_batch(
-                temporal_batch,
-                keys=keys,
-                int_keys=int_keys,
-                aux_active=aux_active,
-                zero_wouldko=a.zero_wouldko,
-                source="tbptt-cache",
-                cache_backend=(
-                    _tbptt_row_group_cache,
-                    _tbptt_row_file_idx,
-                    _tbptt_row_group_idx,
-                    _tbptt_row_offset,
-                ),
-            )
-
-        with ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="tbptt-prefetch"
-        ) as pool:
-            if not _tbptt_plan:
-                return
-            current_future = pool.submit(_load_one, _tbptt_plan[0])
-            for i, temporal_batch in enumerate(_tbptt_plan):
-                # Kick off the next load before waiting on the current one.
-                next_future = (
-                    pool.submit(_load_one, _tbptt_plan[i + 1])
-                    if i + 1 < len(_tbptt_plan)
-                    else None
-                )
-                (
-                    lane_observations,
-                    lane_labels,
-                    lane_decision_lengths,
-                    _,
-                    lane_aux_targets,
-                ) = current_future.result()
-                yield (
-                    temporal_batch,
-                    lane_observations,
-                    lane_labels,
-                    lane_decision_lengths,
-                    lane_aux_targets,
-                )
-                current_future = next_future
 
     # ---- tensorboard writer -------------------------------------------------
     # Emits scalars into a per-run directory under ``runs/``. In a second
@@ -3445,7 +3522,23 @@ def main() -> None:
                 flush=True,
             )
 
-        _batch_iter = _tbptt_batches() if _use_tbptt else _all_batches()
+        _batch_iter = (
+            _iter_tbptt_prefetch_batches(
+                _tbptt_plan,
+                keys=keys,
+                int_keys=int_keys,
+                aux_active=aux_active,
+                zero_wouldko=a.zero_wouldko,
+                cache_backend=(
+                    _tbptt_row_group_cache,
+                    _tbptt_row_file_idx,
+                    _tbptt_row_group_idx,
+                    _tbptt_row_offset,
+                ),
+            )
+            if _use_tbptt
+            else _all_batches()
+        )
 
         for _batch_tuple in _batch_iter:
             optimizer_updated = False
@@ -3719,7 +3812,17 @@ def main() -> None:
             validation_opt_group: list[np.ndarray] = []
             aux_pred_val: dict[str, list[np.ndarray]] = defaultdict(list)
             aux_target_val: dict[str, list[np.ndarray]] = defaultdict(list)
-            for val_batch, temporal_batch in enumerate(_val_tbptt_plan, start=1):
+            for val_batch, (temporal_batch, loaded) in enumerate(
+                _iter_packed_validation_batches(
+                    _val_tbptt_plan,
+                    keys=keys,
+                    int_keys=int_keys,
+                    aux_active=aux_active,
+                    zero_wouldko=a.zero_wouldko,
+                    cache_backend=_val_cache_backend,
+                ),
+                start=1,
+            ):
                 (
                     lane_observations,
                     lane_labels,
@@ -3727,16 +3830,7 @@ def main() -> None:
                     lane_rows,
                     lane_aux_targets,
                     lane_fetched,
-                ) = _load_temporal_batch(
-                    temporal_batch,
-                    keys=keys,
-                    int_keys=int_keys,
-                    aux_active=aux_active,
-                    zero_wouldko=a.zero_wouldko,
-                    source="tbptt-cache",
-                    cache_backend=_val_cache_backend,
-                    emit_fetched=True,
-                )
+                ) = loaded
                 lane_memory_in = [
                     (
                         None
