@@ -20,8 +20,12 @@ from scripts.rl.ppo_micro_update import (
 )
 from scripts.rl.trajectory_probe import (
     DateBoundEncoder,
+    _StatefulMirror,
+    _masked_distribution,
     digest_tensor,
     APPROVED_STAGE4_ROOT_SHA256,
+    behavior_importance_ratio,
+    composite_behavior_logprob,
     initial_memory,
     inspect_parquet_provenance,
     load_stage4,
@@ -85,6 +89,99 @@ def test_initial_memory_digest_is_stable_and_non_null():
     second = initial_memory(model)
     assert first.shape == (1, 2, 3)
     assert digest_tensor(first) == digest_tensor(second)
+
+
+def test_composite_behavior_logprob_sums_masked_substeps_and_identity_ratio():
+    first = _masked_distribution(
+        torch.tensor([[1.0, -4.0, 0.5, -2.0]]),
+        np.array([1.0, 0.0, 1.0, 1.0], dtype=np.float32),
+    )
+    second = _masked_distribution(
+        torch.tensor([[-1.0, 2.0, 0.25, -3.0]]),
+        np.array([1.0, 1.0, 0.0, 1.0], dtype=np.float32),
+    )
+    first_logprob = float(first.log_prob(torch.tensor(2)).item())
+    second_logprob = float(second.log_prob(torch.tensor(1)).item())
+    expected = first_logprob + second_logprob
+    assert composite_behavior_logprob([first_logprob, second_logprob]) == pytest.approx(expected)
+    assert behavior_importance_ratio(expected, expected) == pytest.approx(1.0)
+
+
+class _SequenceRng:
+    def __init__(self, actions):
+        self.actions = list(actions)
+
+    def choice(self, _size, p=None):
+        assert p is not None
+        return self.actions.pop(0)
+
+
+class _MirrorEncoder:
+    int_keys: set[str] = set()
+    meta_date = "2026-08-12"
+
+    def encode(self, obs, picked=None, **_kwargs):
+        picked = set(picked or ())
+        mask = np.zeros(SUBMIT_ACTION + 1, dtype=np.float32)
+        if 0 not in picked:
+            mask[0] = 1.0
+        if picked and 1 not in picked:
+            mask[1] = 1.0
+        if len(picked) >= 1:
+            mask[SUBMIT_ACTION] = 1.0
+        return {"action_mask": mask}
+
+
+class _StatefulToyModel:
+    def __init__(self):
+        self.learned_init = torch.zeros(1, 2)
+        self.memory_inputs = []
+
+    def logits_value(self, model_input, memory_in=None):
+        assert memory_in is not None
+        self.memory_inputs.append(memory_in.detach().clone())
+        batch = model_input["action_mask"].shape[0]
+        logits = torch.zeros(batch, SUBMIT_ACTION + 1, dtype=torch.float32)
+        value = torch.zeros(batch, dtype=torch.float32)
+        memory_out = memory_in + float(len(self.memory_inputs))
+        return logits, value, memory_out
+
+
+def _mirror_obs():
+    return {
+        "select": {"option": [10, 11], "minCount": 2, "maxCount": 2},
+        "current": {"turn": 1, "yourIndex": 1},
+    }
+
+
+def test_stateful_mirror_lanes_are_independent_and_commit_last_substep_output():
+    model = _StatefulToyModel()
+    first = _StatefulMirror(model, _MirrorEncoder(), _SequenceRng([0, 1, 0, 1, 0, 1]))
+    second = _StatefulMirror(model, _MirrorEncoder(), _SequenceRng([0, 1, 0, 1]))
+    first.reset_episode("first")
+    second.reset_episode("second")
+    initial_digest = first.initial_memory_digest
+
+    first(_mirror_obs(), object())
+    second(_mirror_obs(), object())
+    first(_mirror_obs(), object())
+    second(_mirror_obs(), object())
+
+    assert all(memory is not None for memory in model.memory_inputs)
+    assert digest_tensor(model.memory_inputs[0]) == initial_digest
+    assert digest_tensor(model.memory_inputs[1]) == initial_digest
+    assert digest_tensor(model.memory_inputs[2]) == initial_digest
+    assert digest_tensor(model.memory_inputs[3]) == initial_digest
+    assert first.decisions[1]["memory_input_digest"] == first.decisions[0]["committed_memory_output_digest"]
+    assert second.decisions[1]["memory_input_digest"] == second.decisions[0]["committed_memory_output_digest"]
+    assert first.decisions[1]["memory_input_digest"] != second.decisions[1]["memory_input_digest"]
+    assert first.events[0]["memory_input_digest"] == first.events[1]["memory_input_digest"]
+    assert first.events[0]["decision_memory_output_digest"] == first.events[1]["decision_memory_output_digest"]
+    assert first.events[1]["memory_output_digest"] == first.events[0]["decision_memory_output_digest"]
+
+    first.reset_episode("first-reset")
+    first(_mirror_obs(), object())
+    assert first.decisions[0]["memory_input_digest"] == initial_digest
 
 
 def test_strict_stage4_loader_does_not_fallback(monkeypatch, tmp_path):

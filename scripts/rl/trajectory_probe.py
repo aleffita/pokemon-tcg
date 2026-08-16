@@ -879,6 +879,328 @@ def run_probe(
     return manifest
 
 
+def _lane_decision_summaries(
+    records: list[dict[str, Any]],
+    *,
+    initial_digest: str,
+    lane: str,
+) -> dict[str, Any]:
+    """Validate and summarize one persistent recurrent lane."""
+    if not records:
+        raise AssertionError(f"{lane} lane produced no decision records")
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for record in records:
+        grouped.setdefault(int(record["decision_index"]), []).append(record)
+        if not bool(record.get("legal_action", False)):
+            raise AssertionError(f"{lane} lane recorded an illegal action")
+        if int(record["action"]) not in {int(action) for action in record["legal_actions"]}:
+            raise AssertionError(f"{lane} lane action is absent from its legal action set")
+    summaries: list[dict[str, Any]] = []
+    for decision_index in sorted(grouped):
+        decision_records = grouped[decision_index]
+        expected_substeps = list(range(len(decision_records)))
+        actual_substeps = [int(record["substep"]) for record in decision_records]
+        if actual_substeps != expected_substeps:
+            raise AssertionError(f"{lane} decision {decision_index} has broken substep order")
+        input_digests = {record["memory_input_digest"] for record in decision_records}
+        if len(input_digests) != 1:
+            raise AssertionError(
+                f"{lane} decision {decision_index} did not reuse one memory input across substeps"
+            )
+        committed_digests = {record["decision_memory_output_digest"] for record in decision_records}
+        if len(committed_digests) != 1 or None in committed_digests:
+            raise AssertionError(f"{lane} decision {decision_index} has no unique committed memory output")
+        logical = composite_behavior_logprob(
+            [float(record["action_logprob"]) for record in decision_records]
+        )
+        observed_logprobs = {
+            float(record["logical_action_logprob"])
+            for record in decision_records
+        }
+        if len(observed_logprobs) != 1 or not math.isclose(
+            next(iter(observed_logprobs)), logical, rel_tol=1e-6, abs_tol=1e-6
+        ):
+            raise AssertionError(f"{lane} decision {decision_index} composite logprob mismatch")
+        if any(
+            not math.isclose(
+                float(record["decision_logprob"]), logical, rel_tol=1e-6, abs_tol=1e-6
+            )
+            for record in decision_records
+        ):
+            raise AssertionError(f"{lane} decision {decision_index} decision logprob mismatch")
+        summaries.append(
+            {
+                "decision_index": decision_index,
+                "substeps": len(decision_records),
+                "memory_input_digest": next(iter(input_digests)),
+                "committed_memory_output_digest": next(iter(committed_digests)),
+                "logical_action_logprob": logical,
+                "actions": [int(record["action"]) for record in decision_records],
+                "legal_action_counts": [int(record["legal_action_count"]) for record in decision_records],
+            }
+        )
+    if summaries[0]["memory_input_digest"] != initial_digest:
+        raise AssertionError(f"{lane} lane did not start from its episode-initial memory")
+    continuity = all(
+        summaries[index]["memory_input_digest"]
+        == summaries[index - 1]["committed_memory_output_digest"]
+        for index in range(1, len(summaries))
+    )
+    if not continuity:
+        raise AssertionError(f"{lane} lane memory continuity was broken between decisions")
+    return {
+        "lane": lane,
+        "initial_memory_digest": initial_digest,
+        "decision_count": len(summaries),
+        "decision_input_digests": [item["memory_input_digest"] for item in summaries],
+        "committed_memory_output_digests": [
+            item["committed_memory_output_digest"] for item in summaries
+        ],
+        "continuity": continuity,
+        "decisions": summaries,
+    }
+
+
+def _compact_lane_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Keep the manifest small; per-decision digests live in selfplay.jsonl."""
+    input_chain = json.dumps(summary["decision_input_digests"], separators=(",", ":"))
+    output_chain = json.dumps(
+        summary["committed_memory_output_digests"], separators=(",", ":")
+    )
+    return {
+        "lane": summary["lane"],
+        "initial_memory_digest": summary["initial_memory_digest"],
+        "decision_count": summary["decision_count"],
+        "continuity": summary["continuity"],
+        "first_decision_input_digest": summary["decision_input_digests"][0],
+        "last_committed_memory_output_digest": summary[
+            "committed_memory_output_digests"
+        ][-1],
+        "decision_input_chain_sha256": sha256_bytes(input_chain.encode("utf-8")),
+        "committed_output_chain_sha256": sha256_bytes(output_chain.encode("utf-8")),
+    }
+
+
+def write_true_recurrent_outputs(
+    experiment_dir: Path,
+    manifest: dict[str, Any],
+    agent_records: list[dict[str, Any]],
+    mirror_records: list[dict[str, Any]],
+) -> None:
+    """Write compact event records; model tensors remain in-memory only."""
+    logs_dir = experiment_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    records = [
+        {"lane": "agent", **record}
+        for record in agent_records
+    ] + [
+        {"lane": "mirror", **record}
+        for record in mirror_records
+    ]
+    jsonl = "".join(
+        json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+        for record in records
+    )
+    (logs_dir / "selfplay.jsonl").write_text(jsonl)
+    manifest = dict(manifest)
+    manifest["record_count"] = len(records)
+    manifest["selfplay_records_sha256"] = sha256_bytes(jsonl.encode("utf-8"))
+    manifest["records_path"] = "logs/selfplay.jsonl"
+    (experiment_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    )
+    (logs_dir / "selfplay.log").write_text(
+        "\n".join(
+            [
+                "AR-018 true recurrent current-vs-current probe",
+                f"metadata_date={manifest['metadata_date']}",
+                f"games={manifest['games']}",
+                f"agent_decisions={manifest['decision_counts']['agent']}",
+                f"mirror_decisions={manifest['decision_counts']['opponent']}",
+                f"agent_return={manifest['terminal_return_agent']}",
+                f"opponent_return={manifest['terminal_return_opponent']}",
+                f"rows_per_second={manifest['rows_per_second']}",
+                f"decisions_per_second={manifest['decisions_per_second']}",
+                f"selfplay_records_sha256={manifest['selfplay_records_sha256']}",
+            ]
+        )
+        + "\n"
+    )
+
+
+def run_true_recurrent_probe(
+    *,
+    checkpoint: Path = DEFAULT_CHECKPOINT,
+    deck_path: Path = DEFAULT_DECK,
+    meta_date: str,
+    output_dir: Path = DEFAULT_TRUE_RECURRENT_OUTPUT,
+    games: int = 1,
+    seed: int = 18018,
+    experiment: str = "AR-018",
+) -> dict[str, Any]:
+    """Run a small current-vs-current probe without Parquet or packed hot-path work."""
+    if games < 1 or games > 2:
+        raise ValueError("true recurrent probe games must be between 1 and 2")
+    validate_meta_date(meta_date)
+    deck = load_deck(deck_path)
+    card_table = get_card_table()
+    model, model_metadata = load_stage4(checkpoint, card_table)
+    encoder = DateBoundEncoder(TokenEncoder(card_table), meta_date)
+    model_hash = sha256_file(checkpoint)
+    deck_content_hash = deck_content_sha256(deck)
+    deck_source_file_hash = sha256_file(deck_path)
+    mirror = _StatefulMirror(
+        model,
+        encoder,
+        np.random.default_rng(seed + 1000),
+    )
+    all_agent_records: list[dict[str, Any]] = []
+    all_mirror_records: list[dict[str, Any]] = []
+    game_summaries: list[dict[str, Any]] = []
+    started = time.perf_counter()
+    for game_index in range(games):
+        episode_id = f"true_recurrent-{game_index:03d}"
+        bundle: list[dict[str, Any]] = []
+        env = CabtEnv(
+            agent_deck=deck,
+            opponent_deck=deck,
+            opponent_fn=mirror,
+            encoder=encoder,
+            seed=seed + game_index,
+            max_steps=4000,
+        )
+        try:
+            agent_records = collect_episode(
+                env,
+                model,
+                encoder,
+                episode_id,
+                "mirror_recurrent",
+                seed + game_index,
+                deck_content_hash,
+                deck_source_file_hash,
+                model_hash,
+                torch.Generator(device="cpu").manual_seed(seed + game_index),
+                bundle,
+                on_episode_start=lambda episode_id=episode_id: mirror.reset_episode(episode_id),
+                on_episode_reset=lambda agent_side: mirror.set_side(1 - agent_side),
+            )
+        finally:
+            env.close()
+        validate_rows(agent_records)
+        validate_bundle(bundle, agent_records)
+        mirror_records = [dict(record) for record in mirror.events]
+        mirror_summary = _lane_decision_summaries(
+            mirror_records,
+            initial_digest=str(mirror.initial_memory_digest),
+            lane="mirror",
+        )
+        agent_summary = _lane_decision_summaries(
+            agent_records,
+            initial_digest=agent_records[0]["memory_input_digest"],
+            lane="agent",
+        )
+        terminal_rows = [row for row in agent_records if bool(row["terminal"])]
+        if len(terminal_rows) != 1:
+            raise AssertionError(f"{episode_id} has no unique agent terminal return")
+        agent_return = float(terminal_rows[0]["reward"])
+        opponent_return = -agent_return
+        if agent_return not in (-1.0, 0.0, 1.0) or opponent_return != -agent_return:
+            raise AssertionError("true recurrent smoke did not produce symmetric terminal returns")
+        if any(int(record["side"]) != int(agent_records[0]["side"]) for record in agent_records):
+            raise AssertionError("agent side changed within an episode")
+        if any(record["side"] is None for record in mirror_records):
+            raise AssertionError("mirror side was not bound after environment reset")
+        agent_lane_manifest = _compact_lane_summary(agent_summary)
+        opponent_lane_manifest = _compact_lane_summary(mirror_summary)
+        all_agent_records.extend(agent_records)
+        all_mirror_records.extend(mirror_records)
+        game_summaries.append(
+            {
+                "episode_id": episode_id,
+                "agent_side": int(agent_records[0]["side"]),
+                "opponent_side": int(mirror.side),
+                "terminal_return_agent": agent_return,
+                "terminal_return_opponent": opponent_return,
+                "decision_counts": {
+                    "agent": agent_summary["decision_count"],
+                    "opponent": mirror_summary["decision_count"],
+                },
+                "lane_digests": {
+                    "agent": agent_lane_manifest,
+                    "opponent": opponent_lane_manifest,
+                },
+            }
+        )
+    elapsed = time.perf_counter() - started
+    total_rows = len(all_agent_records) + len(all_mirror_records)
+    total_decisions = sum(
+        item["decision_counts"][lane]
+        for item in game_summaries
+        for lane in ("agent", "opponent")
+    )
+    first_game = game_summaries[0]
+    manifest: dict[str, Any] = {
+        "format": "ptcg-stage4-true-recurrent-selfplay-v1",
+        "experiment": experiment,
+        "selfplay_mode": "current_vs_current_true_recurrent",
+        "metadata_date": meta_date,
+        "checkpoint": str(checkpoint),
+        "model_sha256": model_hash,
+        "deck": str(deck_path),
+        "deck_content_sha256": deck_content_hash,
+        "deck_source_file_sha256": deck_source_file_hash,
+        "games": games,
+        "collection_seconds": round(elapsed, 6),
+        "total_rows": total_rows,
+        "total_decisions": total_decisions,
+        "rows_per_second": round(total_rows / elapsed, 3) if elapsed else None,
+        "decisions_per_second": round(total_decisions / elapsed, 3) if elapsed else None,
+        "decision_counts": first_game["decision_counts"] if games == 1 else {
+            "agent": sum(item["decision_counts"]["agent"] for item in game_summaries),
+            "opponent": sum(item["decision_counts"]["opponent"] for item in game_summaries),
+        },
+        "agent_side": first_game["agent_side"] if games == 1 else None,
+        "opponent_side": first_game["opponent_side"] if games == 1 else None,
+        "terminal_return_agent": first_game["terminal_return_agent"] if games == 1 else None,
+        "terminal_return_opponent": first_game["terminal_return_opponent"] if games == 1 else None,
+        "terminal_returns": game_summaries,
+        "lane_digests": first_game["lane_digests"] if games == 1 else [
+            item["lane_digests"] for item in game_summaries
+        ],
+        "parquet_used": False,
+        "packed_used": False,
+        "model_metadata": {
+            "arch_version": model_metadata.get("arch_version"),
+            "token_schema_version": model_metadata.get("token_schema_version"),
+            "scratch_registers": model_metadata.get("scratch_registers"),
+        },
+        "invariants": {
+            "same_stage4_model_and_encoder": True,
+            "independent_agent_and_mirror_memory_lanes": True,
+            "memory_initialized_once_per_episode": True,
+            "memory_input_reused_across_logical_substeps": True,
+            "memory_commit_is_last_substep_output": True,
+            "side_specific_tracker_ability_deck_context": True,
+            "legal_actions_recorded_and_checked": True,
+            "finite_substep_and_logical_logprobs": True,
+            "composite_behavior_logprob_is_substep_sum": True,
+            "terminal_return_sign_is_symmetric": True,
+            "mirror_no_memory_legacy_unchanged": True,
+            "no_rope_nd": True,
+            "no_grpo": True,
+            "no_tournament": True,
+        },
+    }
+    write_true_recurrent_outputs(
+        output_dir.parent,
+        manifest,
+        all_agent_records,
+        all_mirror_records,
+    )
+    return manifest
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
@@ -894,6 +1216,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, default=8008)
     parser.add_argument("--experiment", default="AR-009")
+    return parser
+
+
+def build_true_recurrent_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=run_true_recurrent_probe.__doc__)
+    parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+    parser.add_argument("--agent-deck", type=Path, default=DEFAULT_DECK)
+    parser.add_argument("--meta-date", required=True, help="complete YYYY-MM-DD metadata date")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_TRUE_RECURRENT_OUTPUT)
+    parser.add_argument("--games", type=int, default=1, choices=(1, 2))
+    parser.add_argument("--seed", type=int, default=18018)
+    parser.add_argument("--experiment", default="AR-018")
     return parser
 
 
