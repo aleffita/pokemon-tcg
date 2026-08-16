@@ -1,0 +1,16 @@
+
+==================================== ERRORS ====================================
+_________ ERROR collecting scripts/validate/test_bc_train_progress.py __________
+ImportError while importing test module '/Users/alefita/workdir/pokemon-tcg/scripts/validate/test_bc_train_progress.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+scripts/validate/test_bc_train_progress.py:7: in <module>
+    from scripts.bc.bc_train_mlx import (
+E   ImportError: cannot import name '_standard_microbatch_count' from 'scripts.bc.bc_train_mlx' (/Users/alefita/workdir/pokemon-tcg/scripts/bc/bc_train_mlx.py)
+=========================== short test summary info ============================
+ERROR scripts/validate/test_bc_train_progress.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 122.93s (0:02:02)

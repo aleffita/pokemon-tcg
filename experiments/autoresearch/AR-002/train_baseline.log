@@ -1,0 +1,42 @@
+[bc-train-mlx] aux losses active — ko=0.5, prize=0.5, terminal=0.5, return=0.5
+[bc-train-mlx] device=Device(gpu, 0)
+[bc-train-mlx] training days: 2026-08-08(817,534 rows)
+[bc-train-mlx] limited to 2048 rows (max_rows=2048): capped to 12 episode(s), ~2,082 rows
+[bc-train-mlx] episode split: 11 train / 1 val episodes (val_frac=0.1, seed=13971479023478)
+[bc-train-mlx] arch_config validated OK
+[bc-train-mlx] resumed from experiments/autoresearch/root/stage4_root.pkl (epoch 37, val_acc=0.5949, gstep=16553)
+[bc-train-mlx] this run: 1 epoch(s) (global start=38)
+[bc-train-mlx] optimizer phase initialized from zero
+[bc-train-mlx] optimizer routing: Muon=845,568 hidden-matrix params; AdamW=456,583 embedding/head/vector params
+[bc-train-mlx] d128L4h4 +static +split params=1,302,151 N=2082 train=1955 val=127 batch=1024 accum_steps=1
+[bc-train-mlx] global epoch range: 38-38 (local epochs=1)
+[bc-train-mlx] progress plan: TBPTT temporal batches (decisions/chunk<=16, rows/batch<=1,024, groups=22); microbatches/epoch=9; optimizer_steps/epoch=9; run_microbatches=9; run_optimizer_steps=9; global_step=16,553->16,562; scheduler_phase=0/9 (reset)
+[tb] tensorboard logdir: runs/probe_1786852896 (open with: uv run tensorboard --logdir runs)
+[bc-train-mlx] === epoch 38 (run 1/1) ===
+[bc-train-mlx] F.3: TBPTT enabled (decisions/chunk=16, row_budget=1,024, microbatches=9, optimizer_steps=9)
+[bc-train-mlx] training complete: epoch 38, microbatches=9, optimizer_steps=9, gstep=16,562; peak_memory=6.24 GiB; starting validation
+[bc-train-mlx] checkpoint saved: /tmp/ptcg_ar002_baseline/probe_epoch_0038.pkl (epoch 38, val_acc=0.6693)
+[bc-train-mlx] rolling checkpoint: /tmp/ptcg_ar002_baseline/probe_latest.pkl
+[bc-train-mlx] epoch 38 complete: val_acc=0.6693 equiv=0.6693 top3=0.9134 atk=0.5526 ko=0.5806 loss=0.9671 aux_ko_bce=0.2927 aux_prize_mse=0.2797 aux_terminal_bce=0.1129 aux_return_mse=2.6297 t=0m19s run_ETA=0m00s gstep=16,562
+Epoch 38 (run 1… d… 1… epoch comple… Opt: … Loss: 2.02… Aux: 269.4… LR: 1.95e-… 
+[cache-train] hits=123 misses=1 hit_rate=99.2% resident=1 rg (hot=0/transient=1) promotions=123 evictions=0 ssd_hits=0 ssd_spills=0 ssd_resident=0 ssd_bytes=0.00 GiB decoded=1336.3 MiB
+[cache-val] hits=6 misses=1 hit_rate=85.7% resident=1 rg (hot=0/transient=1) promotions=6 evictions=0 ssd_hits=0 ssd_spills=0 ssd_resident=0 ssd_bytes=0.00 GiB decoded=1336.3 MiB
+[bc-train-mlx] RESULT: best_val_acc=0.6693 params=1,302,151 gstep=16562
+       21.51 real         5.98 user        13.70 sys
+          6504742912  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              805391  page reclaims
+                  42  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   1  messages sent
+                   1  messages received
+                   1  signals received
+                2140  voluntary context switches
+              346343  involuntary context switches
+           197763748  instructions retired
+            87031966  cycles elapsed
+            13730296  peak memory footprint

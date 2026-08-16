@@ -1,0 +1,19 @@
+{"columns": 74, "decoded_bytes": 2802502248, "decoded_bytes_per_row": 1346062.5590778098, "etl_s": 0.0, "load_s": 1.865684833144769, "location_scan_s": 0.055320292012766004, "rowgroup_read_s": 1.8024188329000026, "rows_per_s": 1155.1144284539932, "rss_peak_bytes": 7984250880, "selected_rows": 2082, "splits": {"train": {"cache_report": {"bytes_loaded": 1401251124, "evictions": 0, "hits": 0, "misses": 1, "promotions": 0, "resident_hot": 0, "resident_row_groups": 1, "resident_transient": 1, "ssd_bytes": 0, "ssd_hits": 0, "ssd_resident": 0, "ssd_spills": 0}, "read_s": 0.8094626658130437, "rows": 1955, "scan_s": 0.029681249987334013}, "val": {"cache_report": {"bytes_loaded": 1401251124, "evictions": 0, "hits": 0, "misses": 1, "promotions": 0, "resident_hot": 0, "resident_row_groups": 1, "resident_transient": 1, "ssd_bytes": 0, "ssd_hits": 0, "ssd_resident": 0, "ssd_spills": 0}, "read_s": 0.9929561670869589, "rows": 127, "scan_s": 0.02563904202543199}}, "swap": {"sin": 81916056698880, "sout": 12955426668544}, "total_source_to_ready_s": 1.8657279170583934, "train_rows": 1955, "val_rows": 127}
+        2.44 real         2.84 user         0.71 sys
+          7984447488  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              493956  page reclaims
+                  10  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   1  messages sent
+                   1  messages received
+                   1  signals received
+                 578  voluntary context switches
+               11719  involuntary context switches
+           175374676  instructions retired
+            76460404  cycles elapsed
+            13631944  peak memory footprint

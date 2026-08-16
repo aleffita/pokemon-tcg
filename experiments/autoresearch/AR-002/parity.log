@@ -1,0 +1,47 @@
+{
+  "digest_groups": {
+    "auxiliary": {
+      "baseline": "2d221d4bf6c0a4ccc761d5291c7bfd466b48d0fd6f0c33699bedf555dd37a5a8",
+      "candidate": "2d221d4bf6c0a4ccc761d5291c7bfd466b48d0fd6f0c33699bedf555dd37a5a8",
+      "equal": true
+    },
+    "episode_side_order": {
+      "baseline": "5f2ff825dc3e59a28aca4bd729c1db3e86216a06716649ca13c72caf711d4201",
+      "candidate": "5f2ff825dc3e59a28aca4bd729c1db3e86216a06716649ca13c72caf711d4201",
+      "equal": true
+    },
+    "labels_and_masks": {
+      "baseline": "96888bd28c56fd3ad09e4e8b1483a19fc91de3075dccc268888e7e48567d410f",
+      "candidate": "96888bd28c56fd3ad09e4e8b1483a19fc91de3075dccc268888e7e48567d410f",
+      "equal": true
+    },
+    "model_inputs": {
+      "baseline": "e4fb55a8e7c742223241333edfb478b55c5145ccb05a810047344466e75d2202",
+      "candidate": "e4fb55a8e7c742223241333edfb478b55c5145ccb05a810047344466e75d2202",
+      "equal": true
+    }
+  },
+  "mismatch_count": 0,
+  "parity": true,
+  "selected_rows": 2082,
+  "train_rows": 1955,
+  "val_rows": 127
+}
+        3.04 real         3.21 user         1.02 sys
+          9255960576  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              571567  page reclaims
+                  45  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   1  messages sent
+                   1  messages received
+                   1  signals received
+                 119  voluntary context switches
+               11347  involuntary context switches
+           189207514  instructions retired
+            78870484  cycles elapsed
+            13599176  peak memory footprint
