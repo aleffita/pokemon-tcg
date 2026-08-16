@@ -141,7 +141,10 @@ def main():
     p.add_argument(
         "--checkpoint",
         default=None,
-        help="Explicit MLX trainer checkpoint to convert into the PyTorch FP32 bundle",
+        help=(
+            "Explicit MLX checkpoint to convert or PyTorch FP32 candidate "
+            "to validate and package"
+        ),
     )
     p.add_argument(
         "--upload",

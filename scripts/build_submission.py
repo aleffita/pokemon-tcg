@@ -3,7 +3,8 @@
 The competition requires main.py and deck.csv at the root of the archive.
 This script also bundles:
   - rl/ (encoder, policy, etc. — needed by main.py)
-  - the MLX checkpoint converted strictly to a PyTorch FP32 artifact
+  - an MLX checkpoint converted strictly to PyTorch FP32, or an already
+    validated PyTorch FP32 autoresearch candidate
 
 The transient training JSON is deliberately excluded. Architecture, encoder
 schema, would-KO inference settings, and training provenance travel inside the
@@ -14,8 +15,8 @@ The cg/ SDK is NOT bundled — it's already in the Kaggle sandbox via kaggle_env
 This is the packaging implementation, driven by `scripts/submit.py`. Use the
 entry point rather than calling it directly:
 
-    uv run tcg-build --checkpoint model/checkpoint/<model>.pkl
-    uv run tcg-build --checkpoint model/checkpoint/<model>.pkl --upload
+    uv run tcg-build --checkpoint experiments/autoresearch/<run>/candidate.pt
+    uv run tcg-build --checkpoint experiments/autoresearch/<run>/candidate.pt --upload
 """
 
 import argparse
@@ -124,6 +125,25 @@ def _fresh_project_work_dir(name: str) -> str:
     return path
 
 
+def _materialize_submission_checkpoint(
+    source_checkpoint: str,
+    building: str,
+    card_table,
+) -> tuple[dict, str]:
+    """Create the exact portable FP32 artifact that will enter the archive."""
+    from rl.policy_infer_torch import (
+        load_torch_inference_checkpoint,
+        save_torch_inference_checkpoint,
+    )
+
+    if source_checkpoint.endswith(".pt"):
+        _model, metadata = load_torch_inference_checkpoint(source_checkpoint, card_table)
+        shutil.copyfile(source_checkpoint, building)
+        return metadata, "validated PyTorch FP32"
+    metadata = save_torch_inference_checkpoint(source_checkpoint, building, card_table)
+    return metadata, "converted MLX -> PyTorch FP32"
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("-o", "--out", default=None)
@@ -139,8 +159,9 @@ def main() -> None:
         "--checkpoint",
         default=None,
         help=(
-            "Explicit MLX trainer checkpoint to convert. When omitted, use the "
-            "authoritative model/checkpoint directory candidates."
+            "Explicit MLX trainer checkpoint to convert or PyTorch FP32 candidate "
+            "to validate and package. When omitted, use the authoritative "
+            "model/checkpoint directory candidates."
         ),
     )
     p.add_argument("--no-validate", action="store_true", help="Skip agent validation")
@@ -221,7 +242,6 @@ def main() -> None:
     # 5. Convert into the canonical project model directory, then package that
     # exact artifact. The smoke and full paths mirror the real submission flow.
     from rl.encoder.card_features import get_card_table
-    from rl.policy_infer_torch import save_torch_inference_checkpoint
 
     converted = (
         SMOKE_TORCH_CHECKPOINT if args.smoke else MAIN_TORCH_CHECKPOINT
@@ -229,8 +249,10 @@ def main() -> None:
     os.makedirs(os.path.dirname(converted), exist_ok=True)
     building = converted + ".building"
     try:
-        cfg = save_torch_inference_checkpoint(
-            source_checkpoint, building, get_card_table()
+        cfg, checkpoint_action = _materialize_submission_checkpoint(
+            source_checkpoint,
+            building,
+            get_card_table(),
         )
         os.replace(building, converted)
     finally:
@@ -239,7 +261,7 @@ def main() -> None:
     files.append((converted, TORCH_CHECKPOINT_ARC))
     print(
         f"Checkpoint: {os.path.relpath(source_checkpoint, ROOT)} -> "
-        f"{TORCH_CHECKPOINT_ARC} (FP32, nlayers={cfg['nlayers']}, "
+        f"{TORCH_CHECKPOINT_ARC} ({checkpoint_action}, nlayers={cfg['nlayers']}, "
         f"scratch={cfg['scratch_registers']})"
     )
 
