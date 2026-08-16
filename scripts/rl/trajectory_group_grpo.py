@@ -216,6 +216,12 @@ def _learner_logprobs(
     samples: list[dict[str, Any]],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     model_input, masks, memories, actions, behavior_substep = _batch_samples(samples)
+    device = next(model.parameters()).device
+    model_input = {key: value.to(device) for key, value in model_input.items()}
+    masks = masks.to(device)
+    memories = memories.to(device)
+    actions = actions.to(device)
+    behavior_substep = behavior_substep.to(device)
     logits, _values, _memory_out = model.logits_value(model_input, memory_in=memories)
     distribution = _masked_distribution(logits, masks)
     learner_substep = distribution.log_prob(actions)

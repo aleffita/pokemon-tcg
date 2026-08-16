@@ -12,6 +12,7 @@ import shutil
 from typing import Any
 
 import numpy as np
+import torch
 
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import TokenEncoder
@@ -144,6 +145,19 @@ def _pool_deck_paths(pool_dir: Path | None, limit: int) -> list[Path]:
         raise ValueError("--deck-pool-limit must be non-negative")
     paths = sorted(path for path in pool_dir.glob("*.json") if path.is_file())
     return paths[:limit]
+
+
+def _resolve_update_device(requested: str) -> torch.device:
+    if requested == "auto":
+        # Measured on this workload: small recurrent batches are faster on CPU
+        # than MPS because dispatch/transfer dominates. Keep Metal explicit for
+        # future larger batches instead of silently selecting a slower device.
+        return torch.device("cpu")
+    if requested not in {"cpu", "mps"}:
+        raise ValueError("--update-device must be auto, cpu, or mps")
+    if requested == "mps" and not torch.backends.mps.is_available():
+        raise ValueError("--update-device=mps requested but Metal is unavailable")
+    return torch.device(requested)
 
 
 def _write_report(
@@ -287,6 +301,7 @@ def run_ar021(
     deck_pool_dir: Path | None = Path("experiments/decks/swarm/inbox"),
     deck_pool_limit: int = 8,
     swarm_results_dir: Path = Path("experiments/decks/swarm/results"),
+    update_device: str = "auto",
     seed: int = 21021,
     experiment: str = EXPERIMENT,
 ) -> dict[str, Any]:
@@ -442,6 +457,9 @@ def run_ar021(
     sample_manifest_file_hash = sha256_file(sample_manifest_path)
 
     deck_group_advantages, deck_cohorts = deck_relative_group_advantages(collections)
+    resolved_update_device = _resolve_update_device(update_device)
+    model = model.to(resolved_update_device)
+    root_reference = root_reference.to(resolved_update_device)
 
     metrics = sibling_fiber_grpo_update_groups(
         model,
@@ -485,6 +503,8 @@ def run_ar021(
         "prospective_aux_weight": prospective_aux_weight,
         "deck_aux_weight": deck_aux_weight,
         "aux_batch_size": aux_batch_size,
+        "update_device": str(resolved_update_device),
+        "collection_device": "cpu_multiprocess",
         "prospective_targets": "same-turn KO/prize plus future prize margin and terminal outcome",
         "deck_target": "first recurrent state masked deck-card distribution with tied card embeddings",
         "deck_relative_cohorts": deck_cohorts,
@@ -773,6 +793,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("experiments/decks/swarm/results"),
     )
+    parser.add_argument("--update-device", choices=("auto", "cpu", "mps"), default="auto")
     parser.add_argument("--seed", type=int, default=21021)
     parser.add_argument("--experiment", type=str, default=EXPERIMENT)
     return parser
@@ -803,6 +824,7 @@ def main() -> None:
         deck_pool_dir=args.deck_pool_dir,
         deck_pool_limit=args.deck_pool_limit,
         swarm_results_dir=args.swarm_results_dir,
+        update_device=args.update_device,
         seed=args.seed,
         experiment=args.experiment,
     ), indent=2, sort_keys=True))

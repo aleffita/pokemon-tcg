@@ -130,9 +130,14 @@ def _backward_prospective_auxiliary(
     for start in range(0, len(examples), batch_size):
         batch = examples[start : start + batch_size]
         model_input, memories = _batch_aux_samples([item[0] for item in batch])
+        device = next(model.parameters()).device
+        model_input = {key: value.to(device) for key, value in model_input.items()}
+        memories = memories.to(device)
         predictions = model.aux_predictions(model_input, memory_in=memories)
         targets = {
-            name: torch.as_tensor([item[1][name] for item in batch], dtype=torch.float32)
+            name: torch.as_tensor(
+                [item[1][name] for item in batch], dtype=torch.float32, device=device
+            )
             for name in component_sums
         }
         losses = {
@@ -177,9 +182,12 @@ def _backward_deck_reconstruction(
     for start in range(0, len(samples), batch_size):
         batch = samples[start : start + batch_size]
         model_input, memories = _batch_aux_samples(batch)
+        device = next(model.parameters()).device
+        model_input = {key: value.to(device) for key, value in model_input.items()}
+        memories = memories.to(device)
         deck_ids = model_input["self_deck_id"].clone()
         valid = deck_ids > 0
-        columns = torch.arange(deck_ids.shape[1]).unsqueeze(0)
+        columns = torch.arange(deck_ids.shape[1], device=device).unsqueeze(0)
         masked = valid & ((columns + epoch) % 5 == 0)
         model_input["self_deck_id"] = deck_ids.masked_fill(masked, 0)
         if "self_deck_meta_bucket" in model_input:
@@ -1051,7 +1059,7 @@ def sibling_fiber_grpo_update_groups(
     model.train()
     credit = torch.cat(credit_parts)
     branch_mask = torch.cat(branch_mask_parts)
-    active = credit != 0.0
+    active = (credit != 0.0).to(next(model.parameters()).device)
     zero_variance_groups = sum(bool(item["zero_variance"]) for item in group_stats_list)
     epoch_metrics: list[dict[str, Any]] = []
     last_learner = last_behavior = last_ratio = None
@@ -1078,10 +1086,11 @@ def sibling_fiber_grpo_update_groups(
             if not _finite(ratio):
                 raise ValueError("grouped sibling importance ratios are non-finite")
             clipped = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
+            group_credit_device = group_credit.to(learner.device)
             surrogate = torch.minimum(
-                ratio * group_credit.detach(), clipped * group_credit.detach()
+                ratio * group_credit_device.detach(), clipped * group_credit_device.detach()
             )
-            group_active = group_credit != 0.0
+            group_active = group_credit_device != 0.0
             if bool(group_active.any().item()):
                 surrogate_sum = surrogate[group_active].sum()
                 if not _finite(surrogate_sum):
