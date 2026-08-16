@@ -10,8 +10,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import TokenEncoder
+from rl.policy_infer_torch import load_inference_checkpoint
+from rl.ropend import default_ropend_config
 from scripts.rl.ppo_micro_update import (
     build_sample_manifest,
     save_compressed_bundle,
@@ -71,6 +75,67 @@ def _aggregate_hash(values: list[str]) -> str:
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
 
+def _behavior_snapshot_hash(parent_sha256: str, ropend_config: dict[str, Any] | None) -> str:
+    """Identify the exact rollout architecture without changing root provenance."""
+    payload = {
+        "parent_sha256": parent_sha256,
+        "ropend": ropend_config,
+    }
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _load_parent_checkpoint(checkpoint: Path, card_table: Any) -> tuple[Any, dict[str, Any], str]:
+    """Load the immutable root or a provenance-linked descendant candidate."""
+    parent_hash = sha256_file(checkpoint)
+    if parent_hash == APPROVED_STAGE4_ROOT_SHA256:
+        model, metadata = load_stage4(checkpoint, card_table)
+    else:
+        validate_candidate_provenance(
+            checkpoint,
+            approved_root_sha256=APPROVED_STAGE4_ROOT_SHA256,
+        )
+        model, metadata = load_inference_checkpoint(checkpoint, card_table)
+    return model, metadata, parent_hash
+
+
+def deck_relative_group_advantages(
+    collections: list[dict[str, Any]],
+) -> tuple[list[float], list[dict[str, Any]]]:
+    """Pair deck outcomes by opponent/group seed and standardize within cohort."""
+    cohorts: dict[tuple[int, int], list[tuple[int, int, float]]] = {}
+    for collection_index, collection in enumerate(collections):
+        key = (int(collection["matchup_index"]), int(collection["group_index"]))
+        score = float(np.mean(np.asarray(collection["returns"], dtype=np.float64)))
+        cohorts.setdefault(key, []).append(
+            (collection_index, int(collection["learner_deck_index"]), score)
+        )
+
+    advantages = [0.0] * len(collections)
+    summaries: list[dict[str, Any]] = []
+    for (matchup_index, group_index), rows in sorted(cohorts.items()):
+        rows.sort(key=lambda item: item[1])
+        scores = np.asarray([row[2] for row in rows], dtype=np.float64)
+        mean = float(scores.mean())
+        std = float(scores.std(ddof=0))
+        normalized = np.zeros_like(scores) if len(rows) < 2 or std <= 1e-8 else (scores - mean) / std
+        for (collection_index, _deck_index, _score), value in zip(rows, normalized, strict=True):
+            advantages[collection_index] = float(value)
+        summaries.append(
+            {
+                "matchup_index": matchup_index,
+                "group_index": group_index,
+                "learner_deck_indices": [row[1] for row in rows],
+                "scores": scores.tolist(),
+                "mean": mean,
+                "std": std,
+                "zero_variance": bool(len(rows) < 2 or std <= 1e-8),
+                "advantages": normalized.tolist(),
+            }
+        )
+    return advantages, summaries
+
+
 def _write_report(
     output_dir: Path,
     manifest: dict[str, Any],
@@ -84,9 +149,11 @@ Captured on {manifest['captured_at']} from frozen Stage 4 root `{manifest['root_
 ## Result
 
 The collector created multiple exact recurrent sibling bases per matchup.
-Each base selected its own effective K from the legal action set, each matchup
-was normalized independently, and groups were combined in one FP32 policy-only
-optimizer step when relative signal existed. If every group was homogeneous,
+Each base selected its own effective K from the legal action set, launched all K
+continuations concurrently, and combined sibling-relative credit with paired
+inter-deck credit across equal opponent/group seeds. The frozen behavior data
+is reused for multiple FP32 policy-only epochs when relative signal exists. If
+every sibling and deck cohort was homogeneous,
 the update emitted a root-equivalent no-op candidate and preserved the
 zero-variance evidence. The frozen root remains the fallback pending tournament.
 
@@ -109,17 +176,20 @@ zero-variance evidence. The frozen root remains the fallback pending tournament.
 - Effective K is dynamic per base: `min(K_max, legal branch actions)`.
 - Deck and matchup strata normalize returns independently; no group is centered
   against another matchup's terminal distribution.
-- The candidate uses one optimizer step over all signal-bearing groups, while
-  each group's sibling-relative credit remains separate; an all-zero-variance
-  matrix is explicitly fail-closed as a no-op.
+- The candidate uses `{metrics['requested_update_epochs']}` requested optimizer
+  epochs over all signal-bearing groups, while each group's sibling-relative
+  credit remains separate; an all-zero-signal matrix is explicitly fail-closed.
+- All K sibling futures execute simultaneously after the recurrent branch base
+  is fixed; no polling or scheduler participates in process completion.
 - All rollouts run to terminal completion and continuation credit uses discount
   `{metrics['continuation_discount']}` without duplicating conditional substeps.
 - Candidate preflight passed: `{manifest['candidate_preflight']['passed']}`.
 
 ## Limitations and next gate
 
-This is a bounded grouped prospective update, not a strength estimate. The
-collection remains serial and the recurrent learner boundary is detached. Run
+This is a bounded grouped prospective update, not a strength estimate. Groups
+are collected sequentially while sibling games within each group are parallel;
+the recurrent learner boundary is detached. Run
 the controlled same-deck candidate-vs-root gate and the multi-opponent panel
 before interpreting or promoting the candidate.
 
@@ -150,8 +220,8 @@ Captured {manifest['captured_at']}.
 - AR-021 collected `{manifest['group_count']}` exact recurrent sibling groups
   and `{manifest['group_size']}` fibers with effective K
   `{manifest['effective_group_sizes']}`.
-- The grouped FP32 policy-only path applied independent group-relative terminal
-  credit through future continuation with discount
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
   `{metrics['continuation_discount']}`, or emitted a no-op when all groups were
   zero-variance.
 - Candidate: `{manifest['candidate_sha256']}`; preflight passed.
@@ -171,7 +241,7 @@ Captured {manifest['captured_at']}.
 
 - Collection: `{manifest['collection_seconds']}` s,
   `{manifest['collection_decisions_per_second']}` decisions/s.
-- Update: `{metrics['update_seconds']}` s; one optimizer step.
+- Update: `{metrics['update_seconds']}` s; `{metrics['optimizer_steps']}` optimizer steps.
 - Credited logical actions: `{metrics['credited_logical_actions']}`.
 - Parameter L2 delta: `{metrics['parameter_l2']}`;
   gradient norm `{metrics['gradient_norm']}`.
@@ -196,6 +266,11 @@ def run_ar021(
     groups_per_matchup: int = 2,
     k_max: int = 4,
     branch_uniform_mix: float = 0.0,
+    update_epochs: int = 4,
+    deck_relative_weight: float = 0.5,
+    learning_rate: float = 5e-6,
+    ropend: bool = False,
+    ropend_init_scale: float = 0.0,
     seed: int = 21021,
     experiment: str = EXPERIMENT,
 ) -> dict[str, Any]:
@@ -205,6 +280,12 @@ def run_ar021(
         raise ValueError("--k-max must be at least two")
     if not 0.0 <= branch_uniform_mix <= 1.0:
         raise ValueError("--branch-uniform-mix must be between zero and one")
+    if update_epochs < 1:
+        raise ValueError("--update-epochs must be at least one")
+    if not np.isfinite(deck_relative_weight) or deck_relative_weight < 0.0:
+        raise ValueError("--deck-relative-weight must be finite and non-negative")
+    if not np.isfinite(learning_rate) or learning_rate <= 0.0:
+        raise ValueError("--learning-rate must be finite and positive")
     validate_meta_date(meta_date)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logs").mkdir(parents=True, exist_ok=True)
@@ -222,11 +303,23 @@ def run_ar021(
     aggregate_content_hash = _aggregate_hash(learner_content_hashes)
     aggregate_source_hash = _aggregate_hash(learner_source_hashes)
     card_table = get_card_table()
-    model, metadata = load_stage4(checkpoint, card_table)
+    model, metadata, parent_hash = _load_parent_checkpoint(checkpoint, card_table)
+    existing_ropend = getattr(model, "ropend_config", None)
+    if ropend and existing_ropend is None:
+        canonical_ropend = model.enable_ropend(
+            default_ropend_config(init_scale=ropend_init_scale)
+        )
+        metadata = {**metadata, "ropend": canonical_ropend}
+    elif existing_ropend is not None:
+        canonical_ropend = dict(existing_ropend)
+        metadata = {**metadata, "ropend": canonical_ropend}
+    else:
+        canonical_ropend = None
     model = model.float()
     root_reference = copy.deepcopy(model).eval()
     encoder = DateBoundEncoder(TokenEncoder(card_table), meta_date)
-    root_hash = sha256_file(checkpoint)
+    root_hash = APPROVED_STAGE4_ROOT_SHA256
+    behavior_hash = _behavior_snapshot_hash(parent_hash, canonical_ropend)
     opponent_paths = opponent_deck_paths or [deck_path]
     if opponent_agent_paths is not None and len(opponent_agent_paths) != len(opponent_paths):
         raise ValueError("--opponent-agent must be repeated once per --opponent-deck")
@@ -241,7 +334,6 @@ def run_ar021(
             for group_index in range(groups_per_matchup):
                 group_seed = (
                     seed
-                    + learner_index * 10_000_000
                     + matchup_index * 100_000
                     + group_index * 1_000
                 )
@@ -266,7 +358,7 @@ def run_ar021(
                     deck=deck,
                     deck_content_hash=deck_hash,
                     deck_source_file_hash=deck_source_hash,
-                    model_hash=root_hash,
+                    model_hash=behavior_hash,
                     opponent_deck=opponent_deck,
                     opponent_deck_content_hash=opponent_hash,
                     opponent_deck_source_file_hash=opponent_source_hash,
@@ -315,14 +407,19 @@ def run_ar021(
     bundle_hash = save_compressed_bundle(trajectory_bundle_path, provenance_bundle, sample_manifest)
     sample_manifest_file_hash = sha256_file(sample_manifest_path)
 
+    deck_group_advantages, deck_cohorts = deck_relative_group_advantages(collections)
+
     metrics = sibling_fiber_grpo_update_groups(
         model,
         root_reference,
         grouped_trajectories,
         clip_epsilon=0.2,
-        learning_rate=1e-5,
+        learning_rate=learning_rate,
         credit_scope="branch_and_continuation",
         continuation_discount=0.97,
+        update_epochs=update_epochs,
+        deck_group_advantages=deck_group_advantages,
+        deck_relative_weight=deck_relative_weight,
     )
     config = {
         "algorithm": "sibling_fiber_grpo_grouped",
@@ -342,16 +439,24 @@ def run_ar021(
         "group_count": len(grouped_trajectories),
         "effective_group_sizes": [collection["games"] for collection in collections],
         "clip_epsilon": 0.2,
-        "learning_rate": 1e-5,
+        "learning_rate": learning_rate,
+        "update_epochs": update_epochs,
+        "deck_relative_weight": deck_relative_weight,
+        "deck_relative_cohorts": deck_cohorts,
         "advantage_epsilon": 1e-8,
         "precision": "FP32",
         "value_loss": 0.0,
         "selfplay_mode": "current_vs_current_true_recurrent_shared_base",
-        "behavior_snapshot": "frozen Stage4 root",
+        "root_checkpoint": "frozen Stage4 root",
+        "parent_checkpoint": str(checkpoint),
+        "parent_sha256": parent_hash,
+        "behavior_snapshot_sha256": behavior_hash,
+        "ropend": canonical_ropend,
         "credit_scope": "branch_and_continuation",
         "continuation_discount": 0.97,
-        "matchup_normalization": "independent_group_relative_returns",
-        "optimizer_aggregation": "one_step_over_independent_groups_or_fail_closed_noop",
+        "matchup_normalization": "sibling_relative_plus_paired_inter_deck_cohort",
+        "optimizer_aggregation": "multi_epoch_over_frozen_behavior_groups_or_fail_closed_noop",
+        "parallel_collection": "all_dynamic_K sibling continuations execute concurrently",
         "rollout_storage": "compact bounded provenance bundle persisted adjacent to candidate",
     }
     if any(path is not None for path in agent_paths):
@@ -394,8 +499,12 @@ def run_ar021(
         "experiment": experiment,
         "captured_at": captured_at,
         "code_commit": _git_commit(),
-        "root_checkpoint": str(checkpoint),
+        "root_checkpoint": "experiments/autoresearch/root/stage4_root.pkl",
         "root_sha256": root_hash,
+        "parent_checkpoint": str(checkpoint),
+        "parent_sha256": parent_hash,
+        "behavior_snapshot_sha256": behavior_hash,
+        "ropend": canonical_ropend,
         "candidate": str(candidate_path),
         "candidate_sha256": candidate_hash,
         "candidate_bytes": candidate_path.stat().st_size,
@@ -435,6 +544,8 @@ def run_ar021(
         "return_mean": [item["return_mean"] for item in return_statistics],
         "return_std": [item["return_std"] for item in return_statistics],
         "returns_advantages": [item["advantages"] for item in return_statistics],
+        "deck_group_advantages": deck_group_advantages,
+        "deck_relative_cohorts": deck_cohorts,
         "logical_decisions": all_decisions,
         "substeps": all_substeps,
         "collection_seconds": round(all_collections_seconds, 6),
@@ -473,7 +584,9 @@ def run_ar021(
         "rollout_persistence": "compact bounded provenance bundle persisted; no unbounded rollout buffer",
         "tournament": {"status": "pending"},
         "invariants": {
-            "behavior_snapshot_is_frozen_stage4_root": root_hash == APPROVED_STAGE4_ROOT_SHA256,
+            "root_provenance_is_frozen_stage4": root_hash == APPROVED_STAGE4_ROOT_SHA256,
+            "parent_is_root_or_valid_descendant": True,
+            "paired_seed_across_learner_decks": True,
             "shared_branch_base_per_group": True,
             "distinct_legal_branch_actions_per_group": True,
             "common_seed_per_group": True,
@@ -488,7 +601,12 @@ def run_ar021(
             "opponent_policy_stratification": any(path is not None for path in agent_paths),
             "learner_deck_stratification": len(learner_decks) > 1,
             "independent_group_normalization": True,
-            "single_grouped_optimizer_step": metrics["optimizer_steps"] == 1,
+            "requested_multi_epoch_update": update_epochs > 1,
+            "optimizer_steps_match_requested_epochs": metrics["optimizer_steps"] in {0, update_epochs},
+            "inter_deck_relative_credit": len(learner_decks) > 1 and deck_relative_weight > 0.0,
+            "parallel_sibling_games": all(
+                bool(collection.get("parallel_fibers")) for collection in collections
+            ),
             "all_groups_zero_variance": metrics["zero_variance_groups"] == len(grouped_trajectories),
             "no_signal_fail_closed": metrics.get("no_update_reason") == "all_groups_zero_variance",
             "candidate_preflight_passed": True,
@@ -560,6 +678,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Mix uniform legal-action mass into sibling branch sampling.",
     )
+    parser.add_argument("--update-epochs", type=int, default=4)
+    parser.add_argument("--deck-relative-weight", type=float, default=0.5)
+    parser.add_argument("--learning-rate", type=float, default=5e-6)
+    parser.add_argument("--ropend", action="store_true")
+    parser.add_argument("--ropend-init-scale", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=21021)
     parser.add_argument("--experiment", type=str, default=EXPERIMENT)
     return parser
@@ -579,6 +702,11 @@ def main() -> None:
         groups_per_matchup=args.groups_per_matchup,
         k_max=args.k_max,
         branch_uniform_mix=args.branch_uniform_mix,
+        update_epochs=args.update_epochs,
+        deck_relative_weight=args.deck_relative_weight,
+        learning_rate=args.learning_rate,
+        ropend=args.ropend,
+        ropend_init_scale=args.ropend_init_scale,
         seed=args.seed,
         experiment=args.experiment,
     ), indent=2, sort_keys=True))

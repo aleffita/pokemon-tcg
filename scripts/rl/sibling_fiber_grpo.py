@@ -310,7 +310,7 @@ def _probe_branch_fibers(
     )
 
 
-def _collect_forked_fiber(
+def _start_forked_fiber(
     *,
     env: CabtEnv,
     model: torch.nn.Module,
@@ -324,8 +324,8 @@ def _collect_forked_fiber(
     base_observation: dict[str, np.ndarray],
     base_reset_info: dict[str, Any],
     opponent_mode: str,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Continue one exact engine snapshot in a fork and return its trajectory."""
+) -> tuple[int, int]:
+    """Start one exact-snapshot continuation and return ``(pid, read_fd)``."""
     if not hasattr(os, "fork"):
         raise RuntimeError("AR-020 exact sibling snapshots require os.fork on this platform")
     read_fd, write_fd = os.pipe()
@@ -368,6 +368,11 @@ def _collect_forked_fiber(
         finally:
             os._exit(0)
     os.close(write_fd)
+    return pid, read_fd
+
+
+def _finish_forked_fiber(pid: int, read_fd: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Block on one already-running continuation and reap it exactly once."""
     try:
         with os.fdopen(read_fd, "rb") as handle:
             payload = pickle.load(handle)
@@ -382,6 +387,54 @@ def _collect_forked_fiber(
             f"forked sibling worker failed: {payload.get('error')}\n{payload.get('traceback', '')}"
         )
     return payload["rows"], payload["bundle"]
+
+
+def _collect_forked_fiber(
+    **kwargs: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Backward-compatible synchronous wrapper around the split fork API."""
+    pid, read_fd = _start_forked_fiber(**kwargs)
+    return _finish_forked_fiber(pid, read_fd)
+
+
+def _collect_forked_fibers(
+    *,
+    actions: list[int],
+    episode_ids: list[str],
+    **shared: Any,
+) -> list[tuple[list[dict[str, Any]], list[dict[str, Any]]]]:
+    """Run all sibling futures concurrently from the same copy-on-write base."""
+    if len(actions) != len(episode_ids):
+        raise ValueError("parallel sibling actions and episode ids must align")
+    jobs: list[tuple[int, int]] = []
+    try:
+        for action, episode_id in zip(actions, episode_ids, strict=True):
+            jobs.append(
+                _start_forked_fiber(
+                    action=action,
+                    episode_id=episode_id,
+                    **shared,
+                )
+            )
+    except BaseException:
+        for pid, read_fd in jobs:
+            try:
+                os.close(read_fd)
+            except OSError:
+                pass
+            os.waitpid(pid, 0)
+        raise
+
+    results: list[tuple[list[dict[str, Any]], list[dict[str, Any]]]] = []
+    errors: list[BaseException] = []
+    for pid, read_fd in jobs:
+        try:
+            results.append(_finish_forked_fiber(pid, read_fd))
+        except BaseException as exc:
+            errors.append(exc)
+    if errors:
+        raise RuntimeError(f"parallel sibling collection failed: {errors[0]}") from errors[0]
+    return results
 
 
 def collect_sibling_fiber_group(
@@ -427,26 +480,30 @@ def collect_sibling_fiber_group(
     trajectories: list[dict[str, Any]] = []
     started = time.perf_counter()
     try:
-        for fiber_index, action in enumerate(actions):
-            episode_id = (
+        episode_ids = [
+            (
                 f"{episode_prefix}-fiber-{fiber_index:03d}"
                 if episode_prefix
                 else f"sibling-fiber-{fiber_index:03d}"
             )
-            rows, bundle = _collect_forked_fiber(
-                env=base_env,
-                model=model,
-                encoder=encoder,
-                episode_id=episode_id,
-                action=action,
-                reset_seed=collection_seed,
-                deck_content_hash=deck_content_hash,
-                deck_source_file_hash=deck_source_file_hash,
-                model_hash=model_hash,
-                base_observation=base_observation,
-                base_reset_info=base_reset_info,
-                opponent_mode=resolved_opponent_mode,
-            )
+            for fiber_index in range(len(actions))
+        ]
+        fiber_payloads = _collect_forked_fibers(
+            actions=actions,
+            episode_ids=episode_ids,
+            env=base_env,
+            model=model,
+            encoder=encoder,
+            reset_seed=collection_seed,
+            deck_content_hash=deck_content_hash,
+            deck_source_file_hash=deck_source_file_hash,
+            model_hash=model_hash,
+            base_observation=base_observation,
+            base_reset_info=base_reset_info,
+            opponent_mode=resolved_opponent_mode,
+        )
+        for fiber_index, (action, payload) in enumerate(zip(actions, fiber_payloads, strict=True)):
+            rows, bundle = payload
             trajectory = trajectory_from_bundle(rows, bundle)
             observed_base = {
                 "action_mask_sha256": rows[0]["legal_action_mask_digest"],
@@ -486,6 +543,8 @@ def collect_sibling_fiber_group(
         "collection_seed": collection_seed,
         "probe_seed_offset": int(base["probe_seed_offset"]),
         "collection_seconds": elapsed,
+        "parallel_fibers": True,
+        "parallel_workers": effective_games,
         "games_per_second": effective_games / elapsed if elapsed else None,
         "logical_decisions": decisions,
         "substeps": substeps,
@@ -674,14 +733,18 @@ def sibling_fiber_grpo_update_groups(
     advantage_epsilon: float = 1e-8,
     credit_scope: str = "branch_and_continuation",
     continuation_discount: float = 0.97,
+    update_epochs: int = 1,
+    deck_group_advantages: list[float] | None = None,
+    deck_relative_weight: float = 0.0,
 ) -> dict[str, Any]:
-    """Apply one optimizer step over independent sibling groups.
+    """Apply repeated clipped updates over sibling and inter-deck credit.
 
     Each group is normalized against its own terminal-return distribution and
     validated against its own exact recurrent base. The groups are only
-    concatenated after those per-base checks, so deck or matchup strata never
-    center their returns against one another. A single optimizer step then
-    aggregates the credited logical decisions from all groups.
+    combined after those per-base checks. ``deck_group_advantages`` adds a
+    second group-relative signal computed between learner decks under the same
+    opponent and paired seed; it never mixes observations or legal masks from
+    different bases. Behavior logprobs remain frozen across every epoch.
     """
     if not trajectory_groups:
         raise ValueError("sibling-fiber GRPO requires at least one trajectory group")
@@ -693,9 +756,17 @@ def sibling_fiber_grpo_update_groups(
         raise ValueError("credit_scope must be branch_only or branch_and_continuation")
     if not 0.0 < continuation_discount <= 1.0 or not math.isfinite(continuation_discount):
         raise ValueError("continuation_discount must be finite and in (0, 1]")
+    if update_epochs < 1:
+        raise ValueError("update_epochs must be at least one")
+    if not math.isfinite(deck_relative_weight) or deck_relative_weight < 0.0:
+        raise ValueError("deck_relative_weight must be finite and non-negative")
+    if deck_group_advantages is None:
+        deck_group_advantages = [0.0] * len(trajectory_groups)
+    if len(deck_group_advantages) != len(trajectory_groups):
+        raise ValueError("deck_group_advantages must align one-to-one with trajectory groups")
+    if not all(math.isfinite(float(value)) for value in deck_group_advantages):
+        raise ValueError("deck_group_advantages must be finite")
 
-    learner_parts: list[torch.Tensor] = []
-    behavior_parts: list[torch.Tensor] = []
     credit_parts: list[torch.Tensor] = []
     branch_mask_parts: list[torch.Tensor] = []
     group_stats_list: list[dict[str, Any]] = []
@@ -703,10 +774,12 @@ def sibling_fiber_grpo_update_groups(
         tuple[list[dict[str, Any]], torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]
     ] = []
     total_active = 0
-    for trajectories in trajectory_groups:
+    for group_index, trajectories in enumerate(trajectory_groups):
         _validate_group(trajectories)
         returns = [float(item["terminal_return"]) for item in trajectories]
         advantages, group_stats = normalize_group_returns(returns, epsilon=advantage_epsilon)
+        deck_advantage = float(deck_group_advantages[group_index])
+        combined_advantages = advantages + deck_relative_weight * deck_advantage
         expected_mapping = torch.cat(
             [
                 torch.full((len(item["decisions"]),), index, dtype=torch.long)
@@ -725,7 +798,7 @@ def sibling_fiber_grpo_update_groups(
                     else continuation_discount**decision_index
                 )
         branch_mask = torch.as_tensor(branch_values, dtype=torch.bool)
-        credit = advantages[expected_mapping] * torch.as_tensor(
+        credit = combined_advantages[expected_mapping] * torch.as_tensor(
             discount_values, dtype=torch.float32
         )
         if credit_scope == "branch_only":
@@ -734,7 +807,14 @@ def sibling_fiber_grpo_update_groups(
         total_active += int(active.sum().item())
         credit_parts.append(credit)
         branch_mask_parts.append(branch_mask)
-        group_stats_list.append(group_stats)
+        group_stats_list.append(
+            {
+                **group_stats,
+                "deck_group_advantage": deck_advantage,
+                "deck_relative_weight": deck_relative_weight,
+                "combined_advantages": combined_advantages.tolist(),
+            }
+        )
         prepared_groups.append((trajectories, expected_mapping, branch_mask, credit, group_stats))
 
     if total_active == 0:
@@ -765,6 +845,8 @@ def sibling_fiber_grpo_update_groups(
             "continuation_credit": credit_scope == "branch_and_continuation",
             "value_loss": 0.0,
             "optimizer_steps": 0,
+            "requested_update_epochs": update_epochs,
+            "epoch_metrics": [],
             "update_seconds": 0.0,
             "group_count": len(trajectory_groups),
             "group_sizes": [len(group) for group in trajectory_groups],
@@ -781,6 +863,9 @@ def sibling_fiber_grpo_update_groups(
             "continuation_logical_decisions": continuation_logical_decisions,
             "credited_logical_actions": 0,
             "continuation_credit_sum": 0.0,
+            "deck_relative_credit": deck_relative_weight > 0.0,
+            "deck_relative_weight": deck_relative_weight,
+            "deck_group_advantages": [float(value) for value in deck_group_advantages],
             "loss": 0.0,
             "policy_loss": 0.0,
             "gradient_norm": 0.0,
@@ -795,58 +880,95 @@ def sibling_fiber_grpo_update_groups(
 
     started = time.perf_counter()
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    optimizer.zero_grad(set_to_none=True)
     model.train()
-    surrogate_sums: list[torch.Tensor] = []
-    for trajectories, expected_mapping, branch_mask, credit, _group_stats in prepared_groups:
-        # Recompute one group at a time so the update never retains the full
-        # multi-thousand-decision autograd graph. Gradients are accumulated
-        # against the same global active-decision denominator, then applied by
-        # exactly one optimizer step below.
-        learner, behavior, decision_mapping, _substep_mapping = recompute_logprobs_by_decision(
-            model, trajectories
-        )
-        if not torch.equal(decision_mapping, expected_mapping):
-            raise AssertionError("sibling logical decision mapping changed during recomputation")
-        ratio = torch.exp(learner - behavior.detach())
-        if not _finite(ratio):
-            raise ValueError("grouped sibling importance ratios are non-finite")
-        clipped = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
-        surrogate = torch.minimum(ratio * credit.detach(), clipped * credit.detach())
-        active = credit != 0.0
-        if bool(active.any().item()):
-            surrogate_sum = surrogate[active].sum()
-            if not _finite(surrogate_sum):
-                raise ValueError("grouped sibling policy loss is non-finite")
-            (-(surrogate_sum / float(total_active))).backward()
-            surrogate_sums.append(surrogate_sum.detach())
-        else:
-            surrogate_sums.append(torch.tensor(0.0))
-        learner_parts.append(learner.detach())
-        behavior_parts.append(behavior.detach())
-        del learner, behavior, decision_mapping, _substep_mapping, ratio, clipped, surrogate
-
-    learner = torch.cat(learner_parts)
-    behavior = torch.cat(behavior_parts)
     credit = torch.cat(credit_parts)
     branch_mask = torch.cat(branch_mask_parts)
-    ratio = torch.exp(learner - behavior)
-    if not _finite(ratio):
-        raise ValueError("grouped sibling importance ratios are non-finite")
     active = credit != 0.0
     if not bool(active.any().item()):
         raise ValueError("sibling update has no credited logical decisions")
-    surrogate_total = torch.stack(surrogate_sums).sum()
-    policy_loss_value = -float(surrogate_total.item()) / float(total_active)
     zero_variance_groups = sum(bool(item["zero_variance"]) for item in group_stats_list)
-    gradient_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    if not _finite(gradient_norm):
-        raise ValueError("sibling-fiber gradient norm is non-finite")
-    optimizer.step()
+    epoch_metrics: list[dict[str, Any]] = []
+    last_learner = last_behavior = last_ratio = None
+    last_policy_loss = 0.0
+    last_gradient_norm = torch.tensor(0.0)
+    for epoch in range(update_epochs):
+        optimizer.zero_grad(set_to_none=True)
+        learner_parts: list[torch.Tensor] = []
+        behavior_parts: list[torch.Tensor] = []
+        surrogate_sums: list[torch.Tensor] = []
+        for trajectories, expected_mapping, _branch_mask, group_credit, _group_stats in prepared_groups:
+            # Recompute one group at a time so multi-epoch training never
+            # retains the full rollout graph. The stored behavior logprobs are
+            # immutable; only learner logprobs change across epochs.
+            learner, behavior, decision_mapping, _substep_mapping = recompute_logprobs_by_decision(
+                model, trajectories
+            )
+            if not torch.equal(decision_mapping, expected_mapping):
+                raise AssertionError("sibling logical decision mapping changed during recomputation")
+            ratio = torch.exp(learner - behavior.detach())
+            if not _finite(ratio):
+                raise ValueError("grouped sibling importance ratios are non-finite")
+            clipped = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
+            surrogate = torch.minimum(
+                ratio * group_credit.detach(), clipped * group_credit.detach()
+            )
+            group_active = group_credit != 0.0
+            if bool(group_active.any().item()):
+                surrogate_sum = surrogate[group_active].sum()
+                if not _finite(surrogate_sum):
+                    raise ValueError("grouped sibling policy loss is non-finite")
+                (-(surrogate_sum / float(total_active))).backward()
+                surrogate_sums.append(surrogate_sum.detach())
+            else:
+                surrogate_sums.append(torch.tensor(0.0))
+            learner_parts.append(learner.detach())
+            behavior_parts.append(behavior.detach())
+            del learner, behavior, decision_mapping, _substep_mapping, ratio, clipped, surrogate
+
+        learner_epoch = torch.cat(learner_parts)
+        behavior_epoch = torch.cat(behavior_parts)
+        ratio_epoch = torch.exp(learner_epoch - behavior_epoch)
+        if epoch == 0:
+            identity_error = float((ratio_epoch[active] - 1.0).abs().max().item())
+            if identity_error > 5e-5:
+                raise ValueError(
+                    f"initial learner/behavior ratio is not identity: max_error={identity_error}"
+                )
+        surrogate_total = torch.stack(surrogate_sums).sum()
+        policy_loss_value = -float(surrogate_total.item()) / float(total_active)
+        gradient_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        if not _finite(gradient_norm):
+            raise ValueError("sibling-fiber gradient norm is non-finite")
+        optimizer.step()
+        epoch_metrics.append(
+            {
+                "epoch": epoch + 1,
+                "policy_loss": policy_loss_value,
+                "gradient_norm": float(gradient_norm.detach().item()),
+                "ratio_mean_pre_step": float(ratio_epoch[active].mean().item()),
+                "ratio_min_pre_step": float(ratio_epoch[active].min().item()),
+                "ratio_max_pre_step": float(ratio_epoch[active].max().item()),
+                "clip_fraction_pre_step": float(
+                    (
+                        (ratio_epoch[active] < 1.0 - clip_epsilon)
+                        | (ratio_epoch[active] > 1.0 + clip_epsilon)
+                    ).to(torch.float32).mean().item()
+                ),
+                "approx_kl_behavior_pre_step": float(
+                    (behavior_epoch[active] - learner_epoch[active]).mean().item()
+                ),
+                **_parameter_delta(model, root_reference),
+            }
+        )
+        last_learner, last_behavior, last_ratio = learner_epoch, behavior_epoch, ratio_epoch
+        last_policy_loss = policy_loss_value
+        last_gradient_norm = gradient_norm.detach()
+
     model.eval()
-    optimizer_steps = 1
+    optimizer_steps = update_epochs
     update_seconds = time.perf_counter() - started
-    loss_value = policy_loss_value
+    assert last_learner is not None and last_behavior is not None and last_ratio is not None
+    loss_value = last_policy_loss
     metrics: dict[str, Any] = {
         "algorithm": "sibling_fiber_grpo_grouped",
         "precision": "FP32",
@@ -855,6 +977,8 @@ def sibling_fiber_grpo_update_groups(
         "continuation_credit": credit_scope == "branch_and_continuation",
         "value_loss": 0.0,
         "optimizer_steps": optimizer_steps,
+        "requested_update_epochs": update_epochs,
+        "epoch_metrics": epoch_metrics,
         "update_seconds": update_seconds,
         "group_count": len(trajectory_groups),
         "group_sizes": [len(group) for group in trajectory_groups],
@@ -866,24 +990,35 @@ def sibling_fiber_grpo_update_groups(
         "return_std": float(np.mean([item["return_std"] for item in group_stats_list])),
         "credit_scope": credit_scope,
         "continuation_discount": continuation_discount,
-        "logical_decisions": int(learner.numel()),
+        "logical_decisions": int(last_learner.numel()),
         "branch_logical_decisions": int(branch_mask.sum().item()),
         "continuation_logical_decisions": int((~branch_mask).sum().item()),
         "credited_logical_actions": int(active.sum().item()),
         "continuation_credit_sum": float(credit[~branch_mask].sum().item()),
+        "deck_relative_credit": deck_relative_weight > 0.0,
+        "deck_relative_weight": deck_relative_weight,
+        "deck_group_advantages": [float(value) for value in deck_group_advantages],
         "loss": loss_value,
-        "policy_loss": policy_loss_value,
-        "gradient_norm": float(gradient_norm.detach().item()),
-        "ratio_mean": float(ratio.detach()[active].mean().item()),
-        "ratio_min": float(ratio.detach()[active].min().item()),
-        "ratio_max": float(ratio.detach()[active].max().item()),
+        "policy_loss": last_policy_loss,
+        "gradient_norm": float(last_gradient_norm.item()),
+        "ratio_mean": float(last_ratio[active].mean().item()),
+        "ratio_min": float(last_ratio[active].min().item()),
+        "ratio_max": float(last_ratio[active].max().item()),
         "clip_fraction": float(
-            ((ratio.detach()[active] < 1.0 - clip_epsilon) | (ratio.detach()[active] > 1.0 + clip_epsilon))
+            ((last_ratio[active] < 1.0 - clip_epsilon) | (last_ratio[active] > 1.0 + clip_epsilon))
             .to(torch.float32)
             .mean()
             .item()
         ),
-        "approx_kl_behavior": float((behavior[active] - learner[active]).mean().item()),
+        "approx_kl_behavior": float(
+            (last_behavior[active] - last_learner[active]).mean().item()
+        ),
+        "initial_ratio_max_abs_error": float(
+            max(
+                abs(epoch_metrics[0]["ratio_min_pre_step"] - 1.0),
+                abs(epoch_metrics[0]["ratio_max_pre_step"] - 1.0),
+            )
+        ),
         **_parameter_delta(model, root_reference),
     }
     if not all(_finite(value) for value in metrics.values() if isinstance(value, (float, int))):

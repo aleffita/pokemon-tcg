@@ -155,6 +155,46 @@ def test_grouped_update_normalizes_each_dynamic_base_once() -> None:
     assert all(torch.isfinite(value).all() for value in model.parameters())
 
 
+def test_grouped_update_reuses_frozen_behavior_for_multiple_epochs() -> None:
+    model = _ToyPolicy()
+    root = copy.deepcopy(model)
+    groups = [[_trajectory(model, 0, 1.0), _trajectory(model, 1, -1.0)]]
+    metrics = sibling_fiber_grpo_update_groups(
+        model,
+        root,
+        groups,
+        learning_rate=1e-2,
+        update_epochs=4,
+    )
+    assert metrics["optimizer_steps"] == 4
+    assert len(metrics["epoch_metrics"]) == 4
+    assert metrics["initial_ratio_max_abs_error"] < 1e-6
+    assert metrics["epoch_metrics"][1]["ratio_max_pre_step"] != pytest.approx(1.0)
+
+
+def test_deck_relative_credit_trains_when_sibling_groups_are_homogeneous() -> None:
+    model = _ToyPolicy()
+    root = copy.deepcopy(model)
+    groups = [
+        [_trajectory(model, 0, 1.0), _trajectory(model, 1, 1.0)],
+        [_trajectory(model, 2, -1.0), _trajectory(model, 0, -1.0)],
+    ]
+    metrics = sibling_fiber_grpo_update_groups(
+        model,
+        root,
+        groups,
+        learning_rate=1e-2,
+        update_epochs=3,
+        deck_group_advantages=[1.0, -1.0],
+        deck_relative_weight=0.5,
+    )
+    assert metrics["optimizer_steps"] == 3
+    assert metrics["zero_variance_groups"] == 2
+    assert metrics["deck_relative_credit"] is True
+    assert metrics["deck_group_advantages"] == [1.0, -1.0]
+    assert metrics["credited_logical_actions"] == 8
+
+
 def test_grouped_all_zero_variance_emits_root_equivalent_noop() -> None:
     model = _ToyPolicy()
     root = copy.deepcopy(model)
