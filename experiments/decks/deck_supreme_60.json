@@ -1,0 +1,399 @@
+{
+  "deck_name": "Deck Supreme 60 \u2014 Teal Mask Ogerpon ex / Turbo Acceleration & Psychic Counter Hybrid",
+  "archetype": "Teal Mask Ogerpon ex / Grass Turbo Ramp / Anti-Meta Control",
+  "card_count": 60,
+  "card_list": [
+    {
+      "id": 96,
+      "name": "Teal Mask Ogerpon ex",
+      "category": "Pok\u00e9mon",
+      "stage": "Basic Pok\u00e9mon",
+      "type": "{G}",
+      "hp": 210,
+      "rule": "Pok\u00e9mon ex",
+      "quantity": 4,
+      "role": "Primary Attacker & Grass Engine (Teal Dance energy acceleration and draw; Myriad Leaf Shower scaling attack)"
+    },
+    {
+      "id": 920,
+      "name": "Tapu Bulu",
+      "category": "Pok\u00e9mon",
+      "stage": "Basic Pok\u00e9mon",
+      "type": "{G}",
+      "hp": 140,
+      "rule": null,
+      "quantity": 2,
+      "role": "Single-Prize Heavy Attacker (Wood Hammer 220 dmg; bypasses ex-immunity walls like Crustle and breaks 2-prize trade)"
+    },
+    {
+      "id": 112,
+      "name": "Munkidori",
+      "category": "Pok\u00e9mon",
+      "stage": "Basic Pok\u00e9mon",
+      "type": "{P}",
+      "hp": 110,
+      "rule": null,
+      "quantity": 2,
+      "role": "Psychic Counter & Precision Damage Sniping (Adrena-Brain moves 30 damage counters with Dark energy; Psychic pressure vs Mega Lucario ex)"
+    },
+    {
+      "id": 140,
+      "name": "Fezandipiti ex",
+      "category": "Pok\u00e9mon",
+      "stage": "Basic Pok\u00e9mon",
+      "type": "{D}",
+      "hp": 210,
+      "rule": "Pok\u00e9mon ex",
+      "quantity": 1,
+      "role": "Hand Disruption Recovery Anchor (Flip the Script draws 3 cards on turn following friendly KO; counters Judge/Unfair Stamp)"
+    },
+    {
+      "id": 184,
+      "name": "Latias ex",
+      "category": "Pok\u00e9mon",
+      "stage": "Basic Pok\u00e9mon",
+      "type": "{P}",
+      "hp": 210,
+      "rule": "Pok\u00e9mon ex",
+      "quantity": 1,
+      "role": "Universal Mobility & Retreat Unlock Engine (Skyliner grants free retreat to all Basic Pok\u00e9mon; neutralizes Boss trapping & Nighttime Mine)"
+    },
+    {
+      "id": 235,
+      "name": "Budew",
+      "category": "Pok\u00e9mon",
+      "stage": "Basic Pok\u00e9mon",
+      "type": "{G}",
+      "hp": 30,
+      "rule": null,
+      "quantity": 1,
+      "role": "Early Setup & Zero-Cost Stall Pivot (Searchable via Buddy-Buddy Poffin and Bug Catching Set; safe opening pivot)"
+    },
+    {
+      "id": 1094,
+      "name": "Bug Catching Set",
+      "category": "Item",
+      "stage": "Item",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 4,
+      "role": "Grass Resource Filter & Accelerator (Looks top 7 cards for up to 2 Grass Pok\u00e9mon and/or Basic Grass Energy)"
+    },
+    {
+      "id": 1152,
+      "name": "Pok\u00e9 Pad",
+      "category": "Item",
+      "stage": "Item",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 4,
+      "role": "Trainer & Item Digging Engine (Deep deck digging to ensure unbroken chain of search and draw supporters)"
+    },
+    {
+      "id": 1121,
+      "name": "Ultra Ball",
+      "category": "Item",
+      "stage": "Item",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 4,
+      "role": "Universal Pok\u00e9mon Search & Discard Outlet (Searches any Pok\u00e9mon while pruning hand and feeding Energy Retrieval/Night Stretcher)"
+    },
+    {
+      "id": 1086,
+      "name": "Buddy-Buddy Poffin",
+      "category": "Item",
+      "stage": "Item",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 3,
+      "role": "Basic Bench Acceleration (Directly benches low-HP Basics such as Budew and Munkidori)"
+    },
+    {
+      "id": 1097,
+      "name": "Night Stretcher",
+      "category": "Item",
+      "stage": "Item",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 3,
+      "role": "Targeted Discard Recursion (Recovers 1 Pok\u00e9mon or 1 Basic Energy from discard directly to hand)"
+    },
+    {
+      "id": 1118,
+      "name": "Energy Retrieval",
+      "category": "Item",
+      "stage": "Item",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 2,
+      "role": "Basic Energy Recycling (Returns 2 Basic Energies from discard to hand to immediately fuel Teal Dance attachments)"
+    },
+    {
+      "id": 1123,
+      "name": "Switch",
+      "category": "Item",
+      "stage": "Item",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 2,
+      "role": "Active Repositioning & Status Reset (Switches Active Pok\u00e9mon, clears special conditions, and provides redundancy with Skyliner)"
+    },
+    {
+      "id": 1127,
+      "name": "Tera Orb",
+      "category": "Item",
+      "stage": "Item",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 1,
+      "role": "Direct Tera Search (Zero-discard search for Teal Mask Ogerpon ex)"
+    },
+    {
+      "id": 1080,
+      "name": "Unfair Stamp",
+      "category": "Item",
+      "stage": "Item",
+      "type": null,
+      "hp": null,
+      "rule": "ACE SPEC",
+      "quantity": 1,
+      "role": "Dominant Disruption ACE SPEC (Shuffles opponent hand to 2 cards and refreshes user hand to 5 cards after a friendly KO)"
+    },
+    {
+      "id": 1227,
+      "name": "Lillie's Determination",
+      "category": "Supporter",
+      "stage": "Supporter",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 4,
+      "role": "Premier Main Draw Engine (Shuffles hand and draws 6 cards, expanding to 8 cards when behind in prize cards)"
+    },
+    {
+      "id": 1182,
+      "name": "Boss\u2019s Orders",
+      "category": "Supporter",
+      "stage": "Supporter",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 2,
+      "role": "Tactical Gust & Win-Condition Target Execution (Forces opponent benched target into Active spot for decisive KOs)"
+    },
+    {
+      "id": 1192,
+      "name": "Carmine",
+      "category": "Supporter",
+      "stage": "Supporter",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 2,
+      "role": "Turn 1 Fast Cycle & Going-First Acceleration (Playable on Turn 1 going first to discard hand and draw 5 new cards)"
+    },
+    {
+      "id": 1213,
+      "name": "Judge",
+      "category": "Supporter",
+      "stage": "Supporter",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 1,
+      "role": "Symmetrical Hand Reset Disruption (Resets both players to 4 cards, destroying Alakazam Powerful Hand scaling)"
+    },
+    {
+      "id": 1201,
+      "name": "Briar",
+      "category": "Supporter",
+      "stage": "Supporter",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 1,
+      "role": "Prize Acceleration Finisher (Allows Tera Pok\u00e9mon attack to take 1 extra prize card when opponent has exactly 2 prizes remaining)"
+    },
+    {
+      "id": 1264,
+      "name": "Battle Cage",
+      "category": "Stadium",
+      "stage": "Stadium",
+      "type": null,
+      "hp": null,
+      "rule": null,
+      "quantity": 2,
+      "role": "Bench Damage Immunity & Anti-Spread Shield (Prevents damage counter placement on Benched Pok\u00e9mon, neutralizing Dragapult ex)"
+    },
+    {
+      "id": 1,
+      "name": "Basic {G} Energy",
+      "category": "Energy",
+      "stage": "Basic Energy",
+      "type": "{G}",
+      "hp": null,
+      "rule": null,
+      "quantity": 10,
+      "role": "Grass Turbo Fuel & Teal Dance Engine (Primary energy pool for manual attachment, Teal Dance acceleration, and Myriad Leaf Shower)"
+    },
+    {
+      "id": 7,
+      "name": "Basic {D} Energy",
+      "category": "Energy",
+      "stage": "Basic Energy",
+      "type": "{D}",
+      "hp": null,
+      "rule": null,
+      "quantity": 2,
+      "role": "Adrena-Brain Darkness Trigger (Enables Munkidori Adrena-Brain ability to move 30 damage counters every turn)"
+    },
+    {
+      "id": 18,
+      "name": "Grow Grass Energy",
+      "category": "Energy",
+      "stage": "Special Energy",
+      "type": "{G}",
+      "hp": null,
+      "rule": null,
+      "quantity": 1,
+      "role": "HP Threshold & Resilience Boost (Provides {G} energy and +20 HP boost to Grass Pok\u00e9mon)"
+    }
+  ],
+  "energy_curve": {
+    "total_energy": 13,
+    "basic_energy": {
+      "grass_energy_id_1": 10,
+      "darkness_energy_id_7": 2,
+      "total_basic_energy": 12
+    },
+    "special_energy": {
+      "grow_grass_energy_id_18": 1,
+      "total_special_energy": 1
+    },
+    "turn_by_turn_attachment_expectations": {
+      "turn_1_manual_attachment_rate": "83.72% (n=7) / 87.71% (n=8 with natural draw)",
+      "turn_1_expected_energy_in_hand": 1.517,
+      "turn_2_teal_dance_acceleration_rate": "87.06% under Supporter draw (n=15)",
+      "turn_2_expected_total_attached_energies": "2.0 to 3.0 energies across active and bench",
+      "turn_3_plus_sustainability": "Energy Retrieval (ID 1118 x2) and Night Stretcher (ID 1097 x3) provide continuous recycling of discarded Basic {G} and {D} energies for unbroken Teal Dance engine activation."
+    }
+  },
+  "hypergeometric_probabilities": {
+    "population_size_N": 60,
+    "opening_hand_size_n": 7,
+    "basic_pokemon_count_Kb": 11,
+    "energy_count_Ke": 13,
+    "search_engine_count_Ks": 22,
+    "p_setup_n7": {
+      "float": 0.77757886,
+      "rational": "1137524/1462905",
+      "percentage": "77.7579%"
+    },
+    "p_mulligan_n7": {
+      "float": 0.22242114,
+      "rational": "325381/1462905",
+      "percentage": "22.2421%"
+    },
+    "p_setup_within_1_mulligan": {
+      "float": 0.95052884,
+      "rational": "2034218243864/2140091039025",
+      "percentage": "95.0529%"
+    },
+    "p_mulligan_within_1_mulligan": {
+      "float": 0.04947116,
+      "rational": "105872795161/2140091039025",
+      "percentage": "4.9471%"
+    },
+    "p_t1_energy_n7": {
+      "float": 0.83715595,
+      "rational": "9797437/11703240",
+      "percentage": "83.7156%"
+    },
+    "p_t1_search_engine_access_n7": {
+      "float": 0.96732255,
+      "rational": "74479/76995",
+      "percentage": "96.7323%"
+    }
+  },
+  "matchup_profiles": {
+    "lb826_alakazam_seok": {
+      "archetype": "Alakazam / Dudunsparce Psychic Control",
+      "opponent_threat_vector": "Powerful Hand attack dealing 20x damage per card in hand (up to 240-280+ for a single {P} energy), fueled by Kadabra/Alakazam evolution draws and Dudunsparce draw engine.",
+      "counter_strategy": "Hand Disruption & Target Sniping",
+      "key_tactical_lines": [
+        "Deploy Judge (ID 1213) and Unfair Stamp (ID 1080) to reset opponent hand to 4 and 2 cards respectively, collapsing Powerful Hand damage from 280 down to 40-80 dmg.",
+        "Use Boss's Orders (ID 1182) to eliminate low-HP Abra (50 HP) before evolution.",
+        "Activate Munkidori (ID 112) Adrena-Brain to move 30 damage counters over Battle Cage to snipe benched Abras without triggering attack damage barriers.",
+        "Fezandipiti ex (ID 140) triggers Flip the Script on any KO to maintain hand replenishment."
+      ],
+      "projected_win_rate": "68% - 74%"
+    },
+    "lb1009_945_mega_lucario_ex": {
+      "archetype": "Mega Lucario ex Fast Aggro",
+      "opponent_threat_vector": "340 HP Mega Lucario ex (ID 678) dealing 270 damage via Mega Brave (boosted to 300+ with Premium Power Pro); Aura Jab accelerates 3 Fighting energy from discard; Carmine enables fast T1 setup.",
+      "counter_strategy": "Psychic Weakness Exploitation & 7-Prize Asymmetry",
+      "key_tactical_lines": [
+        "Exploit Mega Lucario ex 2x weakness to Psychic ({P}) using Munkidori (ID 112) Adrena-Brain damage redirection and Latias ex (ID 184) positioning.",
+        "Deploy Tapu Bulu (ID 920) Wood Hammer (220 dmg) as a 1-prize trading weapon, forcing Lucario to trade 2 prizes for 1.",
+        "Scale Teal Mask Ogerpon ex Myriad Leaf Shower (30 + 30 per energy on both actives) to hit 210+ damage against heavily energized Lucario.",
+        "Capitalize on Mega Brave consecutive attack restriction by using Switch (ID 1123) and Skyliner free retreat to maintain offensive tempo."
+      ],
+      "projected_win_rate": "64% - 70%"
+    },
+    "lb814_600_dragapult_crustle": {
+      "archetype": "Dragapult ex Spread / Crustle Immunity Wall",
+      "opponent_threat_vector": "Dragapult ex (ID 121) Phantom Dive (200 dmg + 60 bench counters) and Crustle (ID 345) Mysterious Rock Inn (complete damage immunity from Pok\u00e9mon ex, stacking HP to 270 with Hero's Cape/Grow Grass).",
+      "counter_strategy": "Bench Counter Blockade & Non-ex Heavy Hitters",
+      "key_tactical_lines": [
+        "Establish Battle Cage (ID 1264) to completely prevent damage counter placement on Benched Pok\u00e9mon, neutralizing Phantom Dive secondary spread.",
+        "Deploy Tapu Bulu (ID 920) Wood Hammer (220 dmg) as a non-ex single-prize attacker, directly bypassing Crustle Mysterious Rock Inn ex-immunity for clean knockouts.",
+        "Use Munkidori (ID 112) Adrena-Brain to redirect accumulated active damage counters back onto opponent's Drakloak and Dreepy.",
+        "Briar (ID 1201) accelerates endgame prize acquisition against Dragapult ex."
+      ],
+      "projected_win_rate": "66% - 72%"
+    },
+    "first_sub_kaggle_2707": {
+      "archetype": "Alakazam / Dudunsparce Attrition Baseline (Deck #251)",
+      "opponent_threat_vector": "Stage 2 Alakazam line with Dudunsparce engine, Nighttime Mine retreat disruption, and Xerosic's Machinations hand control.",
+      "counter_strategy": "Mobility Superiority & Setup Tempo Ramp",
+      "key_tactical_lines": [
+        "Latias ex (ID 184) Skyliner grants 0 retreat cost to all Basic Pok\u00e9mon, completely ignoring Nighttime Mine retreat taxes.",
+        "Execute Turn 2 full board setup via Bug Catching Set and Teal Dance while opponent is still evolving Basic Abra.",
+        "Unfair Stamp (ID 1080) punishes any mid-game KO by reducing opponent hand to 2 cards, disabling Powerful Hand burst.",
+        "Boss's Orders (ID 1182) gusts and eliminates Dudunsparce before Run Away Draw loops begin."
+      ],
+      "projected_win_rate": "75% - 82%"
+    },
+    "lb510_mega_abomasnow": {
+      "archetype": "Mega Abomasnow ex Tank Ramp / Heavy Mill",
+      "opponent_threat_vector": "350 HP Mega Abomasnow ex (ID 723) executing Hammer-lanche (100x dmg per discarded {W} energy from top 6 cards) with 34 Water energy pool.",
+      "counter_strategy": "Energy Scaling Punishment & 4-Retreat Stall Lock",
+      "key_tactical_lines": [
+        "Teal Mask Ogerpon ex Myriad Leaf Shower deals 30 + 30 per energy attached to both active Pok\u00e9mon; against a 3-4 energy Abomasnow, Ogerpon hits for 240-300+ Grass damage.",
+        "Exploit 4-retreat cost on Mega Abomasnow by using Boss's Orders (ID 1182) to strand an unpowered bench Abomasnow in the Active Spot.",
+        "Accelerate opponent deckout: Abomasnow self-mills 6 cards per swing, burning through its library within 4-5 turns."
+      ],
+      "projected_win_rate": "78% - 85%"
+    },
+    "deck_633_baseline_yan": {
+      "archetype": "Teal Mask Ogerpon ex Grass Turbo Baseline (27.9% WR)",
+      "opponent_threat_vector": "Mirror Teal Mask Ogerpon ex with 19 energies and Bug Catching Set.",
+      "counter_strategy": "Setup Consistency Fix, Asymmetric Prize Trade & Briar Finisher",
+      "key_tactical_lines": [
+        "Eliminate the 52.5% opening mulligan flaw of Deck #633 (which ran only 5 Basics) by fielding 11 Basics (P(Setup within 1 mulligan) = 95.05%).",
+        "Incorporate Tapu Bulu (ID 920) 1-prize attacker and Munkidori (ID 112) damage redistribution, establishing a favorable 7-prize clock against opponent pure 2-prize board.",
+        "Use Briar (ID 1201) on the final attack when opponent has 2 prizes remaining to take 3 prizes off an Ogerpon ex KO, closing out the match in 2 knockouts."
+      ],
+      "projected_win_rate": "72% - 80%"
+    }
+  }
+}

@@ -2,10 +2,11 @@
 
 Captured: 2026-08-16
 
-- Last assimilated code commit: `d27dda708c52c0c631dfed52727441f34dcbf80f`
+- Last assimilated code commit: `509b948bee7fb1b43503a900257268d9bd14f848`
 - Current best and fallback: frozen Stage 4 root
 - Stage 4 root SHA-256: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`
-- Active experiment: AR-027 scale of AR-026 branch-diversity hypothesis
+- Active experiment: AR-028 deck-conditioned round-robin gate and next
+  strength hypothesis
 - AR-018 code commits: `434d3f6`, repaired by `28c2b96` and `4cfe5e8`
 - AR-018 status: corrected gate passed review; keep foundation
 - AR-019 implementation commit: `5dd6cfc`
@@ -92,8 +93,27 @@ Captured: 2026-08-16
 - AR-026 tournament: same-deck candidate-vs-root `21-9-0` in 30; candidate
   panel `15-45-0`; frozen-root panel `12-48-0`. Keep experimental: direct gate
   won and panel improved by three wins, but absolute field strength is low.
-- Next action: scale AR-026 with the same `uniform_mix=0.5` to 16 groups,
-  then require a stronger panel before promotion.
+- AR-027 initial output: superseded as a diagnostic because its execution
+  boundary was not cleanly attributable relative to the optimization
+  transition. Do not use it for promotion or strength conclusions.
+- AR-027-retry implementation/execution commit: `509b948`
+- AR-027-retry: 16 groups, 41 fibers, dynamic K
+  `[2,2,2,2,3,4,4,2,4,2,4,2,2,2,2,2]`, 3,031 logical decisions, 1,291
+  credited actions, 100.359 decisions/s, 16.869 s update, ten zero-variance
+  groups. Candidate SHA `6db9eb3496ca00f9a70cbb1f8e24027cacb456219b74e355e18c95783981d24c`.
+- AR-027-retry tournament: candidate vs root `13-17-0` in 30; candidate
+  panel `9-51-0`; frozen-root panel `12-48-0` in the same 60-game surface.
+  Candidate rejected; frozen Stage 4 root remains fallback. Per external
+  policy: lb1009 `0-10`, lb945 `0-10`, lb826 `1-9`, lb814 `2-8`.
+- Antigravity handoff: `.agents/orchestrator/CODEX_FEEDBACK_AR027_RETRY.md`.
+  Current v0 deck artifacts are `experiments/decks/deck_supreme_60.json` and
+  `agent/deck.json`; structural validation passed. Antigravity must continue
+  producing candidate decks and matchup diagnoses only under
+  `experiments/decks/`, while Codex owns alternate-deck tournament execution.
+- Next action: integrate the next Antigravity deck candidate, add/use a
+  non-destructive alternate-deck tournament route, then run a small cached
+  sequential round-robin against the same panel. Keep root fallback until the
+  candidate improves absolute panel strength.
 
 Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-019/manifest.json`, `AR-019/metrics.json`, `AR-019/logs/tests.log`,
@@ -141,3 +161,13 @@ Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-026/candidate.pt`, `AR-026/tournament_candidate_vs_root_same_deck_30.json`,
 `AR-026/tournament_candidate_panel_10.json`,
 `AR-026/tournament_root_panel_10.json`, `STATE_CAPSULE_026.md`.
+`AR-027/report.md`, `AR-027/manifest.json`, `AR-027/metrics.json`,
+`AR-027/sample.manifest.json`, `AR-027/trajectory_bundle.pt.gz`,
+`AR-027/candidate.pt`, `STATE_CAPSULE_027.md`,
+`AR-027-retry/report.md`, `AR-027-retry/manifest.json`,
+`AR-027-retry/metrics.json`, `AR-027-retry/sample.manifest.json`,
+`AR-027-retry/trajectory_bundle.pt.gz`, `AR-027-retry/candidate.pt`,
+`AR-027-retry/tournament_candidate_vs_root_same_deck_30.json`,
+`AR-027-retry/tournament_candidate_panel_10.json`,
+`AR-027-retry/tournament_root_panel_10.json`, `STATE_CAPSULE_027_RETRY.md`,
+`.agents/orchestrator/CODEX_FEEDBACK_AR027_RETRY.md`.
