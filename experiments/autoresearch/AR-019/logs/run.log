@@ -1,8 +1,14 @@
 AR-019 trajectory-group GRPO micro-update
-returns=[1.0, 1.0, -1.0, -1.0]
-logical_decisions=340
-substeps=380
-collection_seconds=7.347098208032548
-update_seconds=2.152347584022209
-candidate_sha256=2e592340522c697405676811f4d68c53c93129fd89b8f14b07427d4624ed77e7
+returns=[1.0, -1.0, 1.0, 1.0]
+logical_decisions=278
+substeps=311
+collection_seconds=6.267560667125508
+update_seconds=1.775413541821763
+candidate_sha256=3e23d7c3c191fa301baabc559dd9add82d6ffbec05ae8b8e6fd3327cdc17d183
+sample_manifest=experiments/autoresearch/AR-019/sample.manifest.json
+sample_manifest_sha256=c757a496457983bacf851bb31815f399d2e64829cc57a7613c304789e971a30a
+sample_manifest_content_sha256=f4b02aec85d4c1bad46194316920646d6f264f90ff205d6cad5d61232d600e08
+trajectory_bundle=experiments/autoresearch/AR-019/trajectory_bundle.pt.gz
+bundle_sha256=e86ede4ecd2dac75585452f08d52d43eaf64f6bd90848786618657566c3a18f3
+candidate_preflight=passed
 tournament=not_run

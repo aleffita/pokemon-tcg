@@ -1,6 +1,6 @@
 # AR-019 - trajectory-group GRPO micro-update
 
-Captured on 2026-08-16T16:42:34.464748+00:00 from frozen Stage 4 root `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+Captured on 2026-08-16T17:02:10.629259+00:00 from frozen Stage 4 root `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
 
 ## Result
 
@@ -12,15 +12,15 @@ promotion was run.
 
 | Metric | Result |
 | --- | ---: |
-| Group returns | `[1.0, 1.0, -1.0, -1.0]` |
-| Return mean / population std | `0.0` / `1.0` |
-| Logical decisions / substeps | 340 / 380 |
-| Collection seconds / decisions/s | 7.347098 / 46.27677354690585 |
-| Update seconds | 2.152347584022209 |
-| Loss / gradient norm | 0.08823533356189728 / 2.373613119125366 |
-| Ratio mean / min / max | 0.9999998807907104 / 0.9999895095825195 / 1.0000028610229492 |
-| Candidate parameter L2 delta | 0.009198900828294767 |
-| Candidate bytes | 5693904 |
+| Group returns | `[1.0, -1.0, 1.0, 1.0]` |
+| Return mean / population std | `0.5` / `0.8660253882408142` |
+| Logical decisions / substeps | 278 / 311 |
+| Collection seconds / decisions/s | 6.267561 / 44.355374405573826 |
+| Update seconds | 1.775413541821763 |
+| Loss / gradient norm | 0.1619904488325119 / 2.5191781520843506 |
+| Ratio mean / min / max | 1.0 / 0.9999923706054688 / 1.0000028610229492 |
+| Candidate parameter L2 delta | 0.009198722439288157 |
+| Candidate bytes | 5694416 |
 
 ## Contracts checked
 
@@ -34,8 +34,11 @@ promotion was run.
   substeps of that decision. No separate substep-relative credit is used.
 - Zero-variance groups normalize to zero advantages and perform zero optimizer
   steps. This run had `zero_variance_group=False`.
-- Candidate checkpoint is strict FP32 inference format and is independent of
-  any persisted rollout bundle. No large rollout artifact was written.
+- Candidate checkpoint is strict FP32 inference format and is linked to the
+  adjacent compact bounded provenance bundle. No unbounded rollout buffer was
+  written.
+- Existing candidate provenance preflight passed for the root, manifest, and
+  trajectory bundle: `True`.
 
 ## Limitations
 
@@ -47,8 +50,14 @@ candidate has not been promoted.
 
 ## Provenance
 
-- Code commit at execution: `8b0c16677cb4affadf6137b7510a14a86ce19991`
+- Code commit at execution: `5dd6cfc935379c0ded7a2982110e0c3ccf805121`
 - Root SHA-256: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`
-- Candidate SHA-256: `2e592340522c697405676811f4d68c53c93129fd89b8f14b07427d4624ed77e7`
+- Candidate SHA-256: `3e23d7c3c191fa301baabc559dd9add82d6ffbec05ae8b8e6fd3327cdc17d183`
 - Candidate path: `experiments/autoresearch/AR-019/candidate.pt`
-- Rollout persistence: `none; compact tensors retained in memory only`
+- Sample manifest: `experiments/autoresearch/AR-019/sample.manifest.json`
+- Sample manifest file SHA-256: `c757a496457983bacf851bb31815f399d2e64829cc57a7613c304789e971a30a`
+- Sample manifest content SHA-256: `f4b02aec85d4c1bad46194316920646d6f264f90ff205d6cad5d61232d600e08`
+- Trajectory bundle: `experiments/autoresearch/AR-019/trajectory_bundle.pt.gz`
+- Trajectory bundle SHA-256: `e86ede4ecd2dac75585452f08d52d43eaf64f6bd90848786618657566c3a18f3`
+- Candidate preflight: `{'passed': True, 'approved_root_sha256': 'b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b', 'artifacts': {'sample_manifest': 'experiments/autoresearch/AR-019/sample.manifest.json', 'trajectory_bundle': 'experiments/autoresearch/AR-019/trajectory_bundle.pt.gz'}}`
+- Rollout persistence: `compact bounded provenance bundle persisted; no unbounded rollout buffer`

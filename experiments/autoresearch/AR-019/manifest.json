@@ -1,13 +1,22 @@
 {
+  "bundle_sha256": "e86ede4ecd2dac75585452f08d52d43eaf64f6bd90848786618657566c3a18f3",
   "candidate": "experiments/autoresearch/AR-019/candidate.pt",
-  "candidate_bytes": 5693904,
-  "candidate_sha256": "2e592340522c697405676811f4d68c53c93129fd89b8f14b07427d4624ed77e7",
-  "captured_at": "2026-08-16T16:42:34.464748+00:00",
-  "code_commit": "8b0c16677cb4affadf6137b7510a14a86ce19991",
-  "collection_decisions_per_second": 46.27677354690585,
-  "collection_games_per_second": 0.5444326299635982,
-  "collection_seconds": 7.347098,
-  "collection_substeps_per_second": 51.72109984654183,
+  "candidate_bytes": 5694416,
+  "candidate_preflight": {
+    "approved_root_sha256": "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b",
+    "artifacts": {
+      "sample_manifest": "experiments/autoresearch/AR-019/sample.manifest.json",
+      "trajectory_bundle": "experiments/autoresearch/AR-019/trajectory_bundle.pt.gz"
+    },
+    "passed": true
+  },
+  "candidate_sha256": "3e23d7c3c191fa301baabc559dd9add82d6ffbec05ae8b8e6fd3327cdc17d183",
+  "captured_at": "2026-08-16T17:02:10.629259+00:00",
+  "code_commit": "5dd6cfc935379c0ded7a2982110e0c3ccf805121",
+  "collection_decisions_per_second": 44.355374405573826,
+  "collection_games_per_second": 0.6382068259794795,
+  "collection_seconds": 6.267561,
+  "collection_substeps_per_second": 49.62058071990454,
   "config": {
     "advantage_epsilon": 1e-08,
     "algorithm": "trajectory_group_grpo",
@@ -16,7 +25,7 @@
     "group_size": 4,
     "learning_rate": 1e-05,
     "precision": "FP32",
-    "rollout_storage": "in-memory compact tensors only",
+    "rollout_storage": "compact bounded provenance bundle persisted adjacent to candidate",
     "selfplay_mode": "current_vs_current_true_recurrent",
     "value_loss": 0.0
   },
@@ -27,13 +36,15 @@
   "format": "ptcg-stage4-trajectory-group-grpo-v1",
   "group_returns": [
     1.0,
-    1.0,
     -1.0,
-    -1.0
+    1.0,
+    1.0
   ],
   "group_size": 4,
   "invariants": {
     "behavior_snapshot_is_frozen_stage4_root": true,
+    "bounded_provenance_bundle_persisted": true,
+    "candidate_preflight_passed": true,
     "complete_behavior_logprob_retained": true,
     "detached_recurrent_memory_inputs_retained_in_memory": true,
     "group_credit_shared_across_logical_decisions_and_substeps": true,
@@ -46,73 +57,77 @@
     "value_loss_zero": true,
     "zero_variance_group_fail_closed": true
   },
-  "logical_decisions": 340,
+  "logical_decisions": 278,
   "metadata_date": "2026-08-12",
   "metrics": {
     "algorithm": "trajectory_group_grpo",
-    "approx_kl_behavior": 7.36292662395499e-08,
-    "changed_parameters": 1293290,
+    "approx_kl_behavior": -1.2006690752741633e-08,
+    "changed_parameters": 1293304,
     "clip_fraction": 0.0,
     "credit_shared_across_substeps": true,
     "credit_shared_per_logical_decision": true,
-    "gradient_norm": 2.373613119125366,
+    "gradient_norm": 2.5191781520843506,
     "group_size": 4,
-    "logical_decisions": 340,
-    "loss": 0.08823533356189728,
+    "logical_decisions": 278,
+    "loss": 0.1619904488325119,
     "optimizer_steps": 1,
     "parameter_count": 1302151,
-    "parameter_l2": 0.009198900828294767,
+    "parameter_l2": 0.009198722439288157,
     "parameter_max_abs": 1.0132789611816406e-05,
-    "policy_loss": 0.08823533356189728,
+    "policy_loss": 0.1619904488325119,
     "policy_only": true,
     "precision": "FP32",
     "ratio_max": 1.0000028610229492,
-    "ratio_mean": 0.9999998807907104,
-    "ratio_min": 0.9999895095825195,
-    "return_mean": 0.0,
-    "return_std": 1.0,
-    "substeps": 380,
-    "update_seconds": 2.152347584022209,
+    "ratio_mean": 1.0,
+    "ratio_min": 0.9999923706054688,
+    "return_mean": 0.5,
+    "return_std": 0.8660253882408142,
+    "substeps": 311,
+    "update_seconds": 1.775413541821763,
     "value_loss": 0.0,
     "zero_variance_group": false
   },
-  "return_mean": 0.0,
-  "return_std": 1.0,
+  "return_mean": 0.5,
+  "return_std": 0.8660253882408142,
   "returns_advantages": [
-    1.0,
-    1.0,
-    -1.0,
-    -1.0
+    0.5773502588272095,
+    -1.732050895690918,
+    0.5773502588272095,
+    0.5773502588272095
   ],
-  "rollout_persistence": "none; compact tensors retained in memory only",
+  "rollout_persistence": "compact bounded provenance bundle persisted; no unbounded rollout buffer",
   "root_checkpoint": "experiments/autoresearch/root/stage4_root.pkl",
   "root_sha256": "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b",
-  "substeps": 380,
+  "sample_manifest": "experiments/autoresearch/AR-019/sample.manifest.json",
+  "sample_manifest_content_sha256": "f4b02aec85d4c1bad46194316920646d6f264f90ff205d6cad5d61232d600e08",
+  "sample_manifest_sha256": "c757a496457983bacf851bb31815f399d2e64829cc57a7613c304789e971a30a",
+  "substeps": 311,
+  "trajectory_bundle": "experiments/autoresearch/AR-019/trajectory_bundle.pt.gz",
   "trajectory_summaries": [
     {
       "episode_id": "trajectory-group-000",
-      "logical_decisions": 90,
-      "substeps": 106,
+      "logical_decisions": 74,
+      "substeps": 75,
       "terminal_return": 1.0
     },
     {
       "episode_id": "trajectory-group-001",
-      "logical_decisions": 65,
-      "substeps": 77,
-      "terminal_return": 1.0
-    },
-    {
-      "episode_id": "trajectory-group-002",
-      "logical_decisions": 94,
+      "logical_decisions": 89,
       "substeps": 105,
       "terminal_return": -1.0
     },
     {
+      "episode_id": "trajectory-group-002",
+      "logical_decisions": 70,
+      "substeps": 82,
+      "terminal_return": 1.0
+    },
+    {
       "episode_id": "trajectory-group-003",
-      "logical_decisions": 91,
-      "substeps": 92,
-      "terminal_return": -1.0
+      "logical_decisions": 45,
+      "substeps": 49,
+      "terminal_return": 1.0
     }
   ],
-  "update_seconds": 2.152347584022209
+  "update_seconds": 1.775413541821763
 }
