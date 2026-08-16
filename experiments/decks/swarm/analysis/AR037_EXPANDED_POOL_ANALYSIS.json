@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-08-16T23:18:00Z",
+  "author": "Antigravity Research Swarm",
+  "contract_reference": ".agents/orchestrator/CODEX_TO_ANTIGRAVITY_AR037_EXPANDED_DECK_POOL.md",
+  "empirical_basis": {
+    "AR-036_insights": "002_v4_safeguard_fortress was best overall at 5-11 (31.2%), with 75% vs Crustle and 50% vs Alakazam. Failure mode against Lucario/Ivan was non-ex bypass and energy clunkiness of off-color Psychic cards."
+  },
+  "delivered_candidates": {
+    "007_anti_lucario_neutralization_fortress.json": {
+      "target_opponent": "lb1009_mega_lucario_ex_islet",
+      "tactical_mechanism": "Neutralization Zone (ID 1247 ACE SPEC) makes non-Rule-Box Tapu Bulu (140 HP) and Mimikyu (70 HP) take 0 damage from Mega Lucario ex, allowing Wood Hammer (220 dmg) to dismantle Lucario safely.",
+      "energy_system": "100% Basic Grass Energy + Darkness (Zero off-color clunkiness)",
+      "parent_deck": "002_v4_safeguard_fortress.json"
+    },
+    "008_anti_lucario_energy_denial.json": {
+      "target_opponent": "lb1009_mega_lucario_ex_islet & lb945_multiply_ivan",
+      "tactical_mechanism": "4x Crushing Hammer (ID 1120) + 2x Handheld Fan (ID 1161) strips Fighting Energy off Mega Lucario every time it attacks, locking it out of Mega Brave (cost {F}{F}{C}).",
+      "energy_system": "100% Basic Grass Energy",
+      "parent_deck": "002_v4_safeguard_fortress.json"
+    },
+    "009_anti_ivan_non_ex_swat.json": {
+      "target_opponent": "lb945_multiply_ivan",
+      "tactical_mechanism": "3x Tapu Bulu (Wood Hammer 220 dmg) OHKOs Hariyama (150 HP), Solrock (110 HP) and Makuhita (80 HP) in 1 hit; Bloodmoon Ursaluna ex (ID 44) provides 240 dmg late-game burst; Maximum Belt (ID 1158) grants +50 dmg to ex.",
+      "energy_system": "100% Basic Grass Energy",
+      "parent_deck": "001_v5_apex_omnipotent.json"
+    },
+    "010_apex_bridge_neutralization_v2.json": {
+      "target_opponent": "All 4 Panel Opponents (Crustle, Alakazam, Lucario, Ivan)",
+      "tactical_mechanism": "Direct evolution of 002 (31.2% WR) preserving the 4x Mimikyu / 2x Bulu / 2x Munkidori engine while adding Neutralization Zone (ex immunity) and Bloodmoon Ursaluna ex (240 dmg burst).",
+      "energy_system": "Basic Grass + Darkness",
+      "parent_deck": "002_v4_safeguard_fortress.json"
+    },
+    "011_dudunsparce_turbo_draw_engine.json": {
+      "target_opponent": "Inter-Deck GRPO Diversity",
+      "tactical_mechanism": "Structurally distinct archetype with Dunsparce (ID 65) and Dudunsparce (ID 66 Run Away Draw - draw 3 cards/turn and recycle) generating massive hand velocity for Ogerpon Ramp.",
+      "energy_system": "100% Basic Grass Energy",
+      "parent_deck": "New Archetype"
+    }
+  },
+  "inbox_inventory": {
+    "total_unique_decks": 11,
+    "validation_status": "All 11 decks pass 60-card check, ACE SPEC constraint, 4-copy rule, and >=10 basics in SQLite."
+  }
+}
