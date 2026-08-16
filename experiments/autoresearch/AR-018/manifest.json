@@ -1,0 +1,108 @@
+{
+  "agent_side": 0,
+  "checkpoint": "experiments/autoresearch/root/stage4_root.pkl",
+  "collection_seconds": 3.198051,
+  "decision_counts": {
+    "agent": 85,
+    "opponent": 73
+  },
+  "decisions_per_second": 49.405,
+  "deck": "agent/deck.csv",
+  "deck_content_sha256": "606a775392ffe25e058b19c17801d58a4bf30f7cd8c62782388d3de7e7eb5283",
+  "deck_source_file_sha256": "337186f9422f300e50225d6305570f008eb262ac46f519c62aa115df6dcc75d2",
+  "experiment": "AR-018",
+  "format": "ptcg-stage4-true-recurrent-selfplay-v1",
+  "games": 1,
+  "invariants": {
+    "composite_behavior_logprob_is_substep_sum": true,
+    "finite_substep_and_logical_logprobs": true,
+    "independent_agent_and_mirror_memory_lanes": true,
+    "legal_actions_recorded_and_checked": true,
+    "memory_commit_is_last_substep_output": true,
+    "memory_initialized_once_per_episode": true,
+    "memory_input_reused_across_logical_substeps": true,
+    "mirror_no_memory_legacy_unchanged": true,
+    "no_grpo": true,
+    "no_rope_nd": true,
+    "no_tournament": true,
+    "same_stage4_model_and_encoder": true,
+    "side_specific_tracker_ability_deck_context": true,
+    "terminal_return_sign_is_symmetric": true
+  },
+  "lane_digests": {
+    "agent": {
+      "committed_output_chain_sha256": "5d47a67edb2073cb500a7220dca593a042777bae0c5cdfd619f341fe6a91ad1f",
+      "continuity": true,
+      "decision_count": 85,
+      "decision_input_chain_sha256": "7badd7447184b22a8e1d17a0fc69a9a2b9ddb432e9fd46f3e2d117ce5b9f190f",
+      "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+      "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+      "lane": "agent",
+      "last_committed_memory_output_digest": "c12ba90e8cca631fce158f363be52a1f6e34a591b5a3c110d66f23afc8d6d2d3"
+    },
+    "opponent": {
+      "committed_output_chain_sha256": "35a063e46fdd990b6e0c3ecce2aa17dbc80da638a45f588be60bbfb5a3de61e2",
+      "continuity": true,
+      "decision_count": 73,
+      "decision_input_chain_sha256": "d84c108e6dc481b563af4edd722af1d70d667e95fa5a3fa21c757adf17e15f8b",
+      "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+      "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+      "lane": "mirror",
+      "last_committed_memory_output_digest": "4affc80ef0a2b50cea0faff4cc972d98f2311acbd2a109e0ec29624f02a327f7"
+    }
+  },
+  "metadata_date": "2026-08-12",
+  "model_metadata": {
+    "arch_version": "1.0.0",
+    "scratch_registers": 32,
+    "token_schema_version": "1.0.0"
+  },
+  "model_sha256": "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b",
+  "opponent_side": 1,
+  "packed_used": false,
+  "parquet_used": false,
+  "record_count": 168,
+  "records_path": "logs/selfplay.jsonl",
+  "rows_per_second": 52.532,
+  "selfplay_mode": "current_vs_current_true_recurrent",
+  "selfplay_records_sha256": "4878a6c2b7af7fa26d907cd63ede14acee39b3e2daf9b139b1a0545cda387ac7",
+  "terminal_return_agent": -1.0,
+  "terminal_return_opponent": 1.0,
+  "terminal_returns": [
+    {
+      "agent_side": 0,
+      "decision_counts": {
+        "agent": 85,
+        "opponent": 73
+      },
+      "episode_id": "true_recurrent-000",
+      "lane_digests": {
+        "agent": {
+          "committed_output_chain_sha256": "5d47a67edb2073cb500a7220dca593a042777bae0c5cdfd619f341fe6a91ad1f",
+          "continuity": true,
+          "decision_count": 85,
+          "decision_input_chain_sha256": "7badd7447184b22a8e1d17a0fc69a9a2b9ddb432e9fd46f3e2d117ce5b9f190f",
+          "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "lane": "agent",
+          "last_committed_memory_output_digest": "c12ba90e8cca631fce158f363be52a1f6e34a591b5a3c110d66f23afc8d6d2d3"
+        },
+        "opponent": {
+          "committed_output_chain_sha256": "35a063e46fdd990b6e0c3ecce2aa17dbc80da638a45f588be60bbfb5a3de61e2",
+          "continuity": true,
+          "decision_count": 73,
+          "decision_input_chain_sha256": "d84c108e6dc481b563af4edd722af1d70d667e95fa5a3fa21c757adf17e15f8b",
+          "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "lane": "mirror",
+          "last_committed_memory_output_digest": "4affc80ef0a2b50cea0faff4cc972d98f2311acbd2a109e0ec29624f02a327f7"
+        }
+      },
+      "opponent_side": 1,
+      "terminal_return_agent": -1.0,
+      "terminal_return_opponent": 1.0
+    }
+  ],
+  "total_decisions": 158,
+  "total_rows": 168
+}

@@ -1,0 +1,32 @@
+AR-018 validation log
+
+$ uv run --locked pytest -q tests/test_trajectory_probe.py tests/test_ar010_candidate_path.py
+30 passed in 2.30s
+
+$ uv run --locked python -m py_compile scripts/rl/trajectory_probe.py scripts/rl/true_recurrent_selfplay_probe.py tests/test_trajectory_probe.py
+exit=0
+
+$ git diff --check
+exit=0
+
+$ uv run --locked python scripts/rl/true_recurrent_selfplay_probe.py --help
+exit=0
+
+$ uv run --locked python scripts/rl/true_recurrent_selfplay_probe.py --meta-date 2026-08-12 --games 1 --seed 18018
+exit=0
+games=1
+agent_decisions=85
+mirror_decisions=73
+total_decisions=158
+total_rows=168
+collection_seconds=3.198051
+rows_per_second=52.532
+decisions_per_second=49.405
+agent_side=0
+opponent_side=1
+terminal_return_agent=-1.0
+terminal_return_opponent=1.0
+parquet_used=false
+packed_used=false
+agent_continuity=true
+mirror_continuity=true

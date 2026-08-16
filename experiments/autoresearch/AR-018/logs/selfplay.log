@@ -1,0 +1,10 @@
+AR-018 true recurrent current-vs-current probe
+metadata_date=2026-08-12
+games=1
+agent_decisions=85
+mirror_decisions=73
+agent_return=-1.0
+opponent_return=1.0
+rows_per_second=52.532
+decisions_per_second=49.405
+selfplay_records_sha256=4878a6c2b7af7fa26d907cd63ede14acee39b3e2daf9b139b1a0545cda387ac7
