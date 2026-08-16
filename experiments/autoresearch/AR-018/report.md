@@ -9,6 +9,7 @@ weights, run GRPO, run RoPE-ND, run a tournament, or package a submission.
 - Frozen Stage 4 foundation: `3867171`.
 - Initial probe and tests: `434d3f6`.
 - Correctness repair: `28c2b96` (`fix(rl): close AR-018 recurrent reset gate`).
+- Terminal-failure hardening: `4cfe5e8` (`fix(rl): record agent-forfeit terminal outcome`).
 - Executable: `scripts/rl/true_recurrent_selfplay_probe.py`.
 - Hot path: direct `CabtEnv` observations through the Stage 4 encoder and
   PyTorch inference model. No Parquet rows and no packed dataset are read.
@@ -27,6 +28,10 @@ explicit reset hook before every battle-start attempt, so a discarded attempt
 cannot carry mirror memory or events into the accepted episode. The focused
 test exercises a two-attempt reset with an opponent call on the discarded
 attempt.
+
+The agent-selection exception path also notifies the mirror with the
+agent-perspective `-1.0` return, so the mirror receives the corresponding
+terminal outcome even when the engine rejects the agent selection.
 
 Each substep retains `action_logprob`. Once the logical decision is complete,
 all of its records receive `logical_action_logprob` and `decision_logprob`,
@@ -69,12 +74,12 @@ rewards. Each game has at least one terminal mirror event record.
 
 ## Validation
 
-- `uv run --locked pytest -q tests/test_trajectory_probe.py tests/test_ar010_candidate_path.py`: `32 passed in 2.21s`.
+- `uv run --locked pytest -q tests/test_trajectory_probe.py tests/test_ar010_candidate_path.py`: `33 passed in 2.39s`.
 - `uv run --locked python -m py_compile rl/env/env.py scripts/rl/trajectory_probe.py scripts/rl/true_recurrent_selfplay_probe.py tests/test_trajectory_probe.py`: exit 0.
 - `git diff --check`: exit 0.
 - The four-game metadata-bound executable smoke completed with exit 0.
-- The focused reset-retry test, end-to-end logprob recomputation test, and
-  existing recurrent/logprob tests all passed.
+- The focused reset-retry test, agent-forfeit terminal test, end-to-end
+  logprob recomputation test, and existing recurrent/logprob tests all passed.
 
 The manifest is `manifest.json`; per-substep evidence is in
 `logs/selfplay.jsonl`; the compact run summary is `logs/selfplay.log`. No

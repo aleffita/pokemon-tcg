@@ -16,6 +16,7 @@ smoke.
 - Foundation commit: `3867171`.
 - Initial probe commit: `434d3f6`.
 - Reset-retry repair commit: `28c2b96`.
+- Agent-forfeit terminal hardening: `4cfe5e8`.
 - Mode: current-vs-current true recurrent self-play.
 - Metadata date: `2026-08-12`.
 - Smoke: 4 games, seed `18000`, both agent sides covered `[1, 0, 0, 1]`.
@@ -41,7 +42,7 @@ matches the behavior snapshot at ratio one.
 - `experiments/autoresearch/AR-018/logs/selfplay.jsonl`
 - `experiments/autoresearch/AR-018/logs/tests.log`
 
-Focused validation: 32 tests passed; `py_compile` and `git diff --check`
+Focused validation: 33 tests passed; `py_compile` and `git diff --check`
 passed. The corrected AR-018 gate is kept as the foundation for
 trajectory-group GRPO. The next control point is not another BC or
 Parquet/packed-data task.

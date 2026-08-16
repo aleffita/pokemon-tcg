@@ -35,12 +35,15 @@ The former P1 findings are also closed for this gate:
 - `git diff --check`: passed.
 - Four-game metadata-bound smoke: passed; 672 logical decisions, 759 records,
   118.369 records/s, 104.801 decisions/s.
+- The agent-forfeit terminal path was then closed in `4cfe5e8` and covered by a
+  focused unit test; the focused suite is now `33 passed`.
 - All four games had independent agent and mirror continuity chains, legal
   action checks, composite logprob checks, and symmetric terminal returns.
 - Manifest and self-play JSONL SHA-256 values match the recorded files.
 - No GRPO, RoPE-ND, tournament, package, ETL, Parquet, or packed-data path was
   run.
 
-No P0 or P1 remains. This is a correctness/throughput gate, not competitive
-evidence; Stage 4 remains the only promoted policy and fallback. The next
-control point is trajectory-group GRPO.
+No P0 or P1 remains after the terminal-failure hardening. This is a
+correctness/throughput gate, not competitive evidence; Stage 4 remains the
+only promoted policy and fallback. The next control point is trajectory-group
+GRPO.

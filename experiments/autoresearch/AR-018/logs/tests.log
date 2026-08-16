@@ -3,6 +3,17 @@ AR-018 corrected validation log
 $ uv run --locked pytest -q tests/test_trajectory_probe.py tests/test_ar010_candidate_path.py
 32 passed in 2.21s
 
+Post-review terminal-failure hardening:
+
+$ uv run --locked pytest -q tests/test_trajectory_probe.py tests/test_ar010_candidate_path.py
+33 passed in 2.39s
+
+$ uv run --locked python -m py_compile rl/env/env.py scripts/rl/trajectory_probe.py scripts/rl/true_recurrent_selfplay_probe.py tests/test_trajectory_probe.py
+exit=0
+
+$ git diff --check
+exit=0
+
 $ uv run --locked python -m py_compile rl/env/env.py scripts/rl/trajectory_probe.py scripts/rl/true_recurrent_selfplay_probe.py tests/test_trajectory_probe.py
 exit=0
 
