@@ -475,14 +475,33 @@ def collect_episode(
     bundle: list[dict[str, Any]],
     on_episode_start: Callable[[], None] | None = None,
     on_episode_reset: Callable[[int], None] | None = None,
+    action_overrides: dict[tuple[int, int], int] | None = None,
+    initial_observation: dict[str, np.ndarray] | None = None,
+    initial_reset_info: dict[str, Any] | None = None,
+    initial_memory_state: torch.Tensor | None = None,
 ) -> list[dict[str, Any]]:
     if on_episode_start is not None:
         on_episode_start()
-    observation, reset_info = env.reset(seed=reset_seed)
+    if initial_observation is None:
+        observation, reset_info = env.reset(seed=reset_seed)
+    else:
+        if initial_reset_info is None:
+            raise ValueError("initial_reset_info is required with initial_observation")
+        if getattr(env, "_obs", None) is None:
+            raise ValueError("initial_observation requires an already-reset environment")
+        observation = {
+            key: np.asarray(value).copy()
+            for key, value in initial_observation.items()
+        }
+        reset_info = initial_reset_info
     side = int(reset_info["agent_index"])
     if on_episode_reset is not None:
         on_episode_reset(side)
-    memory = initial_memory(model)
+    memory = (
+        initial_memory(model)
+        if initial_memory_state is None
+        else initial_memory_state.detach().to(dtype=torch.float32).clone()
+    )
     initial_memory_digest = digest_tensor(memory)
     rows: list[dict[str, Any]] = []
     env_step = 0
@@ -504,7 +523,11 @@ def collect_episode(
         with torch.inference_mode():
             logits, value, memory_out = model.logits_value(model_input, memory_in=memory_input)
         distribution = _masked_distribution(logits, action_mask)
-        action = _sample_distribution(distribution, action_generator)
+        override_key = (decision_index, decision_substep)
+        if action_overrides is not None and override_key in action_overrides:
+            action = int(action_overrides[override_key])
+        else:
+            action = _sample_distribution(distribution, action_generator)
         legal = bool(action_mask[action] >= 0.5)
         if not legal:
             raise AssertionError(f"sampled illegal action {action}")

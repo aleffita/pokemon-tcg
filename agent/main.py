@@ -44,7 +44,7 @@ def _find_dir(filename: str = "deck.csv") -> str:
     return os.getcwd()
 
 
-_AGENT_DIR = _find_dir("deck.csv")
+_AGENT_DIR = os.environ.get("PTCG_AGENT_ROOT") or _find_dir("deck.csv")
 if os.path.isdir(os.path.join(_AGENT_DIR, "rl")):
     _PROJECT_ROOT = _AGENT_DIR
 else:
@@ -72,14 +72,18 @@ _PERTURB_EPS = float(os.environ.get("PTCG_PERTURB_EPS", "0.05"))
 
 # ---- model checkpoint search ----
 _MODEL_PATH = None
-for candidate in [
+_MODEL_CANDIDATES = [
+    os.environ.get("PTCG_MODEL_PATH"),
     os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_torch_fp32.pt"),
     os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_torch_fp32.pt"),
     os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_mlx_final.pkl"),
     os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_mlx.pkl"),
     os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_final.pkl"),
     os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best.pkl"),
-]:
+]
+for candidate in _MODEL_CANDIDATES:
+    if not candidate:
+        continue
     if os.path.exists(candidate):
         _MODEL_PATH = candidate
         break
