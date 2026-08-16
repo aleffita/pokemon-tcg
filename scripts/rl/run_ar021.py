@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime as dt
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,12 @@ def _manifest_rows(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         }
         for item in manifest["order"]
     ]
+
+
+def _aggregate_hash(values: list[str]) -> str:
+    """Stable identity for an ordered explicit deck list."""
+    payload = json.dumps(values, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
 
 def _write_report(
@@ -179,6 +186,7 @@ def run_ar021(
     checkpoint: Path,
     deck_path: Path,
     meta_date: str,
+    learner_deck_paths: list[Path] | None = None,
     output_dir: Path = DEFAULT_OUTPUT,
     opponent_deck_paths: list[Path] | None = None,
     opponent_agent_paths: list[Path] | None = None,
@@ -197,73 +205,96 @@ def run_ar021(
     validate_meta_date(meta_date)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logs").mkdir(parents=True, exist_ok=True)
-    deck = load_deck(deck_path)
+    learner_paths = learner_deck_paths or [deck_path]
+    if not learner_paths:
+        raise ValueError("at least one learner deck is required")
+    learner_decks = []
+    for path in learner_paths:
+        deck = load_deck(path)
+        learner_decks.append(
+            (path, deck, deck_content_sha256(deck), sha256_file(path))
+        )
+    learner_content_hashes = [item[2] for item in learner_decks]
+    learner_source_hashes = [item[3] for item in learner_decks]
+    aggregate_content_hash = _aggregate_hash(learner_content_hashes)
+    aggregate_source_hash = _aggregate_hash(learner_source_hashes)
     card_table = get_card_table()
     model, metadata = load_stage4(checkpoint, card_table)
     model = model.float()
     root_reference = copy.deepcopy(model).eval()
     encoder = DateBoundEncoder(TokenEncoder(card_table), meta_date)
     root_hash = sha256_file(checkpoint)
-    deck_hash = deck_content_sha256(deck)
-    deck_source_hash = sha256_file(deck_path)
     opponent_paths = opponent_deck_paths or [deck_path]
     if opponent_agent_paths is not None and len(opponent_agent_paths) != len(opponent_paths):
         raise ValueError("--opponent-agent must be repeated once per --opponent-deck")
     agent_paths = opponent_agent_paths or [None] * len(opponent_paths)
     grouped_trajectories: list[list[dict[str, Any]]] = []
     collections: list[dict[str, Any]] = []
-    for matchup_index, opponent_path in enumerate(opponent_paths):
-        opponent_deck = load_deck(opponent_path)
-        opponent_hash = deck_content_sha256(opponent_deck)
-        opponent_source_hash = sha256_file(opponent_path)
-        for group_index in range(groups_per_matchup):
-            group_seed = seed + matchup_index * 100000 + group_index * 1000
-            episode_prefix = f"{experiment.lower().replace('-', '')}-m{matchup_index}-g{group_index}"
-            opponent_agent_path = agent_paths[matchup_index]
-            opponent_factory = (
-                None
-                if opponent_agent_path is None
-                else lambda path=opponent_agent_path: load_external_opponent(path)
-            )
-            opponent_mode = (
-                "current_vs_external_policy_true_recurrent"
-                if opponent_agent_path is not None
-                else "current_vs_current_true_recurrent"
-            )
-            trajectories, collection = collect_sibling_fiber_group(
-                model=model,
-                encoder=encoder,
-                deck=deck,
-                deck_content_hash=deck_hash,
-                deck_source_file_hash=deck_source_hash,
-                model_hash=root_hash,
-                opponent_deck=opponent_deck,
-                opponent_deck_content_hash=opponent_hash,
-                opponent_deck_source_file_hash=opponent_source_hash,
-                games=k_max,
-                seed=group_seed,
-                episode_prefix=episode_prefix,
-                opponent_factory=opponent_factory,
-                opponent_agent_path=(
-                    str(opponent_agent_path) if opponent_agent_path is not None else None
-                ),
-                opponent_mode=opponent_mode,
-                branch_uniform_mix=branch_uniform_mix,
-            )
-            collection.update(
-                {
-                    "matchup_index": matchup_index,
-                    "group_index": group_index,
-                    "group_id": episode_prefix,
-                "opponent_deck": str(opponent_path),
-                "opponent_agent_path": (
-                    str(opponent_agent_path) if opponent_agent_path is not None else None
-                ),
-                    "requested_seed": group_seed,
-                }
-            )
-            grouped_trajectories.append(trajectories)
-            collections.append(collection)
+    for learner_index, (learner_path, deck, deck_hash, deck_source_hash) in enumerate(learner_decks):
+        for matchup_index, opponent_path in enumerate(opponent_paths):
+            opponent_deck = load_deck(opponent_path)
+            opponent_hash = deck_content_sha256(opponent_deck)
+            opponent_source_hash = sha256_file(opponent_path)
+            for group_index in range(groups_per_matchup):
+                group_seed = (
+                    seed
+                    + learner_index * 10_000_000
+                    + matchup_index * 100_000
+                    + group_index * 1_000
+                )
+                episode_prefix = (
+                    f"{experiment.lower().replace('-', '')}"
+                    f"-d{learner_index}-m{matchup_index}-g{group_index}"
+                )
+                opponent_agent_path = agent_paths[matchup_index]
+                opponent_factory = (
+                    None
+                    if opponent_agent_path is None
+                    else lambda path=opponent_agent_path: load_external_opponent(path)
+                )
+                opponent_mode = (
+                    "current_vs_external_policy_true_recurrent"
+                    if opponent_agent_path is not None
+                    else "current_vs_current_true_recurrent"
+                )
+                trajectories, collection = collect_sibling_fiber_group(
+                    model=model,
+                    encoder=encoder,
+                    deck=deck,
+                    deck_content_hash=deck_hash,
+                    deck_source_file_hash=deck_source_hash,
+                    model_hash=root_hash,
+                    opponent_deck=opponent_deck,
+                    opponent_deck_content_hash=opponent_hash,
+                    opponent_deck_source_file_hash=opponent_source_hash,
+                    games=k_max,
+                    seed=group_seed,
+                    episode_prefix=episode_prefix,
+                    opponent_factory=opponent_factory,
+                    opponent_agent_path=(
+                        str(opponent_agent_path) if opponent_agent_path is not None else None
+                    ),
+                    opponent_mode=opponent_mode,
+                    branch_uniform_mix=branch_uniform_mix,
+                )
+                collection.update(
+                    {
+                        "learner_deck_index": learner_index,
+                        "learner_deck": str(learner_path),
+                        "learner_deck_content_sha256": deck_hash,
+                        "learner_deck_source_file_sha256": deck_source_hash,
+                        "matchup_index": matchup_index,
+                        "group_index": group_index,
+                        "group_id": episode_prefix,
+                        "opponent_deck": str(opponent_path),
+                        "opponent_agent_path": (
+                            str(opponent_agent_path) if opponent_agent_path is not None else None
+                        ),
+                        "requested_seed": group_seed,
+                    }
+                )
+                grouped_trajectories.append(trajectories)
+                collections.append(collection)
 
     all_trajectories = [item for group in grouped_trajectories for item in group]
     provenance_bundle = flatten_provenance_bundle(all_trajectories)
@@ -271,8 +302,8 @@ def run_ar021(
         provenance_bundle,
         root_sha256=root_hash,
         metadata_date=meta_date,
-        deck_content_sha256=deck_hash,
-        deck_source_file_sha256=deck_source_hash,
+        deck_content_sha256=aggregate_content_hash,
+        deck_source_file_sha256=aggregate_source_hash,
     )
     validate_bundle(provenance_bundle, _manifest_rows(sample_manifest))
     sample_manifest_path = output_dir / "sample.manifest.json"
@@ -297,6 +328,11 @@ def run_ar021(
         "branch_selection": "policy_uniform_mixture",
         "groups_per_matchup": groups_per_matchup,
         "matchup_count": len(opponent_paths),
+        "learner_deck_count": len(learner_decks),
+        "learner_deck_paths": [str(path) for path, _deck, _hash, _source_hash in learner_decks],
+        "learner_deck_content_sha256": learner_content_hashes,
+        "learner_deck_source_file_sha256": learner_source_hashes,
+        "logical_matchup_count": len(learner_decks) * len(opponent_paths),
         "opponent_agent_paths": [
             str(path) if path is not None else None for path in agent_paths
         ],
@@ -371,9 +407,18 @@ def run_ar021(
         "trajectory_bundle": str(trajectory_bundle_path),
         "bundle_sha256": bundle_hash,
         "metadata_date": meta_date,
-        "deck": str(deck_path),
-        "deck_content_sha256": deck_hash,
-        "deck_source_file_sha256": deck_source_hash,
+        "deck": str(learner_paths[0]) if len(learner_paths) == 1 else "multiple learner decks",
+        "deck_paths": [str(path) for path in learner_paths],
+        "deck_content_sha256": aggregate_content_hash,
+        "deck_source_file_sha256": aggregate_source_hash,
+        "learner_decks": [
+            {
+                "path": str(path),
+                "content_sha256": content_hash,
+                "source_file_sha256": source_hash,
+            }
+            for path, _deck, content_hash, source_hash in learner_decks
+        ],
         "group_count": len(grouped_trajectories),
         "groups_per_matchup": groups_per_matchup,
         "matchup_count": len(opponent_paths),
@@ -402,6 +447,9 @@ def run_ar021(
         "groups": [
             {
                 "group_id": collection["group_id"],
+                "learner_deck_index": collection["learner_deck_index"],
+                "learner_deck": collection["learner_deck"],
+                "learner_deck_content_sha256": collection["learner_deck_content_sha256"],
                 "matchup_index": collection["matchup_index"],
                 "group_index": collection["group_index"],
                 "opponent_deck": collection["opponent_deck"],
@@ -435,6 +483,7 @@ def run_ar021(
             "dynamic_k_per_base": True,
             "matchup_stratification": True,
             "opponent_policy_stratification": any(path is not None for path in agent_paths),
+            "learner_deck_stratification": len(learner_decks) > 1,
             "independent_group_normalization": True,
             "single_grouped_optimizer_step": metrics["optimizer_steps"] == 1,
             "candidate_preflight_passed": True,
@@ -475,7 +524,13 @@ def run_ar021(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, default=Path("experiments/autoresearch/root/stage4_root.pkl"))
-    parser.add_argument("--agent-deck", type=Path, default=Path("agent/deck.csv"))
+    parser.add_argument(
+        "--agent-deck",
+        type=Path,
+        action="append",
+        default=None,
+        help="Learner deck JSON/CSV; repeat for explicit multi-deck strata.",
+    )
     parser.add_argument("--meta-date", required=True)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
@@ -507,10 +562,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    learner_deck_paths = args.agent_deck or [Path("agent/deck.csv")]
     print(json.dumps(run_ar021(
         checkpoint=args.checkpoint,
-        deck_path=args.agent_deck,
+        deck_path=learner_deck_paths[0],
         meta_date=args.meta_date,
+        learner_deck_paths=learner_deck_paths,
         output_dir=args.output_dir,
         opponent_deck_paths=args.opponent_deck,
         opponent_agent_paths=args.opponent_agent,

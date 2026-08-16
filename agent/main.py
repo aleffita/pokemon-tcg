@@ -18,6 +18,7 @@ Usage:
   The engine calls agent(obs) once per decision point.
 """
 import os
+import json
 import random
 import sys
 from types import SimpleNamespace
@@ -114,6 +115,17 @@ _RUNTIME_CFG = SimpleNamespace(**_RUNTIME_DATA)
 
 # ---- deck ----
 def load_deck(path: str = _DECK_PATH) -> list[int]:
+    if path.lower().endswith(".json"):
+        with open(path) as f:
+            payload = json.load(f)
+        if isinstance(payload, list):
+            return [int(card_id) for card_id in payload]
+        if isinstance(payload, dict) and isinstance(payload.get("card_list"), list):
+            card_ids = []
+            for card in payload["card_list"]:
+                card_ids.extend([int(card["id"])] * int(card["quantity"]))
+            return card_ids
+        raise ValueError(f"unsupported deck JSON shape: {path}")
     with open(path) as f:
         return [int(line.strip().rstrip(",")) for line in f if line.strip()]
 

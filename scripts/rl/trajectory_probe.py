@@ -64,7 +64,18 @@ def digest_tensor(value: torch.Tensor | None) -> str:
 
 
 def load_deck(path: Path) -> list[int]:
-    cards = [int(line.strip().rstrip(",")) for line in path.read_text().splitlines() if line.strip()]
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text())
+        if isinstance(payload, list):
+            cards = [int(card_id) for card_id in payload]
+        elif isinstance(payload, dict) and isinstance(payload.get("card_list"), list):
+            cards = []
+            for card in payload["card_list"]:
+                cards.extend([int(card["id"])] * int(card["quantity"]))
+        else:
+            raise ValueError(f"unsupported deck JSON shape: {path}")
+    else:
+        cards = [int(line.strip().rstrip(",")) for line in path.read_text().splitlines() if line.strip()]
     if len(cards) != 60:
         raise ValueError(f"agent deck must contain exactly 60 cards, got {len(cards)} from {path}")
     return cards

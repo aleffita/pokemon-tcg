@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -101,6 +102,30 @@ def _read_deck_csv(path: str) -> list[int] | None:
         return _parse_deck_lines(f)
 
 
+def _read_deck_file(path: str) -> list[int] | None:
+    """Read an alternate deck without modifying the shipped deck.csv.
+
+    JSON accepts either the compact ``[card_id, ...]`` form or the structured
+    Antigravity capsule form with ``card_list`` and per-card ``quantity``.
+    CSV keeps the existing one-card-ID-per-line contract.
+    """
+    if not os.path.exists(path):
+        return None
+    if path.lower().endswith(".json"):
+        with open(path) as f:
+            payload = json.load(f)
+        if isinstance(payload, list):
+            card_ids = [int(card_id) for card_id in payload]
+        elif isinstance(payload, dict) and isinstance(payload.get("card_list"), list):
+            card_ids = []
+            for card in payload["card_list"]:
+                card_ids.extend([int(card["id"])] * int(card["quantity"]))
+        else:
+            return None
+        return sorted(card_ids) if len(card_ids) == 60 else None
+    return _read_deck_csv(path)
+
+
 def _read_deck_from_tar(tar_path: str) -> list[int] | None:
     """Read deck.csv from inside a submission tarball.
 
@@ -129,7 +154,9 @@ def _find_or_create_deck(db, card_ids: list[int]) -> int:
     Delegates to the strict cryptographic SHA256 digest of the database to guarantee
     zero false-positive aggregations.
     """
-    return db.get_or_create_deck(card_ids, source="local")
+    # ``local`` is a match/data source, not a valid deck_sources code.  Arena
+    # deck identity is the relational catalog's source for synchronous games.
+    return db.get_or_create_deck(card_ids, source="arena")
 
 
 def _get_test_decks(db, source: str = "remote", n_top: int = 4, default_card_ids: list[int] | None = None) -> list[tuple[list[int], int | None]]:
@@ -561,6 +588,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--agent", type=str, default=None, action="append",
                    help="Custom main agent path (submission tarball or main.py). May be repeated to evaluate multiple agents.")
+    p.add_argument("--deck-file", type=str, default=None, action="append",
+                   help="Alternate 60-card deck JSON/CSV for our agent; repeat for an explicit deck list. Reloads in memory and never overwrites agent/deck.csv")
     p.add_argument("--games", "-n", type=int, default=20, help="Games per opponent")
     p.add_argument("--workers", "-w", type=int, default=4, help="Parallel worker processes for games execution (default: 4)")
     p.add_argument("--opponent", type=str, default=None, action="append",
@@ -664,6 +693,7 @@ def main():
 def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path: Path):
     our_agent, our_module = load_agent(our_path, return_module=True)
     our_deck_path = _agent_deck_path(our_path, our_module)
+    custom_deck_paths = [os.path.abspath(path) for path in (args.deck_file or [])]
     env = make_env()
 
     # Baselines + public agents. ``--opponent`` may be repeated to select a
@@ -673,9 +703,12 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
         else [("random", "random"), ("first", "first")]
     )
     if args.opponent:
+        seen_opponents = {label for label, _path in opponents}
         for opp_path in args.opponent:
             label = _clean_agent_label(opp_path)
-            opponents.append((label, opp_path))
+            if label not in seen_opponents:
+                opponents.append((label, opp_path))
+                seen_opponents.add(label)
     else:
         opponents.extend(
             (label, path)
@@ -688,7 +721,24 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
     # The sweep belongs exclusively to our agent. Opponent agents are resolved
     # once below and their own deck files/callables remain fixed for every
     # alternative deck we test against them.
-    if args.smoke:
+    if custom_deck_paths:
+        if not hasattr(our_module, "reload_deck"):
+            raise TypeError("--deck-file requires an agent module exposing reload_deck(path)")
+        custom_decks = []
+        for custom_deck_path in custom_deck_paths:
+            custom_deck_ids = _read_deck_file(custom_deck_path)
+            if custom_deck_ids is None:
+                raise ValueError(f"--deck-file must contain exactly 60 parseable cards: {custom_deck_path}")
+            custom_decks.append((custom_deck_path, custom_deck_ids))
+        our_test_decks = [
+            (card_ids, _find_or_create_deck(db, card_ids))
+            for _path, card_ids in custom_decks
+        ]
+        default_card_ids = custom_decks[0][1]
+        played = our_module.reload_deck(custom_decks[0][0])
+        if sorted(played) != sorted(default_card_ids):
+            raise RuntimeError("alternate deck reload mismatch")
+    elif args.smoke:
         default_card_ids = _read_deck_from_tar(our_path)
         our_test_decks = (
             [(default_card_ids, None)] if default_card_ids is not None else []
@@ -700,7 +750,7 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
     # Read original deck to restore after sweep
     original_deck = (
         open(our_deck_path).read()
-        if not args.smoke and os.path.exists(our_deck_path)
+        if not args.smoke and not custom_deck_paths and os.path.exists(our_deck_path)
         else None
     )
 
@@ -731,8 +781,8 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
 
     do_sweep = (
         not args.smoke
-        and not args.no_sweep
         and len(our_test_decks) > 1
+        and (bool(custom_deck_paths) or not args.no_sweep)
     )
     total_blocks = len(opponents) * (len(our_test_decks) if do_sweep else 1)
     completed_blocks = 0
@@ -774,17 +824,25 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
         total_blocks = sum(len(opp_test_decks) for _, _, _, opp_test_decks in resolved_opponents) * len(our_test_decks)
         print(f"Sweep: {len(our_test_decks)} OUR decks per opponent ({total_blocks} total matchup blocks)\n", flush=True)
 
-        for card_ids, deck_id in our_test_decks:
-            if deck_id is None and default_card_ids is not None:
+        for deck_index, (card_ids, deck_id) in enumerate(our_test_decks):
+            if deck_id is None and default_card_ids is not None and not custom_deck_paths:
                 deck_id = _find_or_create_deck(db, default_card_ids)
 
             # Swap agent/deck.csv ONCE for our agent for this entire deck batch
             deck_csv = our_deck_path
+            custom_deck_path = (
+                custom_deck_paths[deck_index]
+                if custom_deck_paths
+                else None
+            )
             try:
                 if card_ids:
-                    with open(deck_csv, "w") as f:
-                        f.write("\n".join(str(c) for c in card_ids) + "\n")
-                    played = our_module.reload_deck(deck_csv)
+                    if custom_deck_path:
+                        played = our_module.reload_deck(custom_deck_path)
+                    else:
+                        with open(deck_csv, "w") as f:
+                            f.write("\n".join(str(c) for c in card_ids) + "\n")
+                        played = our_module.reload_deck(deck_csv)
                     if sorted(played) != sorted(card_ids):
                         raise RuntimeError(
                             f"deck reload mismatch for deck {deck_id}: agent holds "
@@ -861,7 +919,9 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                 print(f"SUBTOTAL ({our_info['nick']}): {deck_w:5d} {deck_l:6d} {deck_d:6d}  {deck_wr:5.1f}%", flush=True)
                 print("=" * 88 + "\n", flush=True)
             finally:
-                if original_deck is not None:
+                if custom_deck_path:
+                    our_module.reload_deck(our_deck_path)
+                elif original_deck is not None:
                     with open(deck_csv, "w") as f:
                         f.write(original_deck)
                     our_module.reload_deck(deck_csv)
@@ -906,6 +966,9 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
         eta_fmt = f"{eta_h}h{eta_m:02d}m" if eta_h else f"{eta_m}m{eta_s:02d}s"
         print(f"  {deck_label:40s} W={w:3d} L={l:3d} D={d:3d} wr={wr:5.1f}% ({elapsed:.0f}s) | [{completed_blocks}/{total_blocks} ETA: {eta_fmt}]",
               flush=True)
+
+    if custom_deck_paths:
+        our_module.reload_deck(our_deck_path)
 
     total_time = time.time() - start_time
     overall_wr = total_w / max(total_w + total_l, 1) * 100
@@ -974,6 +1037,8 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
         import json as _json
         report = {
             "our_agent": our_path,
+            "our_deck_file": custom_deck_paths[0] if len(custom_deck_paths) == 1 else None,
+            "our_deck_files": custom_deck_paths,
             "sweep": do_sweep,
             "sweep_source": args.sweep_source if do_sweep else None,
             "games_per_opponent": args.games,

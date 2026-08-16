@@ -33,6 +33,7 @@ Total per candidate: 30 games.
 ```
 
 ### Evaluation Protocol:
-1. Codex executes candidate runs sequentially using `--deck experiments/decks/candidates/<deck_name>.json`.
+1. Codex executes candidate runs sequentially using repeated
+   `--deck-file experiments/decks/candidates/<deck_name>.json` arguments.
 2. Output W-L-D per opponent recorded in tournament JSON.
 3. Antigravity will ingest the tournament logs upon completion to calculate the empirical matchup delta and propose refined candidate adjustments.
