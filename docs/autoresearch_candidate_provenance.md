@@ -2,9 +2,11 @@
 
 The `PTCG_MODEL_PATH` environment variable is an explicit local opt-in. When
 it is set, `public_agents/submissions/latest-submission-300elo/main.py`
-validates the candidate evidence before invoking the strict FP32 inference
-loader. When it is unset, the public agent keeps its existing submission
-checkpoint search and behavior.
+requires `PTCG_EXPECTED_MODEL_SHA256`, hashes the candidate bytes, and rejects
+missing or mismatched expected bytes before validating candidate evidence or
+invoking the strict FP32 inference loader. When `PTCG_MODEL_PATH` is unset, the
+public agent keeps its existing submission checkpoint search and behavior;
+`PTCG_EXPECTED_MODEL_SHA256` is ignored.
 
 An AR candidate payload must contain an `autoresearch` object with:
 

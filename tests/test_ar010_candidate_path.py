@@ -216,6 +216,7 @@ def test_candidate_provenance_rejects_missing_or_tampered_artifacts(tmp_path):
 def test_opt_in_candidate_executes_first_choose_decision(tmp_path, monkeypatch):
     candidate = _provenance_fixture(tmp_path)
     monkeypatch.setenv("PTCG_MODEL_PATH", str(candidate))
+    monkeypatch.setenv("PTCG_EXPECTED_MODEL_SHA256", sha256_file(candidate))
     namespace = runpy.run_path(str(PUBLIC_AGENT), run_name="ptcg_ar010_candidate_smoke")
     assert namespace["_RUNTIME_DATA"]["prospective_planner"]["enabled"] is False
     model = namespace["_LOADED_MODEL"]
@@ -249,8 +250,43 @@ def test_opt_in_candidate_executes_first_choose_decision(tmp_path, monkeypatch):
     assert result == [0]
 
 
+def test_opt_in_candidate_tensor_tamper_is_rejected_by_expected_sha(
+    tmp_path, monkeypatch
+):
+    candidate = _provenance_fixture(tmp_path)
+    expected_sha256 = sha256_file(candidate)
+    payload = torch.load(candidate, map_location="cpu", weights_only=True)
+    state_key = next(iter(payload["state_dict"]))
+    payload["state_dict"][state_key] = payload["state_dict"][state_key].clone()
+    payload["state_dict"][state_key].view(-1)[0] += 1.0
+    torch.save(payload, candidate)
+
+    monkeypatch.setenv("PTCG_MODEL_PATH", str(candidate))
+    monkeypatch.setenv("PTCG_EXPECTED_MODEL_SHA256", expected_sha256)
+    with pytest.raises(ValueError, match="candidate SHA-256 mismatch"):
+        runpy.run_path(str(PUBLIC_AGENT), run_name="ptcg_ar012_tensor_tamper")
+
+
+@pytest.mark.parametrize(
+    ("expected_sha256", "message"),
+    [(None, "required"), ("0" * 64, "candidate SHA-256 mismatch")],
+)
+def test_opt_in_candidate_requires_matching_expected_sha(
+    tmp_path, monkeypatch, expected_sha256, message
+):
+    candidate = _provenance_fixture(tmp_path)
+    monkeypatch.setenv("PTCG_MODEL_PATH", str(candidate))
+    if expected_sha256 is None:
+        monkeypatch.delenv("PTCG_EXPECTED_MODEL_SHA256", raising=False)
+    else:
+        monkeypatch.setenv("PTCG_EXPECTED_MODEL_SHA256", expected_sha256)
+    with pytest.raises(ValueError, match=message):
+        runpy.run_path(str(PUBLIC_AGENT), run_name="ptcg_ar012_expected_sha")
+
+
 def test_default_public_agent_behavior_does_not_enter_candidate_gate(monkeypatch):
     monkeypatch.delenv("PTCG_MODEL_PATH", raising=False)
+    monkeypatch.setenv("PTCG_EXPECTED_MODEL_SHA256", "not-used-by-default-path")
 
     def fail_if_called(*args, **kwargs):
         raise AssertionError("default public behavior invoked candidate provenance")

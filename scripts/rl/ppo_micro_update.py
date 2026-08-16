@@ -63,6 +63,29 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def validate_expected_model_sha256(
+    candidate_path: Path,
+    expected_sha256: str | None,
+) -> str:
+    """Hash candidate bytes and require an explicit opt-in expected digest."""
+    if not isinstance(expected_sha256, str) or not expected_sha256.strip():
+        raise ValueError(
+            "PTCG_EXPECTED_MODEL_SHA256 is required when PTCG_MODEL_PATH is set"
+        )
+    expected = expected_sha256.strip().lower()
+    if len(expected) != 64 or any(char not in "0123456789abcdef" for char in expected):
+        raise ValueError(
+            "PTCG_EXPECTED_MODEL_SHA256 must be a 64-character hexadecimal SHA-256"
+        )
+    actual = sha256_file(Path(candidate_path))
+    if actual != expected:
+        raise ValueError(
+            "candidate SHA-256 mismatch: "
+            f"expected {expected}, got {actual}"
+        )
+    return actual
+
+
 def _finite(value: torch.Tensor | float) -> bool:
     if isinstance(value, torch.Tensor):
         return bool(torch.isfinite(value).all().item())
@@ -566,6 +589,7 @@ __all__ = [
     "save_candidate_checkpoint",
     "save_compressed_bundle",
     "sha256_file",
+    "validate_expected_model_sha256",
     "validate_candidate_provenance",
     "validate_bundle",
 ]

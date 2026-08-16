@@ -1,0 +1,38 @@
+AR-012 candidate preflight receipt
+=================================
+
+receipt_version=AR-012-v1
+repository_root=/Users/alefita/workdir/pokemon-tcg
+repository_scope=repository-local only; do not package or submit this candidate
+
+candidate_path=/Users/alefita/workdir/pokemon-tcg/experiments/autoresearch/AR-010/candidate.pt
+candidate_sha256=e6efe207d4b08dd458b40be14297b142ca2987b2238f97d807b6bf85320c7773
+
+sample_manifest_path=/Users/alefita/workdir/pokemon-tcg/experiments/autoresearch/AR-010/sample.manifest.json
+sample_manifest_sha256=b5c273f75c8bee147a16fbde49b8ca5fed0c017fa656b5f29cf1d480db051256
+sample_manifest_content_sha256=915d7314f6356695f38b1b183c54efbb3bd8141ee28f89f981bc8722ccbdad16
+
+trajectory_bundle_path=/Users/alefita/workdir/pokemon-tcg/experiments/autoresearch/AR-010/trajectory_bundle.pt.gz
+trajectory_bundle_sha256=f2f6ca653d752d91fc17b61298c3dfa09aac1ad5741f0d4c6b71ba065aedbbbf
+
+stage4_root_pickle_path=/Users/alefita/workdir/pokemon-tcg/experiments/autoresearch/root/stage4_root.pkl
+stage4_root_pickle_sha256=b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b
+stage4_root_fp32_tar_path=/Users/alefita/workdir/pokemon-tcg/experiments/autoresearch/root/stage4_root_fp32.tar.gz
+stage4_root_fp32_tar_sha256=32add97ad0848cc097a983a45a75a935532a807645b9e36d972bd6fee1c49751
+
+preflight_contract=
+  PTCG_MODEL_PATH is explicit opt-in and must name the candidate above.
+  PTCG_EXPECTED_MODEL_SHA256 is required whenever PTCG_MODEL_PATH is set.
+  Candidate bytes are SHA-256 hashed before candidate provenance or model load.
+  Missing, malformed, or mismatched expected SHA rejects the candidate.
+  PTCG_MODEL_PATH unset preserves default public behavior.
+
+tournament_constraints=
+  repository-local only: execute from /Users/alefita/workdir/pokemon-tcg.
+  absolute model path required: use the candidate_path above, not a relative path.
+  no-sweep required: pass the repository tournament's explicit --no-sweep option.
+  no packaging, no submission, and no remote or external tournament side effect.
+  candidate, manifest, and bundle remain local binary artifacts and are not committed.
+
+tournament_status=not_run
+tournament_command_approval=conditional preflight contract only; separate operator authorization required

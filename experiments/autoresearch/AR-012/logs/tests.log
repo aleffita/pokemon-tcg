@@ -1,0 +1,28 @@
+AR-012 expected candidate SHA preflight validation
+date=2026-08-16
+repository=/Users/alefita/workdir/pokemon-tcg
+candidate_receipt=experiments/autoresearch/AR-010/AR-012-candidate-receipt.txt
+tournament_run=false
+
+$ uv run --locked pytest -q tests/test_ar010_candidate_path.py tests/test_trajectory_probe.py
+........................                                                 [100%]
+24 passed in 1.86s
+
+$ uv run --locked python -m py_compile scripts/rl/ppo_micro_update.py public_agents/submissions/latest-submission-300elo/main.py tests/test_ar010_candidate_path.py
+exit=0
+
+$ git diff --check
+exit=0
+
+candidate_sha256=e6efe207d4b08dd458b40be14297b142ca2987b2238f97d807b6bf85320c7773
+sample_manifest_sha256=b5c273f75c8bee147a16fbde49b8ca5fed0c017fa656b5f29cf1d480db051256
+trajectory_bundle_sha256=f2f6ca653d752d91fc17b61298c3dfa09aac1ad5741f0d4c6b71ba065aedbbbf
+stage4_root_pickle_sha256=b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b
+stage4_root_fp32_tar_sha256=32add97ad0848cc097a983a45a75a935532a807645b9e36d972bd6fee1c49751
+
+preflight_contract=expected candidate SHA required only for PTCG_MODEL_PATH opt-in; hash precedes provenance/model load
+first_choose_covered=true
+default_public_path_unchanged=true
+tournament_run=false
+tournament_submission=false
+tournament_command_approved_by_worker=false
