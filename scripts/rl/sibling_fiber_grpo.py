@@ -9,12 +9,14 @@ continuation decisions remain provenance evidence and receive no gradient.
 from __future__ import annotations
 
 import math
+import importlib.util
 import os
 import pickle
+import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -114,6 +116,73 @@ def _branch_candidates(
     return result
 
 
+class _ExternalAgentOpponent:
+    """Adapter for a repository-local tournament agent callable.
+
+    Public tournament agents consume the same raw CABT observation dictionary
+    as the engine. They are deterministic/stateful at the module level rather
+    than recurrent PyTorch policies, so the adapter deliberately does not
+    invent a second learned memory lane.
+    """
+
+    def __init__(self, agent: Callable[[dict[str, Any]], list[int]]) -> None:
+        self.agent = agent
+
+    def reset_episode(self, _episode_id: str) -> None:
+        # The module is freshly loaded for each probe seed. The raw observation
+        # contains the complete public state needed by these agents.
+        return None
+
+    def set_side(self, _side: int) -> None:
+        return None
+
+    def on_terminal(self, _agent_return: float) -> None:
+        return None
+
+    def __call__(self, raw_obs: dict[str, Any], _rng: Any, **_) -> list[int]:
+        picks = self.agent(raw_obs)
+        if not isinstance(picks, (list, tuple)):
+            raise TypeError(f"external opponent returned {type(picks).__name__}, expected a list")
+        return [int(item) for item in picks]
+
+
+def load_external_opponent(path: str | Path) -> _ExternalAgentOpponent:
+    """Load one local tournament agent without purging the learner modules."""
+    agent_path = Path(path).resolve()
+    if not agent_path.is_file():
+        raise FileNotFoundError(f"external opponent main.py not found: {agent_path}")
+    module_name = f"ptcg_external_{abs(hash(str(agent_path)))}_{time.time_ns()}"
+    spec = importlib.util.spec_from_file_location(module_name, agent_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load external opponent: {agent_path}")
+    module = importlib.util.module_from_spec(spec)
+    old_cwd = os.getcwd()
+    agent_dir = str(agent_path.parent)
+    sys.path.insert(0, agent_dir)
+    try:
+        os.chdir(agent_dir)
+        spec.loader.exec_module(module)
+    finally:
+        os.chdir(old_cwd)
+        sys.path.pop(0)
+    opponent = getattr(module, "agent", None)
+    if not callable(opponent):
+        raise AttributeError(f"external opponent has no callable agent: {agent_path}")
+    return _ExternalAgentOpponent(opponent)
+
+
+def _reset_opponent(opponent: Any, episode_id: str) -> None:
+    callback = getattr(opponent, "reset_episode", None)
+    if callback is not None:
+        callback(episode_id)
+
+
+def _set_opponent_side(opponent: Any, side: int) -> None:
+    callback = getattr(opponent, "set_side", None)
+    if callback is not None:
+        callback(side)
+
+
 def _probe_branch_fibers(
     *,
     model: torch.nn.Module,
@@ -122,24 +191,29 @@ def _probe_branch_fibers(
     opponent_deck: list[int] | None,
     seed: int,
     games: int,
+    opponent_factory: Callable[[], Any] | None = None,
 ) -> tuple[list[int], dict[str, Any], CabtEnv, dict[str, np.ndarray], dict[str, Any]]:
     """Find a real in-game branch and keep its live env as an exact snapshot."""
     for seed_offset in range(32):
         probe_seed = seed + seed_offset
-        mirror = _StatefulMirror(model, encoder, np.random.default_rng(probe_seed + 1000))
+        opponent = (
+            opponent_factory()
+            if opponent_factory is not None
+            else _StatefulMirror(model, encoder, np.random.default_rng(probe_seed + 1000))
+        )
         env = CabtEnv(
             agent_deck=deck,
             opponent_deck=opponent_deck or deck,
-            opponent_fn=mirror,
+            opponent_fn=opponent,
             encoder=encoder,
             seed=probe_seed,
             max_steps=4000,
-            reset_hook=lambda _attempt, mirror=mirror: mirror.reset_episode("branch-probe"),
+            reset_hook=lambda _attempt, opponent=opponent: _reset_opponent(opponent, "branch-probe"),
         )
         keep_env = False
         try:
             encoded, reset_info = env.reset(seed=probe_seed)
-            mirror.set_side(1 - int(reset_info["agent_index"]))
+            _set_opponent_side(opponent, 1 - int(reset_info["agent_index"]))
             memory = initial_memory(model)
             decision_memory = memory
             decision_index = 0
@@ -246,7 +320,7 @@ def _collect_forked_fiber(
         try:
             bundle: list[dict[str, Any]] = []
             action_generator = torch.Generator(device="cpu").manual_seed(reset_seed + 7000)
-            mirror = env.opponent_fn
+            opponent = env.opponent_fn
             rows = collect_episode(
                 env,
                 model,
@@ -259,7 +333,7 @@ def _collect_forked_fiber(
                 model_hash,
                 action_generator,
                 bundle,
-                on_episode_reset=lambda agent_side: mirror.set_side(1 - agent_side),
+                on_episode_reset=lambda agent_side: _set_opponent_side(opponent, 1 - agent_side),
                 action_overrides={(0, 0): action},
                 initial_observation=base_observation,
                 initial_reset_info=base_reset_info,
@@ -308,6 +382,8 @@ def collect_sibling_fiber_group(
     games: int = 4,
     seed: int = 20020,
     episode_prefix: str | None = None,
+    opponent_factory: Callable[[], Any] | None = None,
+    opponent_agent_path: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collect K same-base forced-fiber continuations with common randomness."""
     if games < 2:
@@ -319,6 +395,7 @@ def collect_sibling_fiber_group(
         opponent_deck=opponent_deck,
         seed=seed,
         games=games,
+        opponent_factory=opponent_factory,
     )
     collection_seed = int(base["probe_seed"])
     trajectories: list[dict[str, Any]] = []
@@ -395,6 +472,7 @@ def collect_sibling_fiber_group(
         "agent_deck_source_file_sha256": deck_source_file_hash,
         "opponent_deck_content_sha256": opponent_deck_content_hash,
         "opponent_deck_source_file_sha256": opponent_deck_source_file_hash,
+        "opponent_agent_path": opponent_agent_path,
         "trajectory_summaries": [
             {
                 "episode_id": item["episode_id"],

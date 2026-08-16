@@ -21,6 +21,7 @@ from scripts.rl.sibling_fiber_grpo import (
     DEFAULT_OUTPUT as AR020_OUTPUT,
     SIBLING_FORMAT,
     collect_sibling_fiber_group,
+    load_external_opponent,
     sibling_fiber_grpo_update_groups,
 )
 from scripts.rl.trajectory_group_grpo import (
@@ -179,6 +180,7 @@ def run_ar021(
     meta_date: str,
     output_dir: Path = DEFAULT_OUTPUT,
     opponent_deck_paths: list[Path] | None = None,
+    opponent_agent_paths: list[Path] | None = None,
     groups_per_matchup: int = 2,
     k_max: int = 4,
     seed: int = 21021,
@@ -201,6 +203,9 @@ def run_ar021(
     deck_hash = deck_content_sha256(deck)
     deck_source_hash = sha256_file(deck_path)
     opponent_paths = opponent_deck_paths or [deck_path]
+    if opponent_agent_paths is not None and len(opponent_agent_paths) != len(opponent_paths):
+        raise ValueError("--opponent-agent must be repeated once per --opponent-deck")
+    agent_paths = opponent_agent_paths or [None] * len(opponent_paths)
     grouped_trajectories: list[list[dict[str, Any]]] = []
     collections: list[dict[str, Any]] = []
     for matchup_index, opponent_path in enumerate(opponent_paths):
@@ -210,6 +215,12 @@ def run_ar021(
         for group_index in range(groups_per_matchup):
             group_seed = seed + matchup_index * 100000 + group_index * 1000
             episode_prefix = f"ar021-m{matchup_index}-g{group_index}"
+            opponent_agent_path = agent_paths[matchup_index]
+            opponent_factory = (
+                None
+                if opponent_agent_path is None
+                else lambda path=opponent_agent_path: load_external_opponent(path)
+            )
             trajectories, collection = collect_sibling_fiber_group(
                 model=model,
                 encoder=encoder,
@@ -223,13 +234,20 @@ def run_ar021(
                 games=k_max,
                 seed=group_seed,
                 episode_prefix=episode_prefix,
+                opponent_factory=opponent_factory,
+                opponent_agent_path=(
+                    str(opponent_agent_path) if opponent_agent_path is not None else None
+                ),
             )
             collection.update(
                 {
                     "matchup_index": matchup_index,
                     "group_index": group_index,
                     "group_id": episode_prefix,
-                    "opponent_deck": str(opponent_path),
+                "opponent_deck": str(opponent_path),
+                "opponent_agent_path": (
+                    str(opponent_agent_path) if opponent_agent_path is not None else None
+                ),
                     "requested_seed": group_seed,
                 }
             )
@@ -266,6 +284,9 @@ def run_ar021(
         "group_size_cap": k_max,
         "groups_per_matchup": groups_per_matchup,
         "matchup_count": len(opponent_paths),
+        "opponent_agent_paths": [
+            str(path) if path is not None else None for path in agent_paths
+        ],
         "group_count": len(grouped_trajectories),
         "effective_group_sizes": [collection["games"] for collection in collections],
         "clip_epsilon": 0.2,
@@ -369,6 +390,7 @@ def run_ar021(
                 "matchup_index": collection["matchup_index"],
                 "group_index": collection["group_index"],
                 "opponent_deck": collection["opponent_deck"],
+                "opponent_agent_path": collection.get("opponent_agent_path"),
                 "opponent_deck_content_sha256": collection.get("opponent_deck_content_sha256"),
                 "opponent_deck_source_file_sha256": collection.get("opponent_deck_source_file_sha256"),
                 "effective_group_size": collection["games"],
@@ -395,6 +417,7 @@ def run_ar021(
             "future_continuation_credit": True,
             "dynamic_k_per_base": True,
             "matchup_stratification": True,
+            "opponent_policy_stratification": any(path is not None for path in agent_paths),
             "independent_group_normalization": True,
             "single_grouped_optimizer_step": metrics["optimizer_steps"] == 1,
             "candidate_preflight_passed": True,
@@ -444,6 +467,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Opponent deck CSV; repeat for independent matchup strata.",
     )
+    parser.add_argument(
+        "--opponent-agent",
+        type=Path,
+        action="append",
+        default=None,
+        help="Optional tournament opponent main.py, paired by order with --opponent-deck.",
+    )
     parser.add_argument("--groups-per-matchup", type=int, default=2)
     parser.add_argument("--k-max", type=int, default=4)
     parser.add_argument("--seed", type=int, default=21021)
@@ -459,6 +489,7 @@ def main() -> None:
         meta_date=args.meta_date,
         output_dir=args.output_dir,
         opponent_deck_paths=args.opponent_deck,
+        opponent_agent_paths=args.opponent_agent,
         groups_per_matchup=args.groups_per_matchup,
         k_max=args.k_max,
         seed=args.seed,
