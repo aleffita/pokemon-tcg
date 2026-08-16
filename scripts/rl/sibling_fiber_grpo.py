@@ -307,6 +307,7 @@ def collect_sibling_fiber_group(
     opponent_deck_source_file_hash: str | None = None,
     games: int = 4,
     seed: int = 20020,
+    episode_prefix: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collect K same-base forced-fiber continuations with common randomness."""
     if games < 2:
@@ -324,7 +325,11 @@ def collect_sibling_fiber_group(
     started = time.perf_counter()
     try:
         for fiber_index, action in enumerate(actions):
-            episode_id = f"sibling-fiber-{fiber_index:03d}"
+            episode_id = (
+                f"{episode_prefix}-fiber-{fiber_index:03d}"
+                if episode_prefix
+                else f"sibling-fiber-{fiber_index:03d}"
+            )
             rows, bundle = _collect_forked_fiber(
                 env=base_env,
                 model=model,
@@ -552,12 +557,162 @@ def sibling_fiber_grpo_update(
     return metrics
 
 
+def sibling_fiber_grpo_update_groups(
+    model: torch.nn.Module,
+    root_reference: torch.nn.Module,
+    trajectory_groups: list[list[dict[str, Any]]],
+    *,
+    clip_epsilon: float = 0.2,
+    learning_rate: float = 1e-5,
+    advantage_epsilon: float = 1e-8,
+    credit_scope: str = "branch_and_continuation",
+    continuation_discount: float = 0.97,
+) -> dict[str, Any]:
+    """Apply one optimizer step over independent sibling groups.
+
+    Each group is normalized against its own terminal-return distribution and
+    validated against its own exact recurrent base. The groups are only
+    concatenated after those per-base checks, so deck or matchup strata never
+    center their returns against one another. A single optimizer step then
+    aggregates the credited logical decisions from all groups.
+    """
+    if not trajectory_groups:
+        raise ValueError("sibling-fiber GRPO requires at least one trajectory group")
+    if not 0.0 < clip_epsilon < 1.0 or not math.isfinite(clip_epsilon):
+        raise ValueError("clip_epsilon must be finite and between zero and one")
+    if learning_rate <= 0.0 or not math.isfinite(learning_rate):
+        raise ValueError("learning_rate must be finite and positive")
+    if credit_scope not in {"branch_only", "branch_and_continuation"}:
+        raise ValueError("credit_scope must be branch_only or branch_and_continuation")
+    if not 0.0 < continuation_discount <= 1.0 or not math.isfinite(continuation_discount):
+        raise ValueError("continuation_discount must be finite and in (0, 1]")
+
+    learner_parts: list[torch.Tensor] = []
+    behavior_parts: list[torch.Tensor] = []
+    credit_parts: list[torch.Tensor] = []
+    branch_mask_parts: list[torch.Tensor] = []
+    group_stats_list: list[dict[str, Any]] = []
+    for trajectories in trajectory_groups:
+        _validate_group(trajectories)
+        returns = [float(item["terminal_return"]) for item in trajectories]
+        advantages, group_stats = normalize_group_returns(returns, epsilon=advantage_epsilon)
+        learner, behavior, decision_mapping, _substep_mapping = recompute_logprobs_by_decision(
+            model, trajectories
+        )
+        expected_mapping = torch.cat([
+            torch.full((len(item["decisions"]),), index, dtype=torch.long)
+            for index, item in enumerate(trajectories)
+        ])
+        if not torch.equal(decision_mapping, expected_mapping):
+            raise AssertionError("sibling logical decision mapping changed during recomputation")
+        branch_values: list[bool] = []
+        discount_values: list[float] = []
+        for trajectory in trajectories:
+            for decision_index, _decision in enumerate(trajectory["decisions"]):
+                is_branch = decision_index == 0
+                branch_values.append(is_branch)
+                discount_values.append(
+                    1.0
+                    if is_branch or credit_scope == "branch_only"
+                    else continuation_discount**decision_index
+                )
+        branch_mask = torch.as_tensor(branch_values, dtype=torch.bool)
+        credit = advantages[decision_mapping] * torch.as_tensor(
+            discount_values, dtype=torch.float32
+        )
+        if credit_scope == "branch_only":
+            credit = credit.masked_fill(~branch_mask, 0.0)
+        learner_parts.append(learner)
+        behavior_parts.append(behavior)
+        credit_parts.append(credit)
+        branch_mask_parts.append(branch_mask)
+        group_stats_list.append(group_stats)
+
+    learner = torch.cat(learner_parts)
+    behavior = torch.cat(behavior_parts)
+    credit = torch.cat(credit_parts)
+    branch_mask = torch.cat(branch_mask_parts)
+    ratio = torch.exp(learner - behavior.detach())
+    if not _finite(ratio):
+        raise ValueError("sibling-fiber importance ratios are non-finite")
+    active = credit != 0.0
+    if not bool(active.any().item()):
+        raise ValueError("sibling update has no credited logical decisions")
+    clipped = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
+    surrogate = torch.minimum(ratio * credit.detach(), clipped * credit.detach())
+    policy_loss = -surrogate[active].mean()
+    zero_variance_groups = sum(bool(item["zero_variance"]) for item in group_stats_list)
+    gradient_norm = torch.tensor(0.0)
+    started = time.perf_counter()
+    if zero_variance_groups == len(group_stats_list):
+        loss = policy_loss.detach() * 0.0
+        optimizer_steps = 0
+    else:
+        model.train()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+        optimizer.zero_grad(set_to_none=True)
+        loss = policy_loss
+        if not _finite(loss):
+            raise ValueError("sibling-fiber policy loss is non-finite")
+        loss.backward()
+        gradient_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        if not _finite(gradient_norm):
+            raise ValueError("sibling-fiber gradient norm is non-finite")
+        optimizer.step()
+        model.eval()
+        optimizer_steps = 1
+    update_seconds = time.perf_counter() - started
+    metrics: dict[str, Any] = {
+        "algorithm": "sibling_fiber_grpo_grouped",
+        "precision": "FP32",
+        "policy_only": True,
+        "branch_only_credit": credit_scope == "branch_only",
+        "continuation_credit": credit_scope == "branch_and_continuation",
+        "value_loss": 0.0,
+        "optimizer_steps": optimizer_steps,
+        "update_seconds": update_seconds,
+        "group_count": len(trajectory_groups),
+        "group_sizes": [len(group) for group in trajectory_groups],
+        "zero_variance_groups": zero_variance_groups,
+        "zero_variance_group": zero_variance_groups == len(group_stats_list),
+        "return_means": [item["return_mean"] for item in group_stats_list],
+        "return_stds": [item["return_std"] for item in group_stats_list],
+        "return_mean": float(np.mean([item["return_mean"] for item in group_stats_list])),
+        "return_std": float(np.mean([item["return_std"] for item in group_stats_list])),
+        "credit_scope": credit_scope,
+        "continuation_discount": continuation_discount,
+        "logical_decisions": int(learner.numel()),
+        "branch_logical_decisions": int(branch_mask.sum().item()),
+        "continuation_logical_decisions": int((~branch_mask).sum().item()),
+        "credited_logical_actions": int(active.sum().item()),
+        "continuation_credit_sum": float(credit[~branch_mask].sum().item()),
+        "loss": float(loss.detach().item()),
+        "policy_loss": float(policy_loss.detach().item()),
+        "gradient_norm": float(gradient_norm.detach().item()),
+        "ratio_mean": float(ratio.detach()[active].mean().item()),
+        "ratio_min": float(ratio.detach()[active].min().item()),
+        "ratio_max": float(ratio.detach()[active].max().item()),
+        "clip_fraction": float(
+            ((ratio.detach()[active] < 1.0 - clip_epsilon) | (ratio.detach()[active] > 1.0 + clip_epsilon))
+            .to(torch.float32)
+            .mean()
+            .item()
+        ),
+        "approx_kl_behavior": float((behavior.detach()[active] - learner.detach()[active]).mean().item()),
+        **_parameter_delta(model, root_reference),
+    }
+    if not all(_finite(value) for value in metrics.values() if isinstance(value, (float, int))):
+        raise ValueError("grouped sibling-fiber metrics are non-finite")
+    return metrics
+
+
 __all__ = [
     "APPROVED_STAGE4_ROOT_SHA256",
     "DEFAULT_OUTPUT",
     "SIBLING_FORMAT",
     "collect_sibling_fiber_group",
     "sibling_fiber_grpo_update",
+    "sibling_fiber_grpo_update_groups",
     "flatten_provenance_bundle",
     "save_grpo_candidate_checkpoint",
 ]

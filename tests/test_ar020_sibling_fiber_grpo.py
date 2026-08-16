@@ -8,6 +8,7 @@ import torch
 from scripts.rl.sibling_fiber_grpo import (
     _branch_candidates,
     sibling_fiber_grpo_update,
+    sibling_fiber_grpo_update_groups,
 )
 from scripts.rl.trajectory_group_grpo import (
     _masked_distribution,
@@ -116,3 +117,25 @@ def test_branch_only_remains_available_as_control() -> None:
     assert metrics["credited_logical_actions"] == 2
     assert metrics["continuation_credit"] is False
     assert metrics["continuation_credit_sum"] == 0.0
+
+
+def test_grouped_update_normalizes_each_dynamic_base_once() -> None:
+    model = _ToyPolicy()
+    root = copy.deepcopy(model)
+    groups = [
+        [_trajectory(model, 0, 1.0), _trajectory(model, 1, -1.0)],
+        [_trajectory(model, 2, 1.0), _trajectory(model, 0, -1.0)],
+    ]
+    metrics = sibling_fiber_grpo_update_groups(
+        model,
+        root,
+        groups,
+        learning_rate=1e-2,
+        credit_scope="branch_and_continuation",
+    )
+    assert metrics["optimizer_steps"] == 1
+    assert metrics["group_count"] == 2
+    assert metrics["group_sizes"] == [2, 2]
+    assert metrics["credited_logical_actions"] == 8
+    assert metrics["continuation_credit"] is True
+    assert all(torch.isfinite(value).all() for value in model.parameters())
