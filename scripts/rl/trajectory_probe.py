@@ -307,6 +307,7 @@ class _StatefulMirror:
         self.initial_memory_digest: str | None = None
         self.events: list[dict[str, Any]] = []
         self.decisions: list[dict[str, Any]] = []
+        self.terminal_return: float | None = None
 
     def reset_episode(self, episode_id: str) -> None:
         self.episode_id = episode_id
@@ -315,6 +316,7 @@ class _StatefulMirror:
         self.initial_memory_digest = digest_tensor(self.memory)
         self.events = []
         self.decisions = []
+        self.terminal_return = None
 
     def set_side(self, side: int) -> None:
         self.side = int(side)
@@ -322,6 +324,23 @@ class _StatefulMirror:
             record["side"] = self.side
         for record in self.decisions:
             record["side"] = self.side
+
+    def on_terminal(self, agent_return: float) -> None:
+        """Record the mirror-perspective terminal return after either side acts."""
+        if self.terminal_return is not None:
+            return
+        self.terminal_return = -float(agent_return)
+        if not self.decisions:
+            return
+        last_decision_index = int(self.decisions[-1]["decision_index"])
+        for record in self.events:
+            if int(record["decision_index"]) == last_decision_index:
+                record["reward"] = self.terminal_return
+                record["terminal"] = True
+                record["done"] = True
+        self.decisions[-1]["reward"] = self.terminal_return
+        self.decisions[-1]["terminal"] = True
+        self.decisions[-1]["done"] = True
 
     def __call__(
         self,
@@ -394,6 +413,9 @@ class _StatefulMirror:
                     "action_logprob": substep_logprob,
                     "logical_action_logprob": None,
                     "decision_logprob": None,
+                    "reward": 0.0,
+                    "terminal": False,
+                    "done": False,
                     "memory_input_digest": digest_tensor(decision_memory_in),
                     "memory_output_digest": digest_tensor(memory_out),
                     "decision_memory_output_digest": None,
@@ -429,6 +451,9 @@ class _StatefulMirror:
             "committed_memory_output_digest": committed_digest,
             "logical_action_logprob": logical_logprob,
             "decision_logprob": logical_logprob,
+            "reward": 0.0,
+            "terminal": False,
+            "done": False,
         }
         self.events.extend(pending_events)
         self.decisions.append(decision)
@@ -1015,10 +1040,11 @@ def write_true_recurrent_outputs(
                 "AR-018 true recurrent current-vs-current probe",
                 f"metadata_date={manifest['metadata_date']}",
                 f"games={manifest['games']}",
-                f"agent_decisions={manifest['decision_counts']['agent']}",
-                f"mirror_decisions={manifest['decision_counts']['opponent']}",
-                f"agent_return={manifest['terminal_return_agent']}",
-                f"opponent_return={manifest['terminal_return_opponent']}",
+                f"agent_decisions={sum(item['decision_counts']['agent'] for item in manifest['terminal_returns'])}",
+                f"mirror_decisions={sum(item['decision_counts']['opponent'] for item in manifest['terminal_returns'])}",
+                f"agent_sides={[item['agent_side'] for item in manifest['terminal_returns']]}",
+                f"agent_returns={[item['terminal_return_agent'] for item in manifest['terminal_returns']]}",
+                f"mirror_returns={[item['terminal_return_opponent'] for item in manifest['terminal_returns']]}",
                 f"rows_per_second={manifest['rows_per_second']}",
                 f"decisions_per_second={manifest['decisions_per_second']}",
                 f"selfplay_records_sha256={manifest['selfplay_records_sha256']}",
@@ -1039,8 +1065,8 @@ def run_true_recurrent_probe(
     experiment: str = "AR-018",
 ) -> dict[str, Any]:
     """Run a small current-vs-current probe without Parquet or packed hot-path work."""
-    if games < 1 or games > 2:
-        raise ValueError("true recurrent probe games must be between 1 and 2")
+    if games < 1 or games > 4:
+        raise ValueError("true recurrent probe games must be between 1 and 4")
     validate_meta_date(meta_date)
     deck = load_deck(deck_path)
     card_table = get_card_table()
@@ -1068,6 +1094,7 @@ def run_true_recurrent_probe(
             encoder=encoder,
             seed=seed + game_index,
             max_steps=4000,
+            reset_hook=lambda _attempt, episode_id=episode_id: mirror.reset_episode(episode_id),
         )
         try:
             agent_records = collect_episode(
@@ -1082,7 +1109,6 @@ def run_true_recurrent_probe(
                 model_hash,
                 torch.Generator(device="cpu").manual_seed(seed + game_index),
                 bundle,
-                on_episode_start=lambda episode_id=episode_id: mirror.reset_episode(episode_id),
                 on_episode_reset=lambda agent_side: mirror.set_side(1 - agent_side),
             )
         finally:
@@ -1104,9 +1130,16 @@ def run_true_recurrent_probe(
         if len(terminal_rows) != 1:
             raise AssertionError(f"{episode_id} has no unique agent terminal return")
         agent_return = float(terminal_rows[0]["reward"])
-        opponent_return = -agent_return
+        opponent_return = mirror.terminal_return
+        if opponent_return is None:
+            raise AssertionError(f"{episode_id} has no mirror terminal return record")
         if agent_return not in (-1.0, 0.0, 1.0) or opponent_return != -agent_return:
             raise AssertionError("true recurrent smoke did not produce symmetric terminal returns")
+        mirror_terminal_records = [record for record in mirror_records if bool(record["terminal"])]
+        if not mirror_terminal_records:
+            raise AssertionError(f"{episode_id} has no mirror terminal event record")
+        if any(float(record["reward"]) != opponent_return for record in mirror_terminal_records):
+            raise AssertionError(f"{episode_id} mirror terminal records disagree with the terminal return")
         if any(int(record["side"]) != int(agent_records[0]["side"]) for record in agent_records):
             raise AssertionError("agent side changed within an episode")
         if any(record["side"] is None for record in mirror_records):
@@ -1122,6 +1155,7 @@ def run_true_recurrent_probe(
                 "opponent_side": int(mirror.side),
                 "terminal_return_agent": agent_return,
                 "terminal_return_opponent": opponent_return,
+                "mirror_terminal_record_count": len(mirror_terminal_records),
                 "decision_counts": {
                     "agent": agent_summary["decision_count"],
                     "opponent": mirror_summary["decision_count"],
@@ -1186,6 +1220,7 @@ def run_true_recurrent_probe(
             "finite_substep_and_logical_logprobs": True,
             "composite_behavior_logprob_is_substep_sum": True,
             "terminal_return_sign_is_symmetric": True,
+            "mirror_terminal_return_recorded": True,
             "mirror_no_memory_legacy_unchanged": True,
             "no_rope_nd": True,
             "no_grpo": True,
@@ -1225,7 +1260,7 @@ def build_true_recurrent_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-deck", type=Path, default=DEFAULT_DECK)
     parser.add_argument("--meta-date", required=True, help="complete YYYY-MM-DD metadata date")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_TRUE_RECURRENT_OUTPUT)
-    parser.add_argument("--games", type=int, default=1, choices=(1, 2))
+    parser.add_argument("--games", type=int, default=4, choices=(1, 2, 3, 4))
     parser.add_argument("--seed", type=int, default=18018)
     parser.add_argument("--experiment", default="AR-018")
     return parser

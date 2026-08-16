@@ -11,6 +11,7 @@ import torch
 
 from rl.encoder.encoding import SUBMIT_ACTION, build_mask
 from rl.encoder.card_features import get_card_table
+from rl.env.env import CabtEnv
 from rl.policy_infer_torch import load_inference_checkpoint
 from scripts.rl.ppo_micro_update import (
     _model_input_digests,
@@ -182,6 +183,115 @@ def test_stateful_mirror_lanes_are_independent_and_commit_last_substep_output():
     first.reset_episode("first-reset")
     first(_mirror_obs(), object())
     assert first.decisions[0]["memory_input_digest"] == initial_digest
+
+
+def test_reset_hook_reinitializes_opponent_before_each_cabt_retry():
+    class _ResetAwareOpponent:
+        def __init__(self):
+            self.attempts = []
+            self.calls = []
+            self.state = None
+
+        def reset_attempt(self, attempt):
+            self.attempts.append(int(attempt))
+            self.state = f"attempt-{attempt}"
+
+        def __call__(self, _obs, _rng, **_kwargs):
+            self.calls.append(self.state)
+            return [0]
+
+    class _RetryingGame:
+        def __init__(self):
+            self.starts = 0
+            self.obs = None
+
+        def battle_start(self, _deck0, _deck1):
+            self.starts += 1
+            your_index = 1 if self.starts == 1 else 0
+            self.obs = {
+                "select": {"option": [0], "minCount": 1, "maxCount": 1},
+                "current": {"yourIndex": your_index, "result": -1},
+            }
+            return self.obs, object()
+
+        def battle_select(self, picks):
+            assert picks == [0]
+            self.obs = {
+                "select": {"option": [0], "minCount": 1, "maxCount": 1},
+                "current": {"yourIndex": 0, "result": 1},
+            }
+            return self.obs
+
+        def battle_finish(self):
+            return None
+
+    opponent = _ResetAwareOpponent()
+    env = CabtEnv(
+        agent_deck=[1],
+        opponent_deck=[1],
+        opponent_fn=opponent,
+        randomize_side=False,
+        reset_hook=opponent.reset_attempt,
+    )
+    env._game = _RetryingGame()
+    env._tracker = None
+    env._opp_tracker = None
+    env._opp_ability = None
+    env._encode = lambda: {"action_mask": np.ones(1, dtype=np.float32)}
+
+    _observation, info = env.reset(seed=18018)
+    assert info["agent_index"] == 0
+    assert opponent.attempts == [0, 1]
+    assert opponent.calls == ["attempt-0"]
+    env.close()
+
+
+def test_identical_behavior_and_learner_snapshots_recompute_complete_logprob():
+    behavior_model = _StatefulToyModel()
+    learner_model = copy.deepcopy(behavior_model)
+    behavior = _StatefulMirror(behavior_model, _MirrorEncoder(), _SequenceRng([0, 1, 0, 1]))
+    learner = _StatefulMirror(learner_model, _MirrorEncoder(), _SequenceRng([0, 1, 0, 1]))
+    behavior.reset_episode("behavior")
+    learner.reset_episode("learner")
+    raw_obs = _mirror_obs()
+    behavior(raw_obs, object())
+    learner(raw_obs, object())
+
+    grouped = {}
+    for record in behavior.events:
+        grouped.setdefault(int(record["decision_index"]), []).append(record)
+    memory = initial_memory(learner_model)
+    recomputed = []
+    for decision_index in sorted(grouped):
+        picked = set()
+        decision_memory = memory
+        memory_out = memory
+        substep_logprobs = []
+        for record in grouped[decision_index]:
+            encoded = learner.encoder.encode(raw_obs, picked=picked)
+            model_input = {
+                "action_mask": torch.as_tensor(encoded["action_mask"]).reshape(1, -1),
+            }
+            with torch.inference_mode():
+                logits, _value, memory_out = learner_model.logits_value(
+                    model_input,
+                    memory_in=decision_memory,
+                )
+            distribution = _masked_distribution(logits, encoded["action_mask"])
+            substep_logprobs.append(
+                float(distribution.log_prob(torch.tensor(int(record["action"]))).item())
+            )
+            if int(record["action"]) != SUBMIT_ACTION:
+                picked.add(int(record["action"]))
+        memory = memory_out.detach().to(dtype=torch.float32).clone()
+        recomputed.append(composite_behavior_logprob(substep_logprobs))
+
+    observed = [float(decision["logical_action_logprob"]) for decision in behavior.decisions]
+    assert recomputed == pytest.approx(observed)
+    assert all(
+        behavior_importance_ratio(learner_logprob, behavior_logprob) == pytest.approx(1.0)
+        for learner_logprob, behavior_logprob in zip(recomputed, observed)
+    )
 
 
 def test_strict_stage4_loader_does_not_fallback(monkeypatch, tmp_path):

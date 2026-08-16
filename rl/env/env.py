@@ -130,6 +130,7 @@ class CabtEnv:
         native_encode: bool = False,     # collection speedup: cg engine + GetBinaryObs + Cython encode_native
         native_validate: bool = False,   # debug: run BOTH encodes each step and assert byte-identical
         seed: int | None = None,
+        reset_hook=None,                 # called before every battle-start retry
     ):
         # A pool of decks (each side sampled per episode). Single-deck args are a
         # convenience that wraps into a 1-element pool.
@@ -171,6 +172,7 @@ class CabtEnv:
         self._validate = bool(native_validate)
         self._game = None
         self._Battle = None
+        self.reset_hook = reset_hook
 
     # -- engine handles (imported lazily so logging is disabled first) ------
     def _ensure_engine(self):
@@ -204,6 +206,8 @@ class CabtEnv:
         # step() raise "step() after episode end" -> a fresh battle dodges the dead start.
         for _attempt in range(32):
             self._safe_finish()   # free any prior battle this env instance owns
+            if self.reset_hook is not None:
+                self.reset_hook(_attempt)
             self._agent_idx = self.rng.randint(0, 1) if self.randomize_side else 0
             agent_deck = self.rng.choice(self.agent_decks)      # sample decks this episode
             self._agent_deck = agent_deck
@@ -341,7 +345,9 @@ class CabtEnv:
             return -1.0, True
         s = self._state()
         if s["result"] >= 0:
-            return self._terminal_reward(), True
+            reward = self._terminal_reward()
+            self._notify_opponent_terminal(reward)
+            return reward, True
         shaped = 0.0
         if self.reward_shaping:
             shaped = self.reward_shaping(prev, s, self._agent_idx)
@@ -354,6 +360,7 @@ class CabtEnv:
             s = self._state()
             if s["result"] >= 0:
                 self._done = True
+                self._notify_opponent_terminal(self._terminal_reward())
                 return
             if s["yourIndex"] == self._agent_idx:
                 return  # agent's decision
@@ -385,7 +392,13 @@ class CabtEnv:
                 # so force the reward rather than reading the unfinished state)
                 self._result_override = 1.0
                 self._done = True
+                self._notify_opponent_terminal(self._terminal_reward())
                 return
+
+    def _notify_opponent_terminal(self, agent_return: float) -> None:
+        callback = getattr(self.opponent_fn, "on_terminal", None)
+        if callback is not None:
+            callback(float(agent_return))
 
     def _terminal_reward(self) -> float:
         if self._result_override is not None:
