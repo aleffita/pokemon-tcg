@@ -68,4 +68,6 @@ unchanged.
 
 Keep packed data opt-in. Measure per-process training RSS and isolate packed
 TBPTT gather/prefetch overhead with repeated 2-epoch runs before reconsidering
-promotion.
+promotion. Reviewer findings add two P1 gates: runtime must validate the full
+row-order/boundary key, and checkpoint resume must bind to source/selection/
+split/packed/backend identity.

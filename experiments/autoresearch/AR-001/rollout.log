@@ -1,0 +1,30 @@
+Loading environment llm_20_questions failed: No module named 'kaggle_environments.envs.llm_20_questions.llm_20_questions'
+Loading environment chess failed: No module named 'kaggle_environments.envs.chess.chess'
+Loading environment lux_ai_s2 failed: No module named 'kaggle_environments.envs.lux_ai_s2.lux_ai_s2'
+[bc-agent] loaded PyTorch FP32 model /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_vlybk5dv/model/bc_model/bc_best_torch_fp32.pt (nlayers=4, scratch=32, would_ko=True, mode=baseline)
+our_agent= experiments/autoresearch/root/stage4_root_fp32.tar.gz
+opponent= public_agents/starters/lb600_dragapult_ex/main.py
+result_p0= -1
+replay_bytes= 3326301
+T_load_our_s=0.887749
+T_load_opponent_s=0.020441
+T_env_open_s=0.008426
+T_rollout_game_s=0.448198
+        4.36 real         3.12 user         0.45 sys
+           641728512  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               62194  page reclaims
+                2870  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  19  messages sent
+                  65  messages received
+                   1  signals received
+                5322  voluntary context switches
+                9726  involuntary context switches
+           186778137  instructions retired
+            74588445  cycles elapsed
+            13517256  peak memory footprint

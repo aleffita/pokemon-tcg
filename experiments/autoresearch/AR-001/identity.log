@@ -1,0 +1,20 @@
+--- identity ---
+/Users/alefita/workdir/pokemon-tcg
+/Users/alefita/workdir/pokemon-tcg
+develop
+dccef4f744b6cdb5b0f93de9d37f6c660f9912d6
+origin	https://github.com/aleffita/pokemon-tcg.git (fetch)
+origin	https://github.com/aleffita/pokemon-tcg.git (push)
+## develop...origin/develop [ahead 1]
+ M pyproject.toml
+ M uv.lock
+?? PROGRAM.md
+?? experiments/autoresearch/
+--- frozen hashes ---
+b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b  experiments/autoresearch/root/stage4_root.pkl
+32add97ad0848cc097a983a45a75a935532a807645b9e36d972bd6fee1c49751  experiments/autoresearch/root/stage4_root_fp32.tar.gz
+--- data hashes ---
+c501aba5b3bca6dd323d5c053be609a62888fe8d1bccd28f787666ba82fd4d22  data/bc_replay_zip/2026-08-12.zip
+ed4b392a41dc363d7175bffcdfdca105a21450fc209c36320a561e3631a8f1f0  data/bc_data/2026-08-08.parquet
+--- package deck hash ---
+4f1b76821b9dd638a25ed976701cad1bdfdddf4507c804bc2e950eae00099c97 251

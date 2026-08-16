@@ -1,8 +1,8 @@
-# State Capsule 002 - AR-002 reviewed locally
+# State Capsule 002 - AR-002 initial result
 
 Captured: 2026-08-16 after the AR-002 worker run.
 
-## Decision
+## Initial decision
 
 Keep the opt-in fixed-width mmap backend. Default training remains the
 Parquet/cache path. No model, loss, Stage 4 root, SQLite database, or
@@ -38,10 +38,21 @@ parameters and resumes from `stage4_root.pkl`, SHA-256
 Candidate ETL took 1.60 s. One epoch including that upfront cost is slightly
 slower than an already-built Parquet source, so reuse across epochs is
 required. The fixed-probe candidate requires one source day and TBPTT. No
-tournament was run because inference behavior is unchanged.
+tournament was run because inference behavior is unchanged. Reviewer findings
+require rework before multi-day promotion: explicit val-to-train row ordering,
+independent required-column parity, a shared `max_rows=0` split contract,
+separate-process RSS/swap telemetry, and direct 1/2/3-epoch amortization runs.
+The combined benchmark JSON is not canonical for RSS or swap because it uses
+process high-water marks and global cumulative counters.
+
+## Reviewer decision
+
+`REWORK` before AR-003, not discard. The fixed-probe data-path result is
+credible, but the backend contract is not yet strong enough for a larger
+corpus.
 
 ## Next experiment
 
-Pack a larger multi-day subset and run a bounded two-to-three-epoch workload to
-measure ETL amortization and pressure behavior before considering broader
-default integration.
+First repair the packed backend contract and then pack a larger multi-day
+subset. Run baseline, ETL and candidate in separate processes for a bounded
+one-to-three-epoch workload, measuring ETL amortization and pressure behavior.

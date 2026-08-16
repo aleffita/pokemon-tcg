@@ -1,0 +1,28 @@
+{
+  "our_agent": "/Users/alefita/workdir/pokemon-tcg/public_agents/submissions/latest-submission-300elo/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 10,
+  "note": "AR-013_candidate_lb826_10",
+  "rows": [
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "/Users/alefita/workdir/pokemon-tcg/public_agents/lb826_alakazam_seok",
+      "deck_id": 1,
+      "opp_deck_id": 4,
+      "wins": 2,
+      "losses": 8,
+      "draws": 0,
+      "wr_pct": 20.0,
+      "elapsed_s": 5.866565942764282,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 2,
+    "losses": 8,
+    "draws": 0,
+    "wr_pct": 20.0,
+    "elapsed_s": 5.88437294960022
+  }
+}

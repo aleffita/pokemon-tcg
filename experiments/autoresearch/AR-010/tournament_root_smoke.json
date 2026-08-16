@@ -1,0 +1,52 @@
+{
+  "our_agent": "/Users/alefita/workdir/pokemon-tcg/agent/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 2,
+  "note": "AR-013_stage4_root_smoke",
+  "rows": [
+    {
+      "opponent_label": "random",
+      "opponent_path": "random",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 0,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 2.0972800254821777,
+      "error": null
+    },
+    {
+      "opponent_label": "first",
+      "opponent_path": "first",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 0,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 0.5906989574432373,
+      "error": null
+    },
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "/Users/alefita/workdir/pokemon-tcg/public_agents/lb826_alakazam_seok",
+      "deck_id": 1,
+      "opp_deck_id": 4,
+      "wins": 0,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 0.3215980529785156,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 0,
+    "losses": 6,
+    "draws": 0,
+    "wr_pct": 0.0,
+    "elapsed_s": 3.0187430381774902
+  }
+}

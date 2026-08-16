@@ -1,0 +1,36 @@
+Loading environment llm_20_questions failed: No module named 'kaggle_environments.envs.llm_20_questions.llm_20_questions'
+Loading environment chess failed: No module named 'kaggle_environments.envs.chess.chess'
+Loading environment lux_ai_s2 failed: No module named 'kaggle_environments.envs.lux_ai_s2.lux_ai_s2'
+✓ Synchronized official Kaggle Leaderboard ratings for 161 decks in database.
+[bc-agent] loaded PyTorch FP32 model /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_co2v0mye/model/bc_model/bc_best_torch_fp32.pt (nlayers=4, scratch=32, would_ko=True, mode=baseline)
+Note: AR-001-stage4-package-fixed-harness
+lb600_dragapult_ex [deck:284]        0      2      0    0.0%    0.7s
+  lb600_dragapult_ex [deck:284]            W=  0 L=  2 D=  0 wr=  0.0% (1s) | [1/1 ETA: 0m00s]
+
+Opponent                                    W    L    D  WinRate   Time
+-----------------------------------------------------------------------
+lb600_dragapult_ex [deck:284]               0    2    0     0.0%     1s
+-----------------------------------------------------------------------
+OVERALL (SWEEP TOTAL:  All Decks)           0    2    0     0.0%     1s
+-----------------------------------------------------------------------
+[tournament] report written: experiments/autoresearch/AR-001/tournament.json
+
+Results saved to model/results.db (2 match replays)
+        4.72 real         3.78 user         0.44 sys
+           653574144  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               85792  page reclaims
+                   1  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  30  messages sent
+                  83  messages received
+                   1  signals received
+                 264  voluntary context switches
+               10637  involuntary context switches
+           176302131  instructions retired
+            69389420  cycles elapsed
+            13566408  peak memory footprint

@@ -1,0 +1,28 @@
+{
+  "our_agent": "experiments/autoresearch/root/stage4_root_fp32.tar.gz",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 2,
+  "note": "AR-001-stage4-package-fixed-harness",
+  "rows": [
+    {
+      "opponent_label": "lb600_dragapult_ex",
+      "opponent_path": "public_agents/starters/lb600_dragapult_ex/main.py",
+      "deck_id": 284,
+      "opp_deck_id": 7,
+      "wins": 0,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 0.7330381870269775,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 0,
+    "losses": 2,
+    "draws": 0,
+    "wr_pct": 0.0,
+    "elapsed_s": 0.7507293224334717
+  }
+}

@@ -1,0 +1,25 @@
+$ uv run --locked pytest -q tests/test_trajectory_probe.py
+..........                                                               [100%]
+10 passed in 1.34s
+
+$ uv run --locked python -m py_compile scripts/rl/ppo_micro_update.py scripts/rl/trajectory_probe.py public_agents/submissions/latest-submission-300elo/main.py
+$ uv run --locked pytest -q tests/test_trajectory_probe.py
+..........                                                               [100%]
+10 passed in 1.19s
+$ git diff --check
+passed
+
+$ uv run --locked pytest -q tests/test_trajectory_probe.py scripts/validate/test_policy_infer_torch.py
+..........FFFFF                                                          [100%]
+5 failed, 10 passed in 1.21s
+Failure cause: scripts/validate/test_policy_infer_torch.py requires the absent
+model/bc_model/bc_best_mlx_final.pkl legacy checkpoint.
+
+$ uv run --locked python scripts/rl/trajectory_probe.py --meta-date 2026-08-16 --games-per-mode 1 --seed 8008
+exit 1
+MetaLookupError: day_id 31 is not registered in the meta catalog
+
+$ PTCG_MODEL_PATH=experiments/autoresearch/AR-009/candidate.pt uv run --locked python <agent import smoke>
+selected_model=experiments/autoresearch/AR-009/candidate.pt
+model_dtype=torch.float32
+model_loaded=True

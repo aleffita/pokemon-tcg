@@ -1,0 +1,40 @@
+{
+  "our_agent": "/Users/alefita/workdir/pokemon-tcg/public_agents/submissions/latest-submission-300elo/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 10,
+  "note": "AR-013_candidate_random_first_10",
+  "rows": [
+    {
+      "opponent_label": "random",
+      "opponent_path": "random",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 5,
+      "losses": 5,
+      "draws": 0,
+      "wr_pct": 50.0,
+      "elapsed_s": 8.340283870697021,
+      "error": null
+    },
+    {
+      "opponent_label": "first",
+      "opponent_path": "first",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 2,
+      "losses": 8,
+      "draws": 0,
+      "wr_pct": 20.0,
+      "elapsed_s": 4.551457166671753,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 7,
+    "losses": 13,
+    "draws": 0,
+    "wr_pct": 35.0,
+    "elapsed_s": 12.892352104187012
+  }
+}

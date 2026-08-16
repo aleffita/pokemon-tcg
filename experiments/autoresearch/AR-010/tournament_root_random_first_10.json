@@ -1,0 +1,40 @@
+{
+  "our_agent": "/Users/alefita/workdir/pokemon-tcg/agent/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 10,
+  "note": "AR-013_stage4_root_random_first_10",
+  "rows": [
+    {
+      "opponent_label": "random",
+      "opponent_path": "random",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 2,
+      "losses": 8,
+      "draws": 0,
+      "wr_pct": 20.0,
+      "elapsed_s": 3.740605115890503,
+      "error": null
+    },
+    {
+      "opponent_label": "first",
+      "opponent_path": "first",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 2,
+      "losses": 8,
+      "draws": 0,
+      "wr_pct": 20.0,
+      "elapsed_s": 4.451167106628418,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 4,
+    "losses": 16,
+    "draws": 0,
+    "wr_pct": 20.0,
+    "elapsed_s": 8.192468881607056
+  }
+}

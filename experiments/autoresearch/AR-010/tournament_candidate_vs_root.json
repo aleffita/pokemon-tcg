@@ -1,0 +1,52 @@
+{
+  "our_agent": "/Users/alefita/workdir/pokemon-tcg/public_agents/submissions/latest-submission-300elo/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 10,
+  "note": "AR-013_candidate_vs_frozen_root",
+  "rows": [
+    {
+      "opponent_label": "random",
+      "opponent_path": "random",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 2,
+      "losses": 8,
+      "draws": 0,
+      "wr_pct": 20.0,
+      "elapsed_s": 3.635859966278076,
+      "error": null
+    },
+    {
+      "opponent_label": "first",
+      "opponent_path": "first",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 3,
+      "losses": 7,
+      "draws": 0,
+      "wr_pct": 30.0,
+      "elapsed_s": 5.2268500328063965,
+      "error": null
+    },
+    {
+      "opponent_label": "agent",
+      "opponent_path": "/Users/alefita/workdir/pokemon-tcg/agent/main.py",
+      "deck_id": 1,
+      "opp_deck_id": 1,
+      "wins": 8,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 80.0,
+      "elapsed_s": 7.6180689334869385,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 13,
+    "losses": 17,
+    "draws": 0,
+    "wr_pct": 43.333333333333336,
+    "elapsed_s": 16.52129602432251
+  }
+}

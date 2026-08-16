@@ -34,6 +34,7 @@ dependencies = [
     # the user runs `uv run tensorboard --logdir runs` in a second shell.
     "tensorboard>=2.19.0",
     "torch>=2.13.0",
+    "pytest>=9.1.1",
 ]
 
 [project.scripts]

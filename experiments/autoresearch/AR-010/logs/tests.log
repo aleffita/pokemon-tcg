@@ -1,0 +1,48 @@
+AR-010 AR-011 regeneration and reviewer-gate log
+date=2026-08-16
+root=experiments/autoresearch/root/stage4_root.pkl
+root_sha256=b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b
+
+$ uv run --locked pytest -q tests/test_ar010_candidate_path.py tests/test_trajectory_probe.py
+21 passed in 1.74s
+
+$ uv run --locked python -m py_compile scripts/rl/ppo_micro_update.py scripts/rl/trajectory_probe.py tests/test_ar010_candidate_path.py tests/test_trajectory_probe.py
+exit=0
+
+$ git diff --check
+exit=0
+
+regeneration=corrected AR-009 trajectory probe with --experiment AR-010
+metadata_date=2026-08-12
+seed=8018
+games_per_mode=1
+samples=177
+random_rows=85
+mirror_no_memory_rows=92
+all_ordered_samples_have_model_input_digests=True
+
+candidate_sha256=e6efe207d4b08dd458b40be14297b142ca2987b2238f97d807b6bf85320c7773
+sample_manifest_sha256=b5c273f75c8bee147a16fbde49b8ca5fed0c017fa656b5f29cf1d480db051256
+sample_manifest_content_sha256=915d7314f6356695f38b1b183c54efbb3bd8141ee28f89f981bc8722ccbdad16
+bundle_sha256=f2f6ca653d752d91fc17b61298c3dfa09aac1ad5741f0d4c6b71ba065aedbbbf
+
+ppo_samples=177
+ppo_loss=1.3862196207046509
+ppo_policy_loss=0.00000025660304459051986
+ppo_value_loss=2.7724387645721436
+ppo_entropy=1.2229487895965576
+ppo_gradient_norm=32.759674072265625
+ppo_root_reference_kl_mean=0.0001976492058020085
+ppo_root_reference_parameter_l2=0.009192824462590189
+
+old_ar009_rejected=True
+old_ar009_rejection_type=ValueError
+old_ar009_rejection=candidate provenance is missing the trajectory-bundle file hash
+
+strict_load=True
+model_dtype=torch.float32
+first_choose_result=[0]
+first_choose_prospective_enabled=False
+default_public_provenance_gate=False
+tournament_run=False
+tournament_submission=False

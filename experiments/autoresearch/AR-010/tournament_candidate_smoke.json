@@ -1,0 +1,52 @@
+{
+  "our_agent": "/Users/alefita/workdir/pokemon-tcg/public_agents/submissions/latest-submission-300elo/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 2,
+  "note": "AR-013_candidate_preflight_smoke",
+  "rows": [
+    {
+      "opponent_label": "random",
+      "opponent_path": "random",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 0,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 1.2559449672698975,
+      "error": null
+    },
+    {
+      "opponent_label": "first",
+      "opponent_path": "first",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 0,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 0.3222498893737793,
+      "error": null
+    },
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "/Users/alefita/workdir/pokemon-tcg/public_agents/lb826_alakazam_seok",
+      "deck_id": 1,
+      "opp_deck_id": 4,
+      "wins": 0,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 1.0073339939117432,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 0,
+    "losses": 6,
+    "draws": 0,
+    "wr_pct": 0.0,
+    "elapsed_s": 2.596273899078369
+  }
+}
