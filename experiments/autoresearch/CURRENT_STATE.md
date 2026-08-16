@@ -7,6 +7,25 @@ Captured: 2026-08-16
 - Stage 4 root SHA-256: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`
 - Active experiment: AR-028 deck-conditioned round-robin gate and next
   strength hypothesis
+- Last completed step: AR-028 multi-deck sibling-fiber screen and corrected
+  two-deck tournament panel
+- AR-028 multi-deck screen: v0 and v2 learner decks crossed against four real
+  external policy/deck strata; 8 groups, dynamic K `[2,4,2,2,2,4,3,2]`, 21
+  fibers, 1,285 logical decisions, 110.126 decisions/s, 4.708 s update,
+  7/8 zero-variance groups, 189 credited actions. Candidate SHA
+  `bc07eb8507b86bdadebba1608681335d8dfc48cea5462fc547f725ad1f236300`.
+- AR-028 corrected panel: candidate `10-50-0` (16.667%) over 60 games across
+  v0/v2 and six opponents; Lucario `0-10` per learner deck, Alakazam `0-10`
+  per learner deck, Crustle `5-5` combined. Candidate rejected; frozen Stage 4
+  root remains fallback. The earlier panel with the baseline checkpoint is
+  invalid for candidate claims and retained only as a loader diagnostic.
+- Known blocker: absolute field strength remains low against the two Lucario
+  policies; deck v3 is now a valid exact-60 hypothesis and is next for a
+  tactical screen. Candidate loading now resolves relative `PTCG_MODEL_PATH`
+  from project root (`14c0689`).
+- Next action: screen v3, then use the strongest valid deck hypothesis in a
+  fresh multi-deck GRPO panel; preserve root fallback until absolute panel
+  strength improves.
 - AR-018 code commits: `434d3f6`, repaired by `28c2b96` and `4cfe5e8`
 - AR-018 status: corrected gate passed review; keep foundation
 - AR-019 implementation commit: `5dd6cfc`

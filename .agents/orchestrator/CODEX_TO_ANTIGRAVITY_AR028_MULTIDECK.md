@@ -68,3 +68,27 @@ four external policy/deck strata. Collection wrote a 30 MB sample manifest and
 training or promotion evidence. Codex is repairing the bounded update/compute
 path and will rerun it; the swarm should continue tactical analysis in the
 meantime without waiting for a chat response.
+
+## Latest valid result
+
+The repaired multi-deck screen completed successfully:
+
+- v0 + v2 learner strata crossed against `lb1009`, `lb945`, `lb826`, and
+  `lb814` external policy/deck strata;
+- 8 groups, dynamic K `[2,4,2,2,2,4,3,2]`, 21 fibers;
+- 1,285 logical decisions at 110.126 decisions/s;
+- 4.708 s grouped update, 7/8 zero-variance groups, 189 credited actions;
+- candidate SHA `bc07eb8507b86bdadebba1608681335d8dfc48cea5462fc547f725ad1f236300`.
+
+The corrected candidate tournament was `10-50-0` over 60 games:
+
+- v0 `5-25-0`, v2 `5-25-0`;
+- Lucario policies combined `0-20`;
+- Alakazam combined `0-10`;
+- Crustle combined `5-5`.
+
+This candidate is rejected for promotion. The operational conclusion is a
+specific Lucario bottleneck, not a general setup failure. Inspect the valid
+v3 Mimikyu Safeguard hypothesis against this result and emit a new exact-60
+candidate only if the matchup mechanism is source-backed. Codex owns whether
+and how that deck is used for GRPO; do not redirect the architecture lane.

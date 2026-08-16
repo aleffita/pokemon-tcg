@@ -1,0 +1,11 @@
+AR-028-multideck-screen2 grouped dynamic-K sibling-fiber GRPO
+group_count=8
+effective_group_sizes=[2, 4, 2, 2, 2, 4, 3, 2]
+returns=[[-1.0, -1.0], [-1.0, -1.0, -1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0, -1.0, -1.0], [-1.0, 1.0, -1.0], [-1.0, -1.0]]
+logical_decisions=1285
+substeps=1348
+collection_seconds=11.668447
+update_seconds=4.707561375107616
+candidate_sha256=bc07eb8507b86bdadebba1608681335d8dfc48cea5462fc547f725ad1f236300
+candidate_preflight=passed
+tournament=pending
