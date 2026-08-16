@@ -246,6 +246,34 @@ def test_reset_hook_reinitializes_opponent_before_each_cabt_retry():
     env.close()
 
 
+def test_agent_selection_failure_records_mirror_terminal_reward():
+    class _TerminalSpy:
+        def __init__(self):
+            self.agent_returns = []
+
+        def on_terminal(self, agent_return):
+            self.agent_returns.append(float(agent_return))
+
+    class _BrokenGame:
+        def battle_select(self, _picks):
+            raise RuntimeError("synthetic engine rejection")
+
+    spy = _TerminalSpy()
+    env = CabtEnv(agent_deck=[1], opponent_deck=[1], opponent_fn=spy)
+    env._game = _BrokenGame()
+    env._ability = None
+    env._obs = {
+        "select": {"option": [0], "minCount": 1, "maxCount": 1},
+        "current": {"yourIndex": 0, "result": -1},
+    }
+
+    reward, terminated = env._apply_selection([0])
+    assert reward == -1.0
+    assert terminated is True
+    assert spy.agent_returns == [-1.0]
+    env.close()
+
+
 def test_identical_behavior_and_learner_snapshots_recompute_complete_logprob():
     behavior_model = _StatefulToyModel()
     learner_model = copy.deepcopy(behavior_model)

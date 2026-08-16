@@ -342,7 +342,9 @@ class CabtEnv:
             self._obs = game.battle_select(indices)
         except Exception:
             # illegal selection -> agent forfeits
-            return -1.0, True
+            reward = -1.0
+            self._notify_opponent_terminal(reward)
+            return reward, True
         s = self._state()
         if s["result"] >= 0:
             reward = self._terminal_reward()
