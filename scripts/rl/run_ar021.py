@@ -57,6 +57,76 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+    """Replace a JSON artifact only after its complete successor is durable."""
+    incomplete_path = path.with_name(f"{path.name}.incomplete")
+    _write_json(incomplete_path, value)
+    incomplete_path.replace(path)
+
+
+def _save_completed_epoch_checkpoint(
+    *,
+    output_dir: Path,
+    model: torch.nn.Module,
+    model_metadata: dict[str, Any],
+    root_sha256: str,
+    sample_manifest_sha256: str,
+    bundle_sha256: str,
+    sample_manifest_content_sha256: str,
+    config: dict[str, Any],
+    diagnostics: dict[str, Any],
+    experiment: str,
+    completed_epoch: int,
+) -> dict[str, Any]:
+    """Atomically publish the most recent fully completed optimizer epoch."""
+    if completed_epoch < 1:
+        raise ValueError("completed_epoch must be at least one")
+    latest_path = output_dir / "candidate.latest.pt"
+    incomplete_path = output_dir / "candidate.latest.pt.incomplete"
+    checkpoint_config = {
+        **config,
+        "checkpoint_kind": "completed_epoch",
+        "completed_update_epochs": completed_epoch,
+    }
+    checkpoint_diagnostics = {
+        **diagnostics,
+        "optimizer_steps": completed_epoch,
+        "completed_update_epochs": completed_epoch,
+        "interruption_safe_checkpoint": True,
+    }
+    candidate_sha256 = save_grpo_candidate_checkpoint(
+        incomplete_path,
+        model,
+        model_metadata,
+        root_sha256=root_sha256,
+        sample_manifest_sha256=sample_manifest_sha256,
+        bundle_sha256=bundle_sha256,
+        sample_manifest_content_sha256=sample_manifest_content_sha256,
+        config=checkpoint_config,
+        diagnostics=checkpoint_diagnostics,
+        experiment=experiment,
+    )
+    validate_candidate_provenance(
+        incomplete_path,
+        approved_root_sha256=APPROVED_STAGE4_ROOT_SHA256,
+    )
+    incomplete_path.replace(latest_path)
+    metadata = {
+        "format": "ptcg-completed-epoch-checkpoint-v1",
+        "experiment": experiment,
+        "captured_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "completed_update_epochs": completed_epoch,
+        "candidate": str(latest_path),
+        "candidate_sha256": candidate_sha256,
+        "root_sha256": root_sha256,
+        "sample_manifest_sha256": sample_manifest_sha256,
+        "bundle_sha256": bundle_sha256,
+        "validated": True,
+    }
+    _atomic_write_json(output_dir / "candidate.latest.json", metadata)
+    return metadata
+
+
 def _event_logger(output_dir: Path) -> Callable[[dict[str, Any]], None]:
     """Create one compact durable JSONL stream and mirror it to stdout."""
     event_path = output_dir / "logs" / "events.jsonl"
@@ -96,7 +166,9 @@ def _aggregate_hash(values: list[str]) -> str:
     return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
 
-def _behavior_snapshot_hash(parent_sha256: str, ropend_config: dict[str, Any] | None) -> str:
+def _behavior_snapshot_hash(
+    parent_sha256: str, ropend_config: dict[str, Any] | None
+) -> str:
     """Identify the exact rollout architecture without changing root provenance."""
     payload = {
         "parent_sha256": parent_sha256,
@@ -106,7 +178,9 @@ def _behavior_snapshot_hash(parent_sha256: str, ropend_config: dict[str, Any] | 
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _load_parent_checkpoint(checkpoint: Path, card_table: Any) -> tuple[Any, dict[str, Any], str]:
+def _load_parent_checkpoint(
+    checkpoint: Path, card_table: Any
+) -> tuple[Any, dict[str, Any], str]:
     """Load the immutable root or a provenance-linked descendant candidate."""
     parent_hash = sha256_file(checkpoint)
     if parent_hash == APPROVED_STAGE4_ROOT_SHA256:
@@ -140,8 +214,14 @@ def deck_relative_group_advantages(
         scores = np.asarray([row[2] for row in rows], dtype=np.float64)
         mean = float(scores.mean())
         std = float(scores.std(ddof=0))
-        normalized = np.zeros_like(scores) if len(rows) < 2 or std <= 1e-8 else (scores - mean) / std
-        for (collection_index, _deck_index, _score), value in zip(rows, normalized, strict=True):
+        normalized = (
+            np.zeros_like(scores)
+            if len(rows) < 2 or std <= 1e-8
+            else (scores - mean) / std
+        )
+        for (collection_index, _deck_index, _score), value in zip(
+            rows, normalized, strict=True
+        ):
             advantages[collection_index] = float(value)
         summaries.append(
             {
@@ -188,7 +268,7 @@ def _write_report(
 ) -> None:
     report = f"""# {experiment} - grouped dynamic-K sibling-fiber GRPO
 
-Captured on {manifest['captured_at']} from frozen Stage 4 root `{manifest['root_sha256']}`.
+Captured on {manifest["captured_at"]} from frozen Stage 4 root `{manifest["root_sha256"]}`.
 
 ## Result
 
@@ -203,15 +283,15 @@ zero-variance evidence. The frozen root remains the fallback pending tournament.
 
 | Metric | Result |
 | --- | ---: |
-| Groups / fibers | {manifest['group_count']} / {manifest['group_size']} |
-| Effective K per base | `{manifest['effective_group_sizes']}` |
-| Branch policy/uniform mixture | `{manifest['config']['branch_selection']}` / {manifest['config']['branch_uniform_mix']} |
-| Logical decisions / substeps | {manifest['logical_decisions']} / {manifest['substeps']} |
-| Collection seconds / decisions/s | {manifest['collection_seconds']} / {manifest['collection_decisions_per_second']} |
-| Grouped optimizer steps | {metrics['optimizer_steps']} |
-| Update seconds | {metrics['update_seconds']} |
-| Loss / gradient norm | {metrics['loss']} / {metrics['gradient_norm']} |
-| Candidate parameter L2 delta | {metrics['parameter_l2']} |
+| Groups / fibers | {manifest["group_count"]} / {manifest["group_size"]} |
+| Effective K per base | `{manifest["effective_group_sizes"]}` |
+| Branch policy/uniform mixture | `{manifest["config"]["branch_selection"]}` / {manifest["config"]["branch_uniform_mix"]} |
+| Logical decisions / substeps | {manifest["logical_decisions"]} / {manifest["substeps"]} |
+| Collection seconds / decisions/s | {manifest["collection_seconds"]} / {manifest["collection_decisions_per_second"]} |
+| Grouped optimizer steps | {metrics["optimizer_steps"]} |
+| Update seconds | {metrics["update_seconds"]} |
+| Loss / gradient norm | {metrics["loss"]} / {metrics["gradient_norm"]} |
+| Candidate parameter L2 delta | {metrics["parameter_l2"]} |
 
 ## Contracts checked
 
@@ -220,14 +300,14 @@ zero-variance evidence. The frozen root remains the fallback pending tournament.
 - Effective K is dynamic per base: `min(K_max, legal branch actions)`.
 - Deck and matchup strata normalize returns independently; no group is centered
   against another matchup's terminal distribution.
-- The candidate uses `{metrics['requested_update_epochs']}` requested optimizer
+- The candidate uses `{metrics["requested_update_epochs"]}` requested optimizer
   epochs over all signal-bearing groups, while each group's sibling-relative
   credit remains separate; an all-zero-signal matrix is explicitly fail-closed.
 - All K sibling futures execute simultaneously after the recurrent branch base
   is fixed; no polling or scheduler participates in process completion.
 - All rollouts run to terminal completion and continuation credit uses discount
-  `{metrics['continuation_discount']}` without duplicating conditional substeps.
-- Candidate preflight passed: `{manifest['candidate_preflight']['passed']}`.
+  `{metrics["continuation_discount"]}` without duplicating conditional substeps.
+- Candidate preflight passed: `{manifest["candidate_preflight"]["passed"]}`.
 
 ## Limitations and next gate
 
@@ -239,10 +319,10 @@ before interpreting or promoting the candidate.
 
 ## Provenance
 
-- Code commit at execution: `{manifest['code_commit']}`
-- Candidate SHA-256: `{manifest['candidate_sha256']}`
-- Sample manifest SHA-256: `{manifest['sample_manifest_sha256']}`
-- Trajectory bundle SHA-256: `{manifest['bundle_sha256']}`
+- Code commit at execution: `{manifest["code_commit"]}`
+- Candidate SHA-256: `{manifest["candidate_sha256"]}`
+- Sample manifest SHA-256: `{manifest["sample_manifest_sha256"]}`
+- Trajectory bundle SHA-256: `{manifest["bundle_sha256"]}`
 - Tournament gate: pending
 """
     (output_dir / "report.md").write_text(report)
@@ -256,19 +336,19 @@ def _write_capsule(
 ) -> None:
     capsule = f"""# State Capsule {experiment[-3:]} - grouped dynamic-K sibling-fiber GRPO
 
-Captured {manifest['captured_at']}.
+Captured {manifest["captured_at"]}.
 
 ## Current state
 
-- Frozen Stage 4 root remains fallback: `{manifest['root_sha256']}`.
-- AR-021 collected `{manifest['group_count']}` exact recurrent sibling groups
-  and `{manifest['group_size']}` fibers with effective K
-  `{manifest['effective_group_sizes']}`.
+- Frozen Stage 4 root remains fallback: `{manifest["root_sha256"]}`.
+- AR-021 collected `{manifest["group_count"]}` exact recurrent sibling groups
+  and `{manifest["group_size"]}` fibers with effective K
+  `{manifest["effective_group_sizes"]}`.
 - The grouped FP32 policy-only path applied sibling-relative and paired
   inter-deck terminal credit through future continuation with discount
-  `{metrics['continuation_discount']}`, or emitted a no-op when all groups were
+  `{metrics["continuation_discount"]}`, or emitted a no-op when all groups were
   zero-variance.
-- Candidate: `{manifest['candidate_sha256']}`; preflight passed.
+- Candidate: `{manifest["candidate_sha256"]}`; preflight passed.
 - Tournament is pending; no promotion, RoPE-ND, MoE, or historical
   ETL/Parquet/packed-data path was run.
 
@@ -283,12 +363,12 @@ Captured {manifest['captured_at']}.
 
 ## Metrics
 
-- Collection: `{manifest['collection_seconds']}` s,
-  `{manifest['collection_decisions_per_second']}` decisions/s.
-- Update: `{metrics['update_seconds']}` s; `{metrics['optimizer_steps']}` optimizer steps.
-- Credited logical actions: `{metrics['credited_logical_actions']}`.
-- Parameter L2 delta: `{metrics['parameter_l2']}`;
-  gradient norm `{metrics['gradient_norm']}`.
+- Collection: `{manifest["collection_seconds"]}` s,
+  `{manifest["collection_decisions_per_second"]}` decisions/s.
+- Update: `{metrics["update_seconds"]}` s; `{metrics["optimizer_steps"]}` optimizer steps.
+- Credited logical actions: `{metrics["credited_logical_actions"]}`.
+- Parameter L2 delta: `{metrics["parameter_l2"]}`;
+  gradient norm `{metrics["gradient_norm"]}`.
 
 ## Next control point
 
@@ -443,22 +523,22 @@ def run_ar021(
     root_hash = APPROVED_STAGE4_ROOT_SHA256
     behavior_hash = _behavior_snapshot_hash(parent_hash, canonical_ropend)
     opponent_paths = opponent_deck_paths or [deck_path]
-    if opponent_agent_paths is not None and len(opponent_agent_paths) != len(opponent_paths):
+    if opponent_agent_paths is not None and len(opponent_agent_paths) != len(
+        opponent_paths
+    ):
         raise ValueError("--opponent-agent must be repeated once per --opponent-deck")
     agent_paths = opponent_agent_paths or [None] * len(opponent_paths)
     grouped_trajectories: list[list[dict[str, Any]]] = []
     collections: list[dict[str, Any]] = []
-    for learner_index, (learner_path, deck, deck_hash, deck_source_hash) in enumerate(learner_decks):
+    for learner_index, (learner_path, deck, deck_hash, deck_source_hash) in enumerate(
+        learner_decks
+    ):
         for matchup_index, opponent_path in enumerate(opponent_paths):
             opponent_deck = load_deck(opponent_path)
             opponent_hash = deck_content_sha256(opponent_deck)
             opponent_source_hash = sha256_file(opponent_path)
             for group_index in range(groups_per_matchup):
-                group_seed = (
-                    seed
-                    + matchup_index * 100_000
-                    + group_index * 1_000
-                )
+                group_seed = seed + matchup_index * 100_000 + group_index * 1_000
                 episode_prefix = (
                     f"{experiment.lower().replace('-', '')}"
                     f"-d{learner_index}-m{matchup_index}-g{group_index}"
@@ -489,7 +569,9 @@ def run_ar021(
                     episode_prefix=episode_prefix,
                     opponent_factory=opponent_factory,
                     opponent_agent_path=(
-                        str(opponent_agent_path) if opponent_agent_path is not None else None
+                        str(opponent_agent_path)
+                        if opponent_agent_path is not None
+                        else None
                     ),
                     opponent_mode=opponent_mode,
                     branch_uniform_mix=branch_uniform_mix,
@@ -505,7 +587,9 @@ def run_ar021(
                         "group_id": episode_prefix,
                         "opponent_deck": str(opponent_path),
                         "opponent_agent_path": (
-                            str(opponent_agent_path) if opponent_agent_path is not None else None
+                            str(opponent_agent_path)
+                            if opponent_agent_path is not None
+                            else None
                         ),
                         "requested_seed": group_seed,
                     }
@@ -547,7 +631,9 @@ def run_ar021(
     sample_manifest_path = output_dir / "sample.manifest.json"
     trajectory_bundle_path = output_dir / "trajectory_bundle.pt.gz"
     _write_json(sample_manifest_path, sample_manifest)
-    bundle_hash = save_compressed_bundle(trajectory_bundle_path, provenance_bundle, sample_manifest)
+    bundle_hash = save_compressed_bundle(
+        trajectory_bundle_path, provenance_bundle, sample_manifest
+    )
     sample_manifest_file_hash = sha256_file(sample_manifest_path)
 
     deck_group_advantages, deck_cohorts = deck_relative_group_advantages(collections)
@@ -561,30 +647,12 @@ def run_ar021(
             "games": len(all_trajectories),
             "logical_decisions": sum(item["logical_decisions"] for item in collections),
             "device": str(resolved_update_device),
-            "nonzero_deck_advantages": sum(value != 0.0 for value in deck_group_advantages),
+            "nonzero_deck_advantages": sum(
+                value != 0.0 for value in deck_group_advantages
+            ),
         }
     )
 
-    metrics = sibling_fiber_grpo_update_groups(
-        model,
-        root_reference,
-        grouped_trajectories,
-        clip_epsilon=0.2,
-        learning_rate=learning_rate,
-        credit_scope="branch_and_continuation",
-        continuation_discount=0.97,
-        update_epochs=update_epochs,
-        deck_group_advantages=deck_group_advantages,
-        deck_relative_weight=deck_relative_weight,
-        prospective_aux_weight=prospective_aux_weight,
-        deck_aux_weight=deck_aux_weight,
-        aux_batch_size=aux_batch_size,
-        policy_group_batch_size=policy_group_batch_size,
-        max_update_seconds=max_update_seconds,
-        deck_action_weight=deck_action_weight,
-        dense_reward_weight=dense_reward_weight,
-        progress_callback=emit_event,
-    )
     config = {
         "algorithm": "sibling_fiber_grpo_grouped",
         "group_size_cap": k_max,
@@ -593,7 +661,9 @@ def run_ar021(
         "groups_per_matchup": groups_per_matchup,
         "matchup_count": len(opponent_paths),
         "learner_deck_count": len(learner_decks),
-        "learner_deck_paths": [str(path) for path, _deck, _hash, _source_hash in learner_decks],
+        "learner_deck_paths": [
+            str(path) for path, _deck, _hash, _source_hash in learner_decks
+        ],
         "learner_deck_snapshots": deck_snapshots,
         "deck_pool_dir": str(deck_pool_dir) if deck_pool_dir is not None else None,
         "deck_pool_limit": deck_pool_limit,
@@ -633,16 +703,74 @@ def run_ar021(
         "parent_sha256": parent_hash,
         "behavior_snapshot_sha256": behavior_hash,
         "ropend": canonical_ropend,
-        "generated_turn_zero": generated_turn_zero,
         "credit_scope": "branch_and_continuation",
         "continuation_discount": 0.97,
         "matchup_normalization": "sibling_relative_plus_paired_inter_deck_cohort",
         "optimizer_aggregation": "multi_epoch_over_frozen_behavior_groups_or_fail_closed_noop",
         "parallel_collection": "all_dynamic_K sibling continuations execute concurrently",
         "rollout_storage": "compact bounded provenance bundle persisted adjacent to candidate",
+        "epoch_checkpoint": "validated candidate.latest.pt replaced atomically after every step",
     }
     if any(path is not None for path in agent_paths):
-        config["selfplay_mode"] = "current_vs_external_policy_true_recurrent_shared_base"
+        config["selfplay_mode"] = (
+            "current_vs_external_policy_true_recurrent_shared_base"
+        )
+
+    completed_epoch_events: list[dict[str, Any]] = []
+
+    def update_progress(event: dict[str, Any]) -> None:
+        if event.get("event") == "update_epoch":
+            epoch = int(event["epoch"])
+            completed_epoch_events.append(dict(event))
+            latest = _save_completed_epoch_checkpoint(
+                output_dir=output_dir,
+                model=model,
+                model_metadata=metadata,
+                root_sha256=root_hash,
+                sample_manifest_sha256=sample_manifest_file_hash,
+                bundle_sha256=bundle_hash,
+                sample_manifest_content_sha256=sample_manifest["sha256"],
+                config=config,
+                diagnostics={
+                    "algorithm": "sibling_fiber_grpo_grouped",
+                    "requested_update_epochs": update_epochs,
+                    "epoch_metrics": completed_epoch_events,
+                    "update_seconds": event.get("elapsed_seconds"),
+                },
+                experiment=experiment,
+                completed_epoch=epoch,
+            )
+            emit_event(
+                {
+                    "event": "epoch_checkpoint_saved",
+                    "epoch": epoch,
+                    "candidate": latest["candidate"],
+                    "candidate_sha256": latest["candidate_sha256"],
+                    "validated": latest["validated"],
+                }
+            )
+        emit_event(event)
+
+    metrics = sibling_fiber_grpo_update_groups(
+        model,
+        root_reference,
+        grouped_trajectories,
+        clip_epsilon=0.2,
+        learning_rate=learning_rate,
+        credit_scope="branch_and_continuation",
+        continuation_discount=0.97,
+        update_epochs=update_epochs,
+        deck_group_advantages=deck_group_advantages,
+        deck_relative_weight=deck_relative_weight,
+        prospective_aux_weight=prospective_aux_weight,
+        deck_aux_weight=deck_aux_weight,
+        aux_batch_size=aux_batch_size,
+        policy_group_batch_size=policy_group_batch_size,
+        max_update_seconds=max_update_seconds,
+        deck_action_weight=deck_action_weight,
+        dense_reward_weight=dense_reward_weight,
+        progress_callback=update_progress,
+    )
     candidate_path = output_dir / "candidate.pt"
     candidate_hash = save_grpo_candidate_checkpoint(
         candidate_path,
@@ -673,7 +801,9 @@ def run_ar021(
                 **group_stats,
             }
         )
-    all_collections_seconds = sum(float(item["collection_seconds"]) for item in collections)
+    all_collections_seconds = sum(
+        float(item["collection_seconds"]) for item in collections
+    )
     all_fibers = sum(int(item["games"]) for item in collections)
     all_decisions = sum(int(item["logical_decisions"]) for item in collections)
     all_substeps = sum(int(item["substeps"]) for item in collections)
@@ -694,7 +824,9 @@ def run_ar021(
         "candidate_preflight": {
             "passed": True,
             "approved_root_sha256": APPROVED_STAGE4_ROOT_SHA256,
-            "artifacts": {name: str(path) for name, path in preflight_artifacts.items()},
+            "artifacts": {
+                name: str(path) for name, path in preflight_artifacts.items()
+            },
         },
         "sample_manifest": str(sample_manifest_path),
         "sample_manifest_sha256": sample_manifest_file_hash,
@@ -702,7 +834,9 @@ def run_ar021(
         "trajectory_bundle": str(trajectory_bundle_path),
         "bundle_sha256": bundle_hash,
         "metadata_date": meta_date,
-        "deck": str(learner_paths[0]) if len(learner_paths) == 1 else "multiple learner decks",
+        "deck": str(learner_paths[0])
+        if len(learner_paths) == 1
+        else "multiple learner decks",
         "deck_paths": [str(path) for path in learner_paths],
         "deck_content_sha256": aggregate_content_hash,
         "deck_source_file_sha256": aggregate_source_hash,
@@ -713,7 +847,9 @@ def run_ar021(
                 "content_sha256": content_hash,
                 "source_file_sha256": source_hash,
             }
-            for index, (path, _deck, content_hash, source_hash) in enumerate(learner_decks)
+            for index, (path, _deck, content_hash, source_hash) in enumerate(
+                learner_decks
+            )
         ],
         "group_count": len(grouped_trajectories),
         "groups_per_matchup": groups_per_matchup,
@@ -725,7 +861,9 @@ def run_ar021(
         "branch_base": [collection["branch_base"] for collection in collections],
         "agent_sides": [int(item["agent_side"]) for item in all_trajectories],
         "group_returns": [collection["returns"] for collection in collections],
-        "group_policy_scores": [collection["policy_scores"] for collection in collections],
+        "group_policy_scores": [
+            collection["policy_scores"] for collection in collections
+        ],
         "return_mean": [item["return_mean"] for item in return_statistics],
         "return_std": [item["return_std"] for item in return_statistics],
         "returns_advantages": [item["advantages"] for item in return_statistics],
@@ -734,9 +872,15 @@ def run_ar021(
         "logical_decisions": all_decisions,
         "substeps": all_substeps,
         "collection_seconds": round(all_collections_seconds, 6),
-        "collection_games_per_second": all_fibers / all_collections_seconds if all_collections_seconds else None,
-        "collection_decisions_per_second": all_decisions / all_collections_seconds if all_collections_seconds else None,
-        "collection_substeps_per_second": all_substeps / all_collections_seconds if all_collections_seconds else None,
+        "collection_games_per_second": all_fibers / all_collections_seconds
+        if all_collections_seconds
+        else None,
+        "collection_decisions_per_second": all_decisions / all_collections_seconds
+        if all_collections_seconds
+        else None,
+        "collection_substeps_per_second": all_substeps / all_collections_seconds
+        if all_collections_seconds
+        else None,
         "update_seconds": metrics["update_seconds"],
         "trajectory_summaries": [
             summary
@@ -748,16 +892,24 @@ def run_ar021(
                 "group_id": collection["group_id"],
                 "learner_deck_index": collection["learner_deck_index"],
                 "learner_deck": collection["learner_deck"],
-                "learner_deck_content_sha256": collection["learner_deck_content_sha256"],
+                "learner_deck_content_sha256": collection[
+                    "learner_deck_content_sha256"
+                ],
                 "matchup_index": collection["matchup_index"],
                 "group_index": collection["group_index"],
                 "opponent_deck": collection["opponent_deck"],
                 "opponent_agent_path": collection.get("opponent_agent_path"),
                 "opponent_mode": collection.get("opponent_mode"),
-                "opponent_deck_content_sha256": collection.get("opponent_deck_content_sha256"),
-                "opponent_deck_source_file_sha256": collection.get("opponent_deck_source_file_sha256"),
+                "opponent_deck_content_sha256": collection.get(
+                    "opponent_deck_content_sha256"
+                ),
+                "opponent_deck_source_file_sha256": collection.get(
+                    "opponent_deck_source_file_sha256"
+                ),
                 "effective_group_size": collection["games"],
-                "branch_uniform_mix": collection.get("branch_uniform_mix", branch_uniform_mix),
+                "branch_uniform_mix": collection.get(
+                    "branch_uniform_mix", branch_uniform_mix
+                ),
                 "branch_actions": collection["branch_actions"],
                 "returns": collection["returns"],
                 "policy_scores": collection["policy_scores"],
@@ -770,7 +922,8 @@ def run_ar021(
         "rollout_persistence": "compact bounded provenance bundle persisted; no unbounded rollout buffer",
         "tournament": {"status": "pending"},
         "invariants": {
-            "root_provenance_is_frozen_stage4": root_hash == APPROVED_STAGE4_ROOT_SHA256,
+            "root_provenance_is_frozen_stage4": root_hash
+            == APPROVED_STAGE4_ROOT_SHA256,
             "parent_is_root_or_valid_descendant": True,
             "paired_seed_across_learner_decks": True,
             "shared_branch_base_per_group": True,
@@ -784,17 +937,24 @@ def run_ar021(
             "future_continuation_credit": True,
             "dynamic_k_per_base": True,
             "matchup_stratification": True,
-            "opponent_policy_stratification": any(path is not None for path in agent_paths),
+            "opponent_policy_stratification": any(
+                path is not None for path in agent_paths
+            ),
             "learner_deck_stratification": len(learner_decks) > 1,
             "independent_group_normalization": True,
             "requested_multi_epoch_update": update_epochs > 1,
-            "optimizer_steps_within_requested_epochs": 0 <= metrics["optimizer_steps"] <= update_epochs,
-            "inter_deck_relative_credit": len(learner_decks) > 1 and deck_relative_weight > 0.0,
+            "optimizer_steps_within_requested_epochs": 0
+            <= metrics["optimizer_steps"]
+            <= update_epochs,
+            "inter_deck_relative_credit": len(learner_decks) > 1
+            and deck_relative_weight > 0.0,
             "parallel_sibling_games": all(
                 bool(collection.get("parallel_fibers")) for collection in collections
             ),
-            "all_groups_zero_variance": metrics["zero_variance_groups"] == len(grouped_trajectories),
-            "no_signal_fail_closed": metrics.get("no_update_reason") == "all_groups_zero_variance",
+            "all_groups_zero_variance": metrics["zero_variance_groups"]
+            == len(grouped_trajectories),
+            "no_signal_fail_closed": metrics.get("no_update_reason")
+            == "all_groups_zero_variance",
             "candidate_preflight_passed": True,
             "stage4_root_preserved": True,
             "requested_group_size_was_four": k_max == 4,
@@ -876,7 +1036,11 @@ def run_ar021(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, default=Path("experiments/autoresearch/root/stage4_root.pkl"))
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=Path("experiments/autoresearch/root/stage4_root.pkl"),
+    )
     parser.add_argument(
         "--agent-deck",
         type=Path,
@@ -932,7 +1096,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("experiments/decks/swarm/results"),
     )
-    parser.add_argument("--update-device", choices=("auto", "cpu", "mps"), default="auto")
+    parser.add_argument(
+        "--update-device", choices=("auto", "cpu", "mps"), default="auto"
+    )
     parser.add_argument("--seed", type=int, default=21021)
     parser.add_argument("--experiment", type=str, default=EXPERIMENT)
     return parser
@@ -985,7 +1151,9 @@ def main() -> None:
                 "collection_seconds": manifest["collection_seconds"],
                 "update_seconds": manifest["update_seconds"],
                 "optimizer_steps": manifest["metrics"]["optimizer_steps"],
-                "credited_logical_actions": manifest["metrics"]["credited_logical_actions"],
+                "credited_logical_actions": manifest["metrics"][
+                    "credited_logical_actions"
+                ],
                 "zero_variance_groups": manifest["metrics"]["zero_variance_groups"],
                 "events": str(args.output_dir / "logs" / "events.jsonl"),
             },
