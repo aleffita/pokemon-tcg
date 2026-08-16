@@ -1,0 +1,8 @@
+AR-022 scale attempt
+
+The first invocation requested groups_per_matchup=2 across four deck strata
+(eight sibling groups total). It produced only partial bounded bundle files
+before the harness window ended and did not produce a candidate or manifest.
+The experiment was rerun with groups_per_matchup=1 across the same four strata;
+that bounded run completed and supersedes the partial files in this directory.
+No candidate from the partial attempt was evaluated or promoted.

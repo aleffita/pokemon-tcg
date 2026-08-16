@@ -1,0 +1,52 @@
+{
+  "our_agent": "agent/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 10,
+  "note": "AR-022_candidate_same_deck_panel_10",
+  "rows": [
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "deck_id": 1,
+      "opp_deck_id": 4,
+      "wins": 2,
+      "losses": 8,
+      "draws": 0,
+      "wr_pct": 20.0,
+      "elapsed_s": 5.2526750564575195,
+      "error": null
+    },
+    {
+      "opponent_label": "random",
+      "opponent_path": "random",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 2,
+      "losses": 8,
+      "draws": 0,
+      "wr_pct": 20.0,
+      "elapsed_s": 5.069745302200317,
+      "error": null
+    },
+    {
+      "opponent_label": "first",
+      "opponent_path": "first",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 3,
+      "losses": 7,
+      "draws": 0,
+      "wr_pct": 30.0,
+      "elapsed_s": 5.295598745346069,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 7,
+    "losses": 23,
+    "draws": 0,
+    "wr_pct": 23.333333333333332,
+    "elapsed_s": 15.637582302093506
+  }
+}

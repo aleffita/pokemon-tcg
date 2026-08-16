@@ -47,6 +47,15 @@ Captured: 2026-08-16
 - No RoPE-ND, package, submission, MoE, Parquet, or packed-data path was run.
 - Next action: train grouped sibling fibers with external-opponent deck strata;
   preserve root fallback until the panel improves.
+- AR-022 implementation commit: `50c1b6d`
+- AR-022 candidate SHA-256: `0fb2fed2282298cb2e1e2f9cf14ca28b101735c5e839f303abba6f9d49da0c1a`
+- AR-022 external-deck strata: four groups over agent, lb826, Lucario, and
+  Dragapult decks; effective K `[2,2,2,2]`; 685 logical decisions; 3 of 4
+  groups zero-variance, 220 credited actions.
+- AR-022 tournament: same-deck candidate-vs-root `13-17-0`; candidate panel
+  `7-23-0`; root panel `8-22-0`. Rejected for promotion; root remains fallback.
+- Next action: improve opponent-policy realism or branch diversity before any
+  further scale-up; do not promote on root-relative evidence alone.
 
 Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-019/manifest.json`, `AR-019/metrics.json`, `AR-019/logs/tests.log`,
@@ -62,4 +71,8 @@ Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-021/report.md`, `AR-021/manifest.json`, `AR-021/metrics.json`,
 `AR-021/tournament_candidate_vs_root_same_deck_30.json`,
 `AR-021/tournament_candidate_panel_10.json`,
-`AR-021/tournament_root_panel_10.json`, `STATE_CAPSULE_021.md`.
+`AR-021/tournament_root_panel_10.json`, `STATE_CAPSULE_021.md`,
+`AR-022/report.md`, `AR-022/manifest.json`, `AR-022/metrics.json`,
+`AR-022/tournament_candidate_vs_root_same_deck_30.json`,
+`AR-022/tournament_candidate_panel_10.json`,
+`AR-022/tournament_root_panel_10.json`, `STATE_CAPSULE_022.md`.
