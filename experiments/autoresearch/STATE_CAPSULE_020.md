@@ -11,11 +11,12 @@ Captured 2026-08-16T17:47:00.052564+00:00.
 - One FP32 policy-only update applied branch-relative terminal credit through
   the future continuation with discount `0.97`.
 - Candidate: `89a70d4eddb3c856d7c4a4e1ad520e2d23bc7230c76b4c10904c45970eeb8637`; preflight passed.
-- Candidate-vs-root tournament: `2-8-0` in 10 games; candidate panel:
-  `8-22-0` across lb826, random, and first; frozen-root panel: `3-27-0`.
-- Direct gate rejected promotion. The candidate and root panels used different
-  packaged default decks, so the panel comparison is directional; root remains
-  fallback. No RoPE-ND, MoE, or historical ETL/Parquet/packed-data work was run.
+- Controlled same-deck candidate-vs-root tournament: `11-19-0` in 30 games;
+  candidate panel `9-21-0`; frozen-root panel `6-24-0`.
+- Direct same-deck gate rejected promotion. A diagnostic public-deck route also
+  produced candidate-vs-root `2-8-0`, but it is not the artifact-deck gate.
+  Root remains fallback. No RoPE-ND, MoE, or historical ETL/Parquet/packed-data
+  work was run.
 
 ## Evidence
 
@@ -28,6 +29,10 @@ Captured 2026-08-16T17:47:00.052564+00:00.
 - `experiments/autoresearch/AR-020/tournament_candidate_vs_root_10.json`
 - `experiments/autoresearch/AR-020/tournament_candidate_panel_10.json`
 - `experiments/autoresearch/AR-020/tournament_root_panel_10.json`
+- `experiments/autoresearch/AR-020/tournament_candidate_vs_root_same_deck_30.json`
+- `experiments/autoresearch/AR-020/tournament_candidate_artifact_deck_vs_root_10.json`
+- `experiments/autoresearch/AR-020/tournament_candidate_artifact_deck_panel_10.json`
+- `experiments/autoresearch/AR-020/tournament_root_artifact_deck_panel_10.json`
 
 ## Metrics
 

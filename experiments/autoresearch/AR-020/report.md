@@ -46,17 +46,20 @@ Captured on 2026-08-16T17:47:00.052564+00:00 from frozen Stage 4 root `b59daeab1
 
 | Surface | W-L-D | Win rate | Report |
 | --- | ---: | ---: | --- |
-| Candidate vs frozen Stage 4 root, n=10 | 2-8-0 | 20.0% | `tournament_candidate_vs_root_10.json` |
-| Candidate panel: lb826, random, first, n=10 each | 8-22-0 | 26.7% | `tournament_candidate_panel_10.json` |
-| Frozen-root panel: lb826, random, first, n=10 each | 3-27-0 | 10.0% | `tournament_root_panel_10.json` |
+| Candidate vs frozen Stage 4 root, same `agent/deck.csv`, n=30 | 11-19-0 | 36.7% | `tournament_candidate_vs_root_same_deck_30.json` |
+| Candidate artifact panel: lb826, random, first, n=10 each | 9-21-0 | 30.0% | `tournament_candidate_artifact_deck_panel_10.json` |
+| Frozen-root artifact panel: lb826, random, first, n=10 each | 6-24-0 | 20.0% | `tournament_root_artifact_deck_panel_10.json` |
 
-The direct gate rejects promotion: AR-020 lost 2-8 to the frozen root. The
-candidate panel was 8-22, with 1-9 against lb826, 6-4 against random, and 1-9
-against first. The root panel was 0-10, 2-8, and 1-9 respectively. These
-panel runs used each packaged agent's default deck, and the candidate and
-frozen-root packages have different deck contents, so the panel delta is
-directional evidence rather than a controlled same-deck estimate. The root
-remains the operational fallback.
+The controlled direct gate rejects promotion: AR-020 lost 11-19 to the frozen
+root across 30 alternating-side games with the same `agent/deck.csv`. The
+same-deck candidate panel was 2-8 against lb826, 3-7 against random, and 4-6
+against first; the corresponding frozen-root panel was 2-8, 4-6, and 0-10.
+An independent 10-game harness run with the same artifact deck was 6-4, but
+the larger controlled run is the gate and supersedes that small result.
+An earlier diagnostic route using the public `latest-submission-300elo` deck
+reported 2-8 against root and 8-22 on its panel; it is retained as evidence
+but is not the AR-020 artifact-deck gate. The root remains the operational
+fallback.
 
 ## Limitations and next gate
 
@@ -71,7 +74,9 @@ promotion gate; keep the frozen Stage 4 root available as the fallback.
 - Candidate SHA-256: `89a70d4eddb3c856d7c4a4e1ad520e2d23bc7230c76b4c10904c45970eeb8637`
 - Sample manifest SHA-256: `d1996dae8ee82ac253a5834516f37da344192b5f146d1ac9c320eda9d2bf9616`
 - Trajectory bundle SHA-256: `2c7d868791c38879780f92d26d71aa5eddf5e58f06263f002cdf61d8e2d45363`
-- Candidate-vs-root report SHA-256: `949531b753976663239033aa2e962ec128129c43fed2534a7944b5738a70692e`
-- Candidate-panel report SHA-256: `3aec5157f60143b035d69422b69844989a5d5bb60ce02a803426768e82f59948`
-- Frozen-root panel report SHA-256: `ccaf3c505666472bdb633d7aadb3c7cb50df705bcfca86337455f425c43b6c96`
-- Candidate-vs-root gate: rejected for promotion, `2-8-0`
+- Controlled same-deck candidate-vs-root report SHA-256: `b01030a7d4002c2f9169e9e42be7bd2921f5b2c5dfaf89b84cc5d8e11cda0cf9`
+- Small same-deck harness candidate-vs-root report SHA-256: `9346f79bffbbd47c216fc3fc5cfb55dfbf478980f0b74099967ff73c0b1df976`
+- Controlled same-deck candidate-panel report SHA-256: `730ab71e630b7a0a6507462145f87a3f965cf11020ce8af784f369ce9080104a`
+- Controlled same-deck frozen-root panel report SHA-256: `6c4431c444d6b9eb16af7cd6c9aa32442239405efc736b0e7f220835c62ef131`
+- Diagnostic public-deck candidate-vs-root report SHA-256: `949531b753976663239033aa2e962ec128129c43fed2534a7944b5738a70692e`
+- Candidate-vs-root gate: rejected for promotion, same-deck `11-19-0`

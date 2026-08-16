@@ -32,10 +32,10 @@ Captured: 2026-08-16
 - AR-020 candidate SHA-256: `89a70d4eddb3c856d7c4a4e1ad520e2d23bc7230c76b4c10904c45970eeb8637`
 - AR-020 dynamic effective K: `[4, 3]` across two deck-stratified bases;
   569 logical decisions, 658 substeps; 64.372 decisions/s; 4.026 s update
-- AR-020 tournament: candidate-vs-root `2-8-0`; candidate panel `8-22-0`;
-  frozen-root panel `3-27-0`. Direct gate rejected promotion; root remains
-  fallback. Candidate/root packaged decks differed, so panel delta is
-  directional rather than a controlled same-deck estimate.
+- AR-020 controlled same-deck tournament: candidate-vs-root `11-19-0` in 30;
+  candidate panel `9-21-0`; frozen-root panel `6-24-0`. Direct gate rejected
+  promotion; root remains fallback. The earlier public-deck diagnostic was
+  `2-8-0` and is not the artifact-deck gate.
 - No RoPE-ND, package, submission, MoE, Parquet, or packed-data path was run.
 - Next action: start the next bounded research hypothesis with dynamic-K and
   multi-deck tournament evidence; preserve root fallback.
@@ -47,4 +47,7 @@ Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `STATE_CAPSULE_019.md`, `AR-020/manifest.json`, `AR-020/metrics.json`,
 `AR-020/tournament_candidate_vs_root_10.json`,
 `AR-020/tournament_candidate_panel_10.json`,
-`AR-020/tournament_root_panel_10.json`, `STATE_CAPSULE_020.md`.
+`AR-020/tournament_root_panel_10.json`,
+`AR-020/tournament_candidate_vs_root_same_deck_30.json`,
+`AR-020/tournament_candidate_artifact_deck_panel_10.json`,
+`AR-020/tournament_root_artifact_deck_panel_10.json`, `STATE_CAPSULE_020.md`.

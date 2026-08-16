@@ -1,0 +1,21 @@
+{
+  "experiment": "AR-020",
+  "method": "direct_recurrent_same_process_tournament",
+  "note": "candidate_vs_frozen_stage4_root_same_agent_deck",
+  "games": 30,
+  "wins": 11,
+  "losses": 19,
+  "draws": 0,
+  "win_rate_pct": 36.666666666666664,
+  "candidate_model": "experiments/autoresearch/AR-020/candidate.pt",
+  "candidate_sha256": "89a70d4eddb3c856d7c4a4e1ad520e2d23bc7230c76b4c10904c45970eeb8637",
+  "root_model": "experiments/autoresearch/root/stage4_root.pkl",
+  "root_sha256": "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b",
+  "shared_agent_deck": "agent/deck.csv",
+  "shared_deck_content_sha256": "606a775392ffe25e058b19c17801d58a4bf30f7cd8c62782388d3de7e7eb5283",
+  "shared_deck_source_file_sha256": "337186f9422f300e50225d6305570f008eb262ac46f519c62aa115df6dcc75d2",
+  "alternating_sides": true,
+  "candidate_behavior": "candidate model loaded into agent/main.py",
+  "root_behavior": "frozen root model loaded into agent/main.py",
+  "decision": "reject_candidate_keep_frozen_stage4_root_fallback"
+}

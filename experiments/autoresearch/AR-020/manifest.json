@@ -884,8 +884,34 @@
       "win_rate_pct": 20.0,
       "wins": 2
     },
+    "controlled_same_deck_candidate_vs_root": {
+      "deck": "agent/deck.csv",
+      "draws": 0,
+      "games": 30,
+      "losses": 19,
+      "report": "experiments/autoresearch/AR-020/tournament_candidate_vs_root_same_deck_30.json",
+      "report_sha256": "b01030a7d4002c2f9169e9e42be7bd2921f5b2c5dfaf89b84cc5d8e11cda0cf9",
+      "win_rate_pct": 36.666666666666664,
+      "wins": 11
+    },
+    "controlled_same_deck_candidate_panel": {
+      "draws": 0,
+      "losses": 21,
+      "report": "experiments/autoresearch/AR-020/tournament_candidate_artifact_deck_panel_10.json",
+      "report_sha256": "730ab71e630b7a0a6507462145f87a3f965cf11020ce8af784f369ce9080104a",
+      "win_rate_pct": 30.0,
+      "wins": 9
+    },
+    "controlled_same_deck_root_panel": {
+      "draws": 0,
+      "losses": 24,
+      "report": "experiments/autoresearch/AR-020/tournament_root_artifact_deck_panel_10.json",
+      "report_sha256": "6c4431c444d6b9eb16af7cd6c9aa32442239405efc736b0e7f220835c62ef131",
+      "win_rate_pct": 20.0,
+      "wins": 6
+    },
     "decision": "reject_candidate_keep_frozen_stage4_root_fallback",
-    "notes": "Candidate and root panel runs used different packaged default decks; panel delta is directional, while direct candidate-vs-root gate rejects promotion.",
+    "notes": "Controlled same-deck candidate-vs-root gate is 11-19 in 30 games; candidate panel is weak and root remains fallback. The earlier public-deck route is diagnostic only.",
     "root_panel": {
       "draws": 0,
       "losses": 27,
