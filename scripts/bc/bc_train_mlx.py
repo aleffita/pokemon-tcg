@@ -50,6 +50,7 @@ from rl.encoder.card_features import get_card_table
 from rl.encoder.enc_constants import OPT_WK
 from rl.encoder.encoding import TokenEncoder
 from rl.lr_schedule import lr_at
+from rl.packed_data import PackedArrayStore, sha256_file, validate_selection
 from rl.policy_mlx import build_token_net_mlx
 from rl.results_db import ResultsDB
 from rl.train_config import load_config
@@ -1500,6 +1501,14 @@ def main() -> None:
         default="model/results.db",
         help="Path to the SQLite results catalog (default: model/results.db)",
     )
+    p.add_argument(
+        "--packed-data",
+        default=None,
+        help=(
+            "Use a validated fixed-width mmap store built from the exact selected "
+            "Parquet source; default keeps the current Parquet cache path"
+        ),
+    )
     # Architecture
     p.add_argument("--d-model", type=int, default=None)
     p.add_argument("--nhead", type=int, default=None)
@@ -2076,6 +2085,42 @@ def main() -> None:
     else:
         selected_eids = unique_eids
 
+    # Optional AR-002 backend.  Episode discovery above remains in place so
+    # the flag cannot silently change the trainer's selection semantics.  The
+    # packed manifest then acts as a second, exact contract check against the
+    # fixed source, cap, split fraction, and seed.
+    packed_meta_store = None
+    packed_selection = None
+    if a.packed_data:
+        if len(dataset_paths) != 1:
+            raise ValueError("--packed-data requires exactly one Parquet source day")
+        packed_meta_store = PackedArrayStore(
+            a.packed_data,
+            columns=["episode_id", "side", "step_id"],
+        )
+        validate_selection(
+            packed_meta_store,
+            source_sha256=sha256_file(dataset_paths[0]),
+            max_rows=int(a.max_rows),
+            val_frac=float(a.val_frac),
+            seed=int(a.seed),
+        )
+        packed_selection = packed_meta_store.manifest["selection"]
+        manifest_selected = np.asarray(
+            packed_selection["selected_episode_ids"], dtype=np.int64
+        )
+        if not np.array_equal(selected_eids, manifest_selected):
+            raise ValueError(
+                "packed selected episode IDs differ from the live Parquet selection"
+            )
+        selected_eids = manifest_selected
+        print(
+            f"[bc-train-mlx] packed data: {a.packed_data} "
+            f"digest={packed_meta_store.manifest['data_digest']} "
+            f"rows={packed_meta_store.manifest['selected_rows']:,}",
+            flush=True,
+        )
+
     # D.4 (episode-level val split): unlike the old position-based tail split
     # over one contiguous .npy array, the corpus is now N independent Parquet
     # files, so the split key is the episode set itself, seeded and
@@ -2096,6 +2141,17 @@ def main() -> None:
         )
     val_episode_ids = selected_eids[:n_val_eps]
     train_episode_ids = selected_eids[n_val_eps:]
+    if packed_selection is not None:
+        expected_val = np.asarray(
+            packed_selection["val_episode_ids"], dtype=np.int64
+        )
+        expected_train = np.asarray(
+            packed_selection["train_episode_ids"], dtype=np.int64
+        )
+        if not np.array_equal(val_episode_ids, expected_val) or not np.array_equal(
+            train_episode_ids, expected_train
+        ):
+            raise ValueError("packed train/val episode split differs from live selection")
     val_filter = pads.field("episode_id").isin(val_episode_ids.tolist())
     train_filter = pads.field("episode_id").isin(train_episode_ids.tolist())
     _TBPTT_FILTER_CACHE[id(val_filter)] = np.asarray(val_episode_ids, dtype=np.int64)
@@ -2110,6 +2166,8 @@ def main() -> None:
     )
 
     _use_tbptt = bool(a.tbptt_chunk > 0)
+    if a.packed_data and not _use_tbptt:
+        raise ValueError("--packed-data currently requires the Stage-4 TBPTT path")
 
     # ---- validation split: streamed via a dedicated KV row_group cache ----
     # No pre-materialization. Scan pass 1 records per-val-row
@@ -2119,13 +2177,24 @@ def main() -> None:
     # is_attack, is_ko, opt_group) are accumulated during the val loop
     # from the fetched dicts and stitched back to row-order for the metrics
     # pass right after.
-    (
-        val_meta,
-        _val_row_file_idx,
-        _val_row_group_idx,
-        _val_row_offset,
-        _val_file_paths,
-    ) = _scan_tbptt_locations(pa_dataset, val_filter, enc_shapes, int_keys)
+    if packed_meta_store is not None:
+        n_val_from_manifest = int(packed_selection["val_rows"])
+        val_meta = {
+            name: np.asarray(packed_meta_store.array(name)[:n_val_from_manifest])
+            for name in ("episode_id", "side", "step_id")
+        }
+        _val_row_file_idx = np.zeros(n_val_from_manifest, dtype=np.int32)
+        _val_row_group_idx = np.zeros(n_val_from_manifest, dtype=np.int32)
+        _val_row_offset = np.arange(n_val_from_manifest, dtype=np.int32)
+        _val_file_paths = []
+    else:
+        (
+            val_meta,
+            _val_row_file_idx,
+            _val_row_group_idx,
+            _val_row_offset,
+            _val_file_paths,
+        ) = _scan_tbptt_locations(pa_dataset, val_filter, enc_shapes, int_keys)
     n_val = int(len(val_meta["episode_id"]))
     if n_val == 0:
         raise RuntimeError(
@@ -2137,14 +2206,24 @@ def main() -> None:
         val_cache_columns.append("opt_group")
     if aux_active:
         val_cache_columns.extend(_AUX_COLUMNS)
-    _val_spill_dir = os.path.join(os.path.dirname(a.out) or ".", ".cache_spill", "val")
-    _val_row_group_cache = _ParquetRowGroupCache(
-        file_paths=_val_file_paths,
-        columns=val_cache_columns,
-        shapes=enc_shapes,
-        int_keys=int_keys,
-        ssd_spill_dir=_val_spill_dir,
-    )
+    if packed_meta_store is not None:
+        _val_row_group_cache = PackedArrayStore(
+            a.packed_data,
+            row_start=0,
+            row_stop=n_val,
+            columns=val_cache_columns,
+        )
+    else:
+        _val_spill_dir = os.path.join(
+            os.path.dirname(a.out) or ".", ".cache_spill", "val"
+        )
+        _val_row_group_cache = _ParquetRowGroupCache(
+            file_paths=_val_file_paths,
+            columns=val_cache_columns,
+            shapes=enc_shapes,
+            int_keys=int_keys,
+            ssd_spill_dir=_val_spill_dir,
+        )
     _val_cache_backend = (
         _val_row_group_cache,
         _val_row_file_idx,
@@ -2175,24 +2254,51 @@ def main() -> None:
         train_columns.extend(_AUX_COLUMNS)
     counts_by_eid = dict(zip(unique_eids.tolist(), counts.tolist()))
     if _use_tbptt:
-        (
-            train_meta,
-            _tbptt_row_file_idx,
-            _tbptt_row_group_idx,
-            _tbptt_row_offset,
-            _tbptt_file_paths,
-        ) = _scan_tbptt_locations(pa_dataset, train_filter, enc_shapes, int_keys)
+        if packed_meta_store is not None:
+            train_start = int(packed_selection["val_rows"])
+            train_stop = train_start + int(packed_selection["train_rows"])
+            train_meta = {
+                name: np.asarray(packed_meta_store.array(name)[train_start:train_stop])
+                for name in ("episode_id", "side", "step_id")
+            }
+            _tbptt_row_file_idx = np.zeros(
+                train_stop - train_start, dtype=np.int32
+            )
+            _tbptt_row_group_idx = np.zeros(
+                train_stop - train_start, dtype=np.int32
+            )
+            _tbptt_row_offset = np.arange(
+                train_stop - train_start, dtype=np.int32
+            )
+            _tbptt_file_paths = []
+        else:
+            (
+                train_meta,
+                _tbptt_row_file_idx,
+                _tbptt_row_group_idx,
+                _tbptt_row_offset,
+                _tbptt_file_paths,
+            ) = _scan_tbptt_locations(pa_dataset, train_filter, enc_shapes, int_keys)
         n_train = int(len(train_meta["episode_id"]))
-        _train_spill_dir = os.path.join(
-            os.path.dirname(a.out) or ".", ".cache_spill", "train"
-        )
-        _tbptt_row_group_cache = _ParquetRowGroupCache(
-            file_paths=_tbptt_file_paths,
-            columns=train_columns,
-            shapes=enc_shapes,
-            int_keys=int_keys,
-            ssd_spill_dir=_train_spill_dir,
-        )
+        if packed_meta_store is not None:
+            _tbptt_row_group_cache = PackedArrayStore(
+                a.packed_data,
+                row_start=int(packed_selection["val_rows"]),
+                row_stop=int(packed_selection["val_rows"])
+                + int(packed_selection["train_rows"]),
+                columns=train_columns,
+            )
+        else:
+            _train_spill_dir = os.path.join(
+                os.path.dirname(a.out) or ".", ".cache_spill", "train"
+            )
+            _tbptt_row_group_cache = _ParquetRowGroupCache(
+                file_paths=_tbptt_file_paths,
+                columns=train_columns,
+                shapes=enc_shapes,
+                int_keys=int_keys,
+                ssd_spill_dir=_train_spill_dir,
+            )
         # No preload phase. The cache grows on-demand as _load_temporal_batch
         # touches row_groups and only evicts under host-memory pressure --
         # see _ParquetRowGroupCache._touch. Warm-up cost is the first pass
