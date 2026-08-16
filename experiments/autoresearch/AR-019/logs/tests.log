@@ -1,0 +1,9 @@
+AR-019 focused validation
+command=uv run --locked pytest -q tests/test_ar019_trajectory_group_grpo.py tests/test_trajectory_probe.py
+result=25 passed in 1.17s
+command=uv run --locked python -m py_compile scripts/rl/trajectory_group_grpo.py scripts/rl/run_ar019.py tests/test_ar019_trajectory_group_grpo.py scripts/rl/trajectory_probe.py
+result=exit 0
+command=git diff --check
+result=exit 0
+command=uv run --locked python scripts/rl/run_ar019.py --meta-date 2026-08-12 --seed 19019
+result=exit 0; K=4; optimizer_steps=1; tournament=not_run

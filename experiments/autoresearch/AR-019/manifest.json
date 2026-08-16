@@ -1,0 +1,118 @@
+{
+  "candidate": "experiments/autoresearch/AR-019/candidate.pt",
+  "candidate_bytes": 5693904,
+  "candidate_sha256": "2e592340522c697405676811f4d68c53c93129fd89b8f14b07427d4624ed77e7",
+  "captured_at": "2026-08-16T16:42:34.464748+00:00",
+  "code_commit": "8b0c16677cb4affadf6137b7510a14a86ce19991",
+  "collection_decisions_per_second": 46.27677354690585,
+  "collection_games_per_second": 0.5444326299635982,
+  "collection_seconds": 7.347098,
+  "collection_substeps_per_second": 51.72109984654183,
+  "config": {
+    "advantage_epsilon": 1e-08,
+    "algorithm": "trajectory_group_grpo",
+    "behavior_snapshot": "frozen Stage4 root",
+    "clip_epsilon": 0.2,
+    "group_size": 4,
+    "learning_rate": 1e-05,
+    "precision": "FP32",
+    "rollout_storage": "in-memory compact tensors only",
+    "selfplay_mode": "current_vs_current_true_recurrent",
+    "value_loss": 0.0
+  },
+  "deck": "agent/deck.csv",
+  "deck_content_sha256": "606a775392ffe25e058b19c17801d58a4bf30f7cd8c62782388d3de7e7eb5283",
+  "deck_source_file_sha256": "337186f9422f300e50225d6305570f008eb262ac46f519c62aa115df6dcc75d2",
+  "experiment": "AR-019",
+  "format": "ptcg-stage4-trajectory-group-grpo-v1",
+  "group_returns": [
+    1.0,
+    1.0,
+    -1.0,
+    -1.0
+  ],
+  "group_size": 4,
+  "invariants": {
+    "behavior_snapshot_is_frozen_stage4_root": true,
+    "complete_behavior_logprob_retained": true,
+    "detached_recurrent_memory_inputs_retained_in_memory": true,
+    "group_credit_shared_across_logical_decisions_and_substeps": true,
+    "logical_logprob_is_conditional_substep_sum": true,
+    "no_tournament": true,
+    "ratio_uses_logical_action_once": true,
+    "real_legal_masks_retained_in_memory": true,
+    "stage4_root_preserved": true,
+    "terminal_returns_in_minus_one_zero_plus_one": true,
+    "value_loss_zero": true,
+    "zero_variance_group_fail_closed": true
+  },
+  "logical_decisions": 340,
+  "metadata_date": "2026-08-12",
+  "metrics": {
+    "algorithm": "trajectory_group_grpo",
+    "approx_kl_behavior": 7.36292662395499e-08,
+    "changed_parameters": 1293290,
+    "clip_fraction": 0.0,
+    "credit_shared_across_substeps": true,
+    "credit_shared_per_logical_decision": true,
+    "gradient_norm": 2.373613119125366,
+    "group_size": 4,
+    "logical_decisions": 340,
+    "loss": 0.08823533356189728,
+    "optimizer_steps": 1,
+    "parameter_count": 1302151,
+    "parameter_l2": 0.009198900828294767,
+    "parameter_max_abs": 1.0132789611816406e-05,
+    "policy_loss": 0.08823533356189728,
+    "policy_only": true,
+    "precision": "FP32",
+    "ratio_max": 1.0000028610229492,
+    "ratio_mean": 0.9999998807907104,
+    "ratio_min": 0.9999895095825195,
+    "return_mean": 0.0,
+    "return_std": 1.0,
+    "substeps": 380,
+    "update_seconds": 2.152347584022209,
+    "value_loss": 0.0,
+    "zero_variance_group": false
+  },
+  "return_mean": 0.0,
+  "return_std": 1.0,
+  "returns_advantages": [
+    1.0,
+    1.0,
+    -1.0,
+    -1.0
+  ],
+  "rollout_persistence": "none; compact tensors retained in memory only",
+  "root_checkpoint": "experiments/autoresearch/root/stage4_root.pkl",
+  "root_sha256": "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b",
+  "substeps": 380,
+  "trajectory_summaries": [
+    {
+      "episode_id": "trajectory-group-000",
+      "logical_decisions": 90,
+      "substeps": 106,
+      "terminal_return": 1.0
+    },
+    {
+      "episode_id": "trajectory-group-001",
+      "logical_decisions": 65,
+      "substeps": 77,
+      "terminal_return": 1.0
+    },
+    {
+      "episode_id": "trajectory-group-002",
+      "logical_decisions": 94,
+      "substeps": 105,
+      "terminal_return": -1.0
+    },
+    {
+      "episode_id": "trajectory-group-003",
+      "logical_decisions": 91,
+      "substeps": 92,
+      "terminal_return": -1.0
+    }
+  ],
+  "update_seconds": 2.152347584022209
+}

@@ -1,0 +1,8 @@
+AR-019 trajectory-group GRPO micro-update
+returns=[1.0, 1.0, -1.0, -1.0]
+logical_decisions=340
+substeps=380
+collection_seconds=7.347098208032548
+update_seconds=2.152347584022209
+candidate_sha256=2e592340522c697405676811f4d68c53c93129fd89b8f14b07427d4624ed77e7
+tournament=not_run
