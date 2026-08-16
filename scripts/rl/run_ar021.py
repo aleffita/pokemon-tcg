@@ -214,7 +214,7 @@ def run_ar021(
         opponent_source_hash = sha256_file(opponent_path)
         for group_index in range(groups_per_matchup):
             group_seed = seed + matchup_index * 100000 + group_index * 1000
-            episode_prefix = f"ar021-m{matchup_index}-g{group_index}"
+            episode_prefix = f"{experiment.lower().replace('-', '')}-m{matchup_index}-g{group_index}"
             opponent_agent_path = agent_paths[matchup_index]
             opponent_factory = (
                 None
