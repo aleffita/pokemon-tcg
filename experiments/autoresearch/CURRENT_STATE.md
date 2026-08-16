@@ -2,9 +2,10 @@
 
 Captured: 2026-08-16
 
+- Last assimilated code commit: `eed78b6fc41ced26877f4121e7385db28709cfe9`
 - Current best and fallback: frozen Stage 4 root
 - Stage 4 root SHA-256: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`
-- Active experiment: AR-021 grouped dynamic prospective sibling-fiber GRPO
+- Active experiment: AR-023 external-policy grouped dynamic prospective sibling-fiber GRPO
 - AR-018 code commits: `434d3f6`, repaired by `28c2b96` and `4cfe5e8`
 - AR-018 status: corrected gate passed review; keep foundation
 - AR-019 implementation commit: `5dd6cfc`
@@ -54,8 +55,16 @@ Captured: 2026-08-16
   groups zero-variance, 220 credited actions.
 - AR-022 tournament: same-deck candidate-vs-root `13-17-0`; candidate panel
   `7-23-0`; root panel `8-22-0`. Rejected for promotion; root remains fallback.
-- Next action: improve opponent-policy realism or branch diversity before any
-  further scale-up; do not promote on root-relative evidence alone.
+- AR-023 implementation/provenance commit: `eed78b6`
+- AR-023 candidate SHA-256: `6c064668e3201deb73bb32be415dc73204e9414b5c2b7c4b50ebdec65e579e4a`
+- AR-023 external-policy grouped run: one `lb826_alakazam_seok` policy stratum,
+  4 exact recurrent bases, effective K `[2,4,4,2]`, 12 fibers, 1,005 logical
+  decisions, 663 credited decisions, 109.385 decisions/s, one grouped update.
+- AR-023 tournament: same-deck candidate-vs-root `20-10-0` in 30; candidate
+  panel `7-23-0`; frozen-root panel `8-22-0`. Candidate rejected for promotion;
+  root remains fallback because absolute external-panel strength is lower.
+- Next action: target branch diversity or external-policy signal with a bounded
+  hypothesis; keep the full multi-opponent panel as the promotion gate.
 
 Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-019/manifest.json`, `AR-019/metrics.json`, `AR-019/logs/tests.log`,
@@ -75,4 +84,9 @@ Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-022/report.md`, `AR-022/manifest.json`, `AR-022/metrics.json`,
 `AR-022/tournament_candidate_vs_root_same_deck_30.json`,
 `AR-022/tournament_candidate_panel_10.json`,
-`AR-022/tournament_root_panel_10.json`, `STATE_CAPSULE_022.md`.
+`AR-022/tournament_root_panel_10.json`, `STATE_CAPSULE_022.md`,
+`AR-023/report.md`, `AR-023/manifest.json`, `AR-023/metrics.json`,
+`AR-023/sample.manifest.json`, `AR-023/trajectory_bundle.pt.gz`,
+`AR-023/candidate.pt`, `AR-023/tournament_candidate_vs_root_same_deck_30.json`,
+`AR-023/tournament_candidate_panel_10.json`,
+`AR-023/tournament_root_panel_10.json`, `STATE_CAPSULE_023.md`.
