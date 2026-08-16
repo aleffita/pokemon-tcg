@@ -13,7 +13,13 @@ import pyarrow.dataset as pads
 
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import TokenEncoder
-from rl.packed_data import PackedArrayStore, sha256_file, split_episode_ids
+from rl.packed_data import (
+    PackedArrayStore,
+    required_trainer_columns,
+    sha256_file,
+    source_digest,
+    split_episode_ids,
+)
 from scripts.bc.bc_train_mlx import (
     _AUX_COLUMNS,
     _META_COLUMN_DTYPES,
@@ -29,15 +35,28 @@ def _rss_bytes() -> int:
     return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
 
 
-def _swap_bytes() -> dict[str, int]:
+def _pressure_snapshot() -> dict[str, int | float | None]:
+    """Report process RSS and explicitly system-scoped pressure signals.
+
+    There is intentionally no ``swap_memory()`` call: its counters are
+    machine-global and cannot be attributed to this benchmark process.
+    """
     import psutil
 
-    swap = psutil.swap_memory()
-    return {"sin": int(swap.sin), "sout": int(swap.sout)}
+    vm = psutil.virtual_memory()
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    return {
+        "process_rss_bytes": int(psutil.Process().memory_info().rss),
+        "process_peak_rss_bytes": _rss_bytes(),
+        "process_minor_faults": int(usage.ru_minflt),
+        "process_major_faults": int(usage.ru_majflt),
+        "system_available_bytes": int(vm.available),
+        "system_memory_percent": float(vm.percent),
+    }
 
 
-def _selected(source: Path, max_rows: int, val_frac: float):
-    dataset = pads.dataset([str(source)], format="parquet")
+def _selected(sources: list[Path], max_rows: int, val_frac: float):
+    dataset = pads.dataset([str(source) for source in sources], format="parquet")
     parts = []
     for batch in dataset.to_batches(columns=["episode_id"]):
         if batch.num_rows:
@@ -49,14 +68,12 @@ def _selected(source: Path, max_rows: int, val_frac: float):
 
 
 def _required_columns(enc: TokenEncoder) -> list[str]:
-    # This is the exact default Stage-4 cache column set: dedup is disabled in
-    # AR-001, while all five auxiliary targets are active.
-    return sorted(enc.shapes) + ["y", "is_attack"] + list(_AUX_COLUMNS)
+    return required_trainer_columns(enc.shapes)
 
 
-def baseline_load(source: Path, max_rows: int, val_frac: float) -> dict:
+def baseline_load(sources: list[Path], max_rows: int, val_frac: float) -> dict:
     dataset, all_ids, (selected, train_ids, val_ids) = _selected(
-        source, max_rows, val_frac
+        sources, max_rows, val_frac
     )
     enc = TokenEncoder(get_card_table())
     columns = _required_columns(enc)
@@ -109,7 +126,7 @@ def baseline_load(source: Path, max_rows: int, val_frac: float) -> dict:
             "decoded_bytes_per_row": total_cache_bytes / total_rows,
             "rows_per_s": total_rows / total_read_s,
             "rss_peak_bytes": _rss_bytes(),
-            "swap": _swap_bytes(),
+            "pressure": _pressure_snapshot(),
             "etl_s": 0.0,
             "total_source_to_ready_s": time.perf_counter() - t0,
         }
@@ -117,14 +134,14 @@ def baseline_load(source: Path, max_rows: int, val_frac: float) -> dict:
     return result
 
 
-def candidate_load(source: Path, packed: Path, max_rows: int, val_frac: float, seed: int) -> dict:
+def candidate_load(sources: list[Path], packed: Path, max_rows: int, val_frac: float) -> dict:
     enc = TokenEncoder(get_card_table())
     columns = _required_columns(enc)
     manifest = json.loads((packed / "manifest.json").read_text())
     selected = manifest["selection"]
-    if manifest["source_sha256"] != sha256_file(source):
+    if manifest["source_sha256"] != source_digest([str(path) for path in sources]):
         raise ValueError("candidate source hash does not match fixed Parquet")
-    if selected["max_rows"] != max_rows or selected["val_frac"] != val_frac or selected["seed"] != seed:
+    if selected["max_rows"] != max_rows or selected["val_frac"] != val_frac:
         raise ValueError("candidate selection contract does not match benchmark")
     split_ranges = {
         "val": (0, int(selected["val_rows"])),
@@ -148,7 +165,8 @@ def candidate_load(source: Path, packed: Path, max_rows: int, val_frac: float, s
     for split_name, (start, stop) in split_ranges.items():
         load_t0 = time.perf_counter()
         store = PackedArrayStore(
-            packed, row_start=start, row_stop=stop, columns=columns
+            packed, row_start=start, row_stop=stop, columns=columns,
+            required_columns=columns,
         )
         load_s = time.perf_counter() - load_t0
         read_t0 = time.perf_counter()
@@ -172,7 +190,7 @@ def candidate_load(source: Path, packed: Path, max_rows: int, val_frac: float, s
             "decoded_bytes_per_row": total_bytes / total_rows,
             "rows_per_s": total_rows / sum(v["read_s"] for v in result["splits"].values()),
             "rss_peak_bytes": _rss_bytes(),
-            "swap": _swap_bytes(),
+            "pressure": _pressure_snapshot(),
             "etl_s": None,
             "total_source_to_ready_s": None,
         }
@@ -182,27 +200,34 @@ def candidate_load(source: Path, packed: Path, max_rows: int, val_frac: float, s
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", required=True)
+    parser.add_argument("--source", action="append", required=True)
     parser.add_argument("--packed", required=True)
     parser.add_argument("--max-rows", type=int, default=2048)
     parser.add_argument("--val-frac", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=13971479023478)
+    parser.add_argument("--backend", choices=["baseline", "candidate"], required=True)
+    parser.add_argument("--etl-seconds", type=float, default=0.0)
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
-    source = Path(args.source)
+    sources = [Path(path) for path in args.source]
     packed = Path(args.packed)
+    if args.backend == "baseline":
+        metrics = baseline_load(sources, args.max_rows, args.val_frac)
+    else:
+        metrics = candidate_load(sources, packed, args.max_rows, args.val_frac)
+        metrics["etl_s"] = args.etl_seconds
+        metrics["total_source_to_ready_s"] = args.etl_seconds + metrics["load_s"]
     result = {
-        "source": str(source),
-        "source_sha256": sha256_file(source),
+        "backend": args.backend,
+        "sources": [str(path) for path in sources],
+        "source_sha256": source_digest([str(path) for path in sources]),
         "selection": {
             "max_rows": args.max_rows,
             "val_frac": args.val_frac,
             "seed": args.seed,
+            "seed_semantics": "seed does not participate in episode selection or split",
         },
-        "baseline": baseline_load(source, args.max_rows, args.val_frac),
-        "candidate": candidate_load(
-            source, packed, args.max_rows, args.val_frac, args.seed
-        ),
+        "metrics": metrics,
     }
     Path(args.out).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, indent=2, sort_keys=True))

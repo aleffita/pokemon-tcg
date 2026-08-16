@@ -1,0 +1,8 @@
+{
+  "mismatch_count": 0,
+  "parity": true,
+  "row_order_equal": true,
+  "selected_rows": 10035,
+  "train_rows": 9155,
+  "val_rows": 880
+}

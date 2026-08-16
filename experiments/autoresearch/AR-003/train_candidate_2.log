@@ -1,0 +1,35 @@
+[bc-train-mlx] aux losses active — ko=0.5, prize=0.5, terminal=0.5, return=0.5
+[bc-train-mlx] device=Device(gpu, 0)
+[bc-train-mlx] training days: 2026-08-08(817,534 rows), 2026-08-09(813,191 rows)
+[bc-train-mlx] limited to 10000 rows (max_rows=10000): capped to 59 episode(s), ~10,035 rows
+[bc-train-mlx] packed data: /tmp/pokemon-tcg-ar003-packed-20260816 digest=332fbacd00a30cefc5446c1424f0eacae9e88fe5e2a98a9dcb82705f534474a5 rows=10,035
+[bc-train-mlx] episode split: 53 train / 6 val episodes (val_frac=0.1, seed=13971479023478)
+[bc-train-mlx] arch_config validated OK
+[bc-train-mlx] resumed from experiments/autoresearch/root/stage4_root.pkl (epoch 37, val_acc=0.5949, gstep=16553)
+[bc-train-mlx] this run: 2 epoch(s) (global start=38)
+[bc-train-mlx] optimizer phase initialized from zero
+[bc-train-mlx] optimizer routing: Muon=845,568 hidden-matrix params; AdamW=456,583 embedding/head/vector params
+[bc-train-mlx] d128L4h4 +static +split params=1,302,151 N=10035 train=9155 val=880 batch=1024 accum_steps=1
+[bc-train-mlx] global epoch range: 38-39 (local epochs=2)
+[bc-train-mlx] progress plan: TBPTT temporal batches (decisions/chunk<=16, rows/batch<=1,024, groups=106); microbatches/epoch=15; optimizer_steps/epoch=15; run_microbatches=30; run_optimizer_steps=30; global_step=16,553->16,583; scheduler_phase=0/30 (reset)
+[tb] tensorboard logdir: runs/model_1786855613 (open with: uv run tensorboard --logdir runs)
+[bc-train-mlx] === epoch 38 (run 1/2) ===
+[bc-train-mlx] F.3: TBPTT enabled (decisions/chunk=16, row_budget=1,024, microbatches=15, optimizer_steps=15)
+[bc-train-mlx] training complete: epoch 38, microbatches=15, optimizer_steps=15, gstep=16,568; peak_memory=18.96 GiB; starting validation
+[bc-train-mlx] checkpoint saved: /tmp/pokemon-tcg-ar003-runs/candidate-2/model_epoch_0038.pkl (epoch 38, val_acc=0.6057)
+[bc-train-mlx] rolling checkpoint: /tmp/pokemon-tcg-ar003-runs/candidate-2/model_latest.pkl
+[bc-train-mlx] epoch 38 complete: val_acc=0.6057 equiv=0.6057 top3=0.8807 atk=0.4876 ko=0.4624 loss=1.2061 aux_ko_bce=0.1851 aux_prize_mse=0.2093 aux_terminal_bce=0.0997 aux_return_mse=1.4973 t=2m21s run_ETA=2m21s gstep=16,568
+Epoch 38 (run 1… d… 1… epoch compl… Opt: 15… Loss: 2.0… Aux: 725.1… LR: 7.27e-…
+[bc-train-mlx] === epoch 39 (run 2/2) ===
+[bc-train-mlx] F.3: TBPTT enabled (decisions/chunk=16, row_budget=1,024, microbatches=15, optimizer_steps=15)
+[bc-train-mlx] training complete: epoch 39, microbatches=15, optimizer_steps=15, gstep=16,583; peak_memory=18.91 GiB; starting validation
+[bc-train-mlx] checkpoint saved: /tmp/pokemon-tcg-ar003-runs/candidate-2/model_epoch_0039.pkl (epoch 39, val_acc=0.6136)
+[bc-train-mlx] rolling checkpoint: /tmp/pokemon-tcg-ar003-runs/candidate-2/model_latest.pkl
+[bc-train-mlx] epoch 39 complete: val_acc=0.6136 equiv=0.6136 top3=0.8705 atk=0.5083 ko=0.5054 loss=1.1945 aux_ko_bce=0.1854 aux_prize_mse=0.2051 aux_terminal_bce=0.1001 aux_return_mse=1.4346 t=2m35s run_ETA=0m00s gstep=16,583
+Epoch 39 (run 2… d… 1… epoch compl… Opt: 15… Loss: 2.1… Aux: 813.1… LR: 2.40e-…
+[cache-train] hits=1,147 misses=1 hit_rate=99.9% resident=0 rg (hot=0/transient=0) promotions=0 evictions=0 ssd_hits=0 ssd_spills=0 ssd_resident=0 ssd_bytes=0.00 GiB decoded=714.6 MiB
+[cache-val] hits=107 misses=1 hit_rate=99.1% resident=0 rg (hot=0/transient=0) promotions=0 evictions=0 ssd_hits=0 ssd_spills=0 ssd_resident=0 ssd_bytes=0.00 GiB decoded=68.7 MiB
+[bc-train-mlx] RESULT: best_val_acc=0.6136 params=1,302,151 gstep=16583
+real 300.23
+user 29.50
+sys 218.77

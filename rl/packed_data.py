@@ -23,7 +23,70 @@ from typing import Iterator
 import numpy as np
 
 
-PACKED_FORMAT_VERSION = 1
+PACKED_FORMAT_VERSION = 2
+
+# These are deliberately independent of the Parquet sidecar manifest.  The
+# trainer's runtime contract must not shrink when a producer forgets to update
+# a manifest field.  The input portion is supplied by TokenEncoder.shapes;
+# the metadata portion is the complete Stage-4 payload kept by the packer.
+TRAINER_ORDER_COLUMNS = (
+    "episode_id",
+    "side",
+    "step_id",
+    "decision_id",
+    "substep",
+)
+TRAINER_METADATA_COLUMNS = (
+    "y",
+    "is_attack",
+    "opt_group",
+    "aux_ko",
+    "aux_prize_delta",
+    "aux_terminal",
+    "aux_return",
+    "aux_valid",
+    "episode_id",
+    "side",
+    "step_id",
+    "decision_id",
+    "substep",
+    "new_episode",
+    "terminal",
+    "reward",
+    "outcome",
+    "is_self",
+    "day_id",
+)
+
+
+def required_trainer_columns(input_columns) -> list[str]:
+    """Return the independent, complete column contract for the trainer.
+
+    ``action_mask`` and every ``*_mask`` input are explicitly required.  This
+    makes a future encoder change fail loudly instead of allowing a packed
+    manifest to omit the legal-action surface while still looking complete.
+    """
+    inputs = list(input_columns)
+    required_masks = {"action_mask", *(name for name in inputs if name.endswith("_mask"))}
+    missing_masks = required_masks - set(inputs)
+    if missing_masks:
+        raise ValueError(
+            "trainer input contract is missing legal/action mask columns: "
+            f"{sorted(missing_masks)}"
+        )
+    return sorted(set(inputs)) + list(TRAINER_METADATA_COLUMNS)
+
+
+def source_digest(paths: list[str | os.PathLike[str]]) -> str:
+    """Digest an ordered Parquet source list, including each file's content."""
+    digest = hashlib.sha256()
+    for index, raw_path in enumerate(paths):
+        path = Path(raw_path)
+        digest.update(str(index).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(sha256_file(path).encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def sha256_file(path: str | os.PathLike[str]) -> str:
@@ -94,6 +157,7 @@ class PackedArrayStore:
         row_start: int = 0,
         row_stop: int | None = None,
         columns: list[str] | tuple[str, ...] | None = None,
+        required_columns: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         self.root = Path(root)
         manifest_path = self.root / "manifest.json"
@@ -103,6 +167,14 @@ class PackedArrayStore:
             raise ValueError(f"unsupported packed format in {manifest_path}")
         if int(self.manifest.get("format_version", -1)) != PACKED_FORMAT_VERSION:
             raise ValueError(f"unsupported packed format version in {manifest_path}")
+        manifest_columns = set(self.manifest.get("columns", []))
+        if required_columns is not None:
+            missing = sorted(set(required_columns) - manifest_columns)
+            if missing:
+                raise ValueError(
+                    "packed store is missing required trainer columns: "
+                    f"{missing}"
+                )
         total_rows = int(self.manifest["selected_rows"])
         if row_start < 0 or row_start > total_rows:
             raise ValueError(f"invalid packed row_start={row_start}")
@@ -140,6 +212,50 @@ class PackedArrayStore:
                 actual = _digest_array(np.asarray(self._arrays[name][row_start:row_stop]))
                 if actual != expected:
                     raise ValueError(f"packed column value digest mismatch: {name}")
+            self._validate_order_digest()
+
+    def _validate_order_digest(self) -> None:
+        order = self.manifest.get("row_order")
+        if not order:
+            if set(TRAINER_ORDER_COLUMNS).issubset(self._arrays):
+                raise ValueError("packed manifest is missing the row-level order contract")
+            return
+        names = list(order.get("columns", []))
+        if list(TRAINER_ORDER_COLUMNS) != names:
+            raise ValueError(
+                "packed row-order columns do not match trainer contract: "
+                f"got={names} expected={list(TRAINER_ORDER_COLUMNS)}"
+            )
+        missing = [name for name in names if name not in self._arrays]
+        if missing:
+            return
+        boundary = int(order.get("val_rows", -1))
+        if boundary < 0 or boundary > self.manifest["selected_rows"]:
+            raise ValueError(f"invalid packed val/train row boundary: {boundary}")
+        expected_train_rows = int(self.manifest["selected_rows"]) - boundary
+        if int(order.get("train_rows", -1)) != expected_train_rows:
+            raise ValueError("packed row-order train_rows disagrees with val boundary")
+        selection = self.manifest.get("selection", {})
+        if "val_episode_ids" in selection and "train_episode_ids" in selection:
+            actual_val = np.asarray(self._arrays["episode_id"][:boundary])
+            actual_train = np.asarray(self._arrays["episode_id"][boundary:])
+            expected_val = np.asarray(selection["val_episode_ids"], dtype=actual_val.dtype)
+            expected_train = np.asarray(selection["train_episode_ids"], dtype=actual_train.dtype)
+            if not np.array_equal(np.unique(actual_val), np.unique(expected_val)):
+                raise ValueError("packed val rows do not match manifest val episodes")
+            if not np.array_equal(np.unique(actual_train), np.unique(expected_train)):
+                raise ValueError("packed train rows do not match manifest train episodes")
+        for split, start, stop in (
+            ("val", 0, boundary),
+            ("train", boundary, int(self.manifest["selected_rows"])),
+        ):
+            expected = order.get(f"{split}_digest")
+            actual = _digest_columns(
+                {name: np.asarray(self._arrays[name][start:stop]) for name in names},
+                names,
+            )
+            if actual != expected:
+                raise ValueError(f"packed {split} row-order digest mismatch")
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -212,14 +328,18 @@ def validate_selection(
     source_sha256: str,
     max_rows: int,
     val_frac: float,
-    seed: int,
 ) -> None:
+    """Validate immutable source/split identity.
+
+    Episode selection is stable first-appearance order and intentionally does
+    not use a seed.  Trainer ``seed`` controls batch shuffling, not membership
+    or val/train assignment, so it is not part of this contract.
+    """
     selection = store.manifest["selection"]
     checks = {
         "source_sha256": (store.manifest["source_sha256"], source_sha256),
         "max_rows": (int(selection["max_rows"]), int(max_rows)),
         "val_frac": (float(selection["val_frac"]), float(val_frac)),
-        "seed": (int(selection["seed"]), int(seed)),
     }
     mismatches = {
         name: (actual, expected)
@@ -233,6 +353,10 @@ def validate_selection(
 __all__ = [
     "PACKED_FORMAT_VERSION",
     "PackedArrayStore",
+    "TRAINER_METADATA_COLUMNS",
+    "TRAINER_ORDER_COLUMNS",
+    "required_trainer_columns",
+    "source_digest",
     "_digest_columns",
     "_digest_array",
     "sha256_file",

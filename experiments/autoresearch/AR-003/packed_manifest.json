@@ -1,0 +1,1383 @@
+{
+  "build": {
+    "seed": 13971479023478,
+    "seed_semantics": "provenance only; no effect on episode selection or row order"
+  },
+  "column_digests": {
+    "action_mask": "741977e38e0fe6f05c9622892e5d951284f166dce7e3f8dd121bc99e649d6f01",
+    "aux_ko": "9e7df3ab1eeca8fb27f59a20fec628dcaeebf2268e7a3c0a21fb35c47b3bf2aa",
+    "aux_prize_delta": "25c18d1a8ac6002b51ed4dcb87309e51e9c7f06229c435ae8ae35e15d5cd624b",
+    "aux_return": "c2c59610a07181f27eb1c00370b5d3bce6c7a719f95ec277f2cef35cc189983e",
+    "aux_terminal": "e6d4812b1431b8d509fd64100bb1584f020d5eea6a680255673278b8427fa877",
+    "aux_valid": "c812014b45dec8ccbda2123b8abcd9fa5d6f30a32a7bdf73afca3cc852219763",
+    "cls_scalars": "e55663fe0cb3eb6999631527a61a5bb4340cb8a04306154bd3442427d5dc8e8e",
+    "day_id": "a993e0173f92095f137df40b51c55f417d5bc54d1e83d9eb02827cd14d909606",
+    "day_index_norm": "f315881e853b8c0c9e706264c6d009b669a023519f5a71e486b162eb7c84ce45",
+    "decision_id": "7964587f9df8fb86ae2b661d9b1c85e22877869c7898b161a1b53c1189460f88",
+    "effect_id": "c00f68a9803fd8e10659daeccf9220a54bb77464c009f85fcd5697bb2dd0a3c5",
+    "effect_mask": "6386ecb36c8113edf3c7f1115a4bdb3111dfbf15692c6474aba8690e4c444454",
+    "effect_meta_bucket": "e90192753bf6e17aecbac39e7cb0f4dbe16a0e9a3d0e0571778dbb91c854602a",
+    "episode_id": "72660a0e35b17143f35b3a51ad945f2a0aceb976c505f75df9eb38ac96226ba7",
+    "is_attack": "1c8c54750cadbad60cd19db7118e98e80ea401f2342fb03a8312b6ef85b9ba49",
+    "is_self": "24211f3bff84ba29db5310a0a61a4f58eec59e59bd66c9bd81ef35d51010e97a",
+    "new_episode": "2b49ea36516e5b2763c367fceca2f53cc716927721ec6b1695e2bd84f2887ba0",
+    "opp_deck_flag": "90495f25df58e6b53a4b85e7bd5e694631dba9343fe499f1e34ec0dd86814750",
+    "opp_deck_id": "9612d9d50f979de4757dd05274f15d7f38d7a89ee5297816fb46284597675413",
+    "opp_deck_mask": "dbab948310936fd3fe5d7669294b0291fb6561bf540cc0127cc46172fb336854",
+    "opp_deck_meta_bucket": "b539e1aee6d7180f11ed77a4c4ff61269454a6667900b078ee0f9211c5345392",
+    "opp_discard_id": "d45f8070998ab0675b3e91a773a5f0a9b41f47f430126d85aaffe1d7e83232c6",
+    "opp_discard_mask": "f31edae651bbf8381f09c0cfdf3337dea5e71d98e0b85d434fb2a917797f031f",
+    "opp_discard_meta_bucket": "4bd5f9be6758fdbf9ce023df9c621d487d8392ec5b922c407b9cf202a63485ac",
+    "opp_hand_flag": "21a47689af95249ab6ad4a0a96bf4b1c8c5774d1033e28f35e3bc9c5bee47999",
+    "opp_hand_id": "25574d92940b0feb956dcc560d619ea7e1d5857e15e3667438e6e50767885cfa",
+    "opp_hand_mask": "cb595486ebdd88c14f3bb060b4f70fb97b94bf4d14e385233f5029a28f1f4b08",
+    "opp_hand_meta_bucket": "65d0d4d24d264735636976b4bffde05ce1235e332c178c6cf66a70601c14c866",
+    "opp_prize_id": "47ee63c7bc23df27643b38dadad9df5b20f6eb35fb56b5aaa78d306012f25114",
+    "opp_prize_mask": "a986b19eccd64ac1fc0e5cd4cd41575e5054b5bb45034d27b4a178a32d604db1",
+    "opp_prize_meta_bucket": "62da47ec7578d4df3be527a7a4c12e75c39e624120cce0df22670258c479b24d",
+    "opp_unit_attr": "abd8b1de2f6afc0ce95336e982f4dc05f939b14e7b281bad43a5d3812a6af556",
+    "opp_unit_energy_id": "4beae5c892ce7e52be243e3340193f2157f818609eacee5f37edbdcd8ba0e698",
+    "opp_unit_energy_meta_bucket": "b9b14b451638be43a092d453ef5aa85517591f58ec280a3701c4bf83669b7033",
+    "opp_unit_mask": "ec8f503a73952c2230c8d39b5f276c4c0bbbf8a192a21ff166a109bca8390ea9",
+    "opp_unit_preevo_id": "8aab2676fc2d989871355dc3086cd95b4aa2e7f4f72f54c9e266e6bac48990be",
+    "opp_unit_preevo_meta_bucket": "1f8a6040044429740132a708cbe3356c54225bd0e81b0f91735d6f3b2db354d1",
+    "opp_unit_tool_id": "ae6b39af184694d6872bc7bc1fd4e010855257d40ee322dc82f0c59af53e18e5",
+    "opp_unit_tool_meta_bucket": "c3226e2b90e24597ad1d7d778e0b2af829a21d6ef606c721ddcac81f342b1d1a",
+    "opp_unit_top_id": "4d97e8c5317abfa786b7c872e0831de4e6879ae63e90b091b24e6b1bcb7978ed",
+    "opp_unit_top_meta_bucket": "788590a1b28d9d6125d37f918e9118bd566ef791f3fbcc630e7ee805a7e65ab4",
+    "opponent_agent_bucket": "f6165e0cf8268e51afa1d8547ec4d8485a8ee2b0e32ba815b95d28e1de261edc",
+    "opponent_deck_bucket": "f6165e0cf8268e51afa1d8547ec4d8485a8ee2b0e32ba815b95d28e1de261edc",
+    "opt_attack_id": "f6e2100815516ae1b67bc276be00613ff7eb296e0fa8d2ffe6a28a37edfbd432",
+    "opt_attr": "a301eaae73da7d79d69764df080f4e7ff15c4d6193964c0e29d0e9ae965651d2",
+    "opt_group": "0f869a43ce4acbf5dc38611c3a824caeeb0e0372f78bbd10d01244986c1b90df",
+    "opt_src_card": "6e3bdd2ca8d4bcaab624ed25526aa81509613f32a3afceb3cfd486afb7b993af",
+    "opt_src_pos": "63e82db4824a2e11a204385d1d3ad674b96522a37490ed7d877554d07f5224d7",
+    "opt_tgt_card": "2c96d3fa8a600ff99ce3e9fa12b0ca948fb3d29dc746f6cb6c1171b04951ae85",
+    "opt_tgt_pos": "4d91d4d7d8696cf8e6e4def7d952c43f887a4cb804e338e361a7c7242b7adc6f",
+    "opt_verb": "d54dda37df77a52146356e22dee47c0ddd0b14704d513e83fe0edb2441fceba0",
+    "outcome": "d53bf3185c902397f39ebf733b282eee2dc4f58ba277462aa43be22a5120f9f3",
+    "reward": "19bf4d910b0dd6ca1b93278a97e565a3eb0aa2ea192a58f6ad8cc069053e8d79",
+    "select_context": "5c6f15e5623da02b1ef390b5eab296983d1c3ef3020fbd88c55b1b65fc2bcdcf",
+    "select_type": "550abdad435d3ccdce9c189021d2b7ab4186e21edceacc616370186548239453",
+    "self_deck_flag": "0849510479d615cbb2fade32c3295d00a2301157bb45f37fb0dd7e4fab6be59b",
+    "self_deck_id": "8dbab158f33b0d7a10acd4f43071fd6eeb9c2b26bb980914bc4c490169ea97ed",
+    "self_deck_mask": "dbab948310936fd3fe5d7669294b0291fb6561bf540cc0127cc46172fb336854",
+    "self_deck_meta_bucket": "a6594a3b68f6335db0c205d49947aa3e36b77f4395cb95b93f6b4389b95dfdd6",
+    "self_discard_id": "2f127b655473228a4f7917b2169eb49174a75ccdadb5d84fc31887fc66d36954",
+    "self_discard_mask": "813605339b31c2f1b83547eb09b990c5718e270770a829133f9d8f64c7671d9d",
+    "self_discard_meta_bucket": "980398c883ecb4736eacd42dff44b9c29ada1a858b671f1663095b688929796c",
+    "self_hand_id": "fb1f2d2951a59ecaef2fa3340eadd63cd610da9511201dbc617128901b73c4c2",
+    "self_hand_mask": "f538a45a203e87e615d6a3e2f2693fa3b576118aa6991a8b51f2afc334af8611",
+    "self_hand_meta_bucket": "56d24937a0f576a1dfa561a47852546409d8221fc9a235c52fe76a2299ee1de5",
+    "self_prize_id": "4ae93ccc204e7e81e159a5089ecd2f0efce49ab118020e8a6727672769db21e1",
+    "self_prize_mask": "3fdf9df93923334f44a741dc5bca342be44ad8640a89e17747f874b5e5285444",
+    "self_prize_meta_bucket": "62da47ec7578d4df3be527a7a4c12e75c39e624120cce0df22670258c479b24d",
+    "self_unit_attr": "4f39184a515f0db347566a39efad4d15617245cf0c4f631f97b6b2c5a2128264",
+    "self_unit_energy_id": "3fc7216e192acbdf8e94faf20e975f8556b22459c4a0453392cf5e5461bd3b87",
+    "self_unit_energy_meta_bucket": "223b1d7543a076037f965ef4f27b4d4c72f1a807a988a34698b39638a54b6f20",
+    "self_unit_mask": "b6595a0fbfce8904de583b24045c58579f1b8093716ae4d0328fab49ef9223f6",
+    "self_unit_preevo_id": "14ac717e3783cc703fd518da6120484a8da49ad7c7ee7ec3435dd21f9cd5f020",
+    "self_unit_preevo_meta_bucket": "c3432e4f5515722c1d9aa53dd7125d5c7df8d11bece76091dd46b1a16aab57a5",
+    "self_unit_tool_id": "2c66ccfc2942d74e324ecfea5df0e0faf38cae96e11150f9d05774ed36f529e9",
+    "self_unit_tool_meta_bucket": "23a7c926073f10acb132a63556340c402b7ca59c66703819124d64b80b67c85d",
+    "self_unit_top_id": "ade108ac78a05f5b5005c9a09f51ca3fc825a71ca6ef5e809d3ba3f533817335",
+    "self_unit_top_meta_bucket": "ac031426ac87cb1f370e34e88bbb2665649df3d949a9865c5ce8069e5cb118e2",
+    "side": "6bc7b634b91797b14a90e01007eb1ea5a920bb804a2660c1a7d9a1cdfa4b966d",
+    "stadium_id": "623f1cd226053a291e2927fdf31a7913203a60d3427e3bcda0c34140ca5413fb",
+    "stadium_mask": "6853e751e5b12d3ffd4e90064a41cadae08e74fb0b6fb5b08a7bc5ad1a6940b5",
+    "stadium_meta_bucket": "af49e7aa62c2ecb73d07265176818a63cebf94c38bba06111fdf2b7a267997ef",
+    "step_id": "b5e716fec4c802a7bf916ee29ab7dbd4e201bf8b817022537382f28b0018f800",
+    "substep": "606975105653f4a397f98cf9907ccbb6705dfe35a3bbe8be8786e4bfc82cf4d4",
+    "terminal": "e6d4812b1431b8d509fd64100bb1584f020d5eea6a680255673278b8427fa877",
+    "y": "1564e11392ca1ef081e0738b97bbcc8f8d432ee94396731f6e841ceee7d2016a"
+  },
+  "column_specs": {
+    "action_mask": {
+      "dtype": "float32",
+      "file": "columns/action_mask.npy",
+      "file_sha256": "937c086cab8ca62ff7a741575b65ec8f0273647724af5cb30fab98c88169d596",
+      "nbytes": 7747020,
+      "shape": [
+        10035,
+        193
+      ]
+    },
+    "aux_ko": {
+      "dtype": "int32",
+      "file": "columns/aux_ko.npy",
+      "file_sha256": "0f1e73147e36d99bfaab1f3693171a55f72fe5a63828e443d8368413a03abe45",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "aux_prize_delta": {
+      "dtype": "float32",
+      "file": "columns/aux_prize_delta.npy",
+      "file_sha256": "711c53c5e0c9be664917b36c7c4616d5a1d7204969b6612d64e8a7beb3772ee8",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "aux_return": {
+      "dtype": "float32",
+      "file": "columns/aux_return.npy",
+      "file_sha256": "5a7789b6ed116a8a4ce5b05e120fde1ac748abbfa2bd5d3acbf8720907abe940",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "aux_terminal": {
+      "dtype": "bool",
+      "file": "columns/aux_terminal.npy",
+      "file_sha256": "07fd2911d982c6d1f16b9533b87abd1ba521c79bcb52739c7173a00be4a281c0",
+      "nbytes": 10035,
+      "shape": [
+        10035
+      ]
+    },
+    "aux_valid": {
+      "dtype": "int32",
+      "file": "columns/aux_valid.npy",
+      "file_sha256": "d7e3f53278a646aefdd9337470245d15cebff9b8b7af2564541758cbdeffcb49",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "cls_scalars": {
+      "dtype": "float32",
+      "file": "columns/cls_scalars.npy",
+      "file_sha256": "81df565fe2cb4229260383fbc1d10a084ac6eea4f85433f294c40d14e10efbcd",
+      "nbytes": 762660,
+      "shape": [
+        10035,
+        19
+      ]
+    },
+    "day_id": {
+      "dtype": "float32",
+      "file": "columns/day_id.npy",
+      "file_sha256": "f570f56c9248436b286b3dc4a7ef3652cb60a3a27fea62a06db2e9349e996e79",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "day_index_norm": {
+      "dtype": "float32",
+      "file": "columns/day_index_norm.npy",
+      "file_sha256": "e089f4f371450f8946e956b39be5bff7bfdc61cbb3c72b4f260c541c97ce5612",
+      "nbytes": 40140,
+      "shape": [
+        10035,
+        1
+      ]
+    },
+    "decision_id": {
+      "dtype": "int32",
+      "file": "columns/decision_id.npy",
+      "file_sha256": "225a8bbbb4fe245a58287930596a713d9ed824c3329488b4070fe6027647db45",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "effect_id": {
+      "dtype": "int32",
+      "file": "columns/effect_id.npy",
+      "file_sha256": "84f5e59949c28634d2700dd960e3fa026200188058ce1c3c300ead73d1d72fff",
+      "nbytes": 80280,
+      "shape": [
+        10035,
+        2
+      ]
+    },
+    "effect_mask": {
+      "dtype": "float32",
+      "file": "columns/effect_mask.npy",
+      "file_sha256": "90cf44692d177d44031e1f22a7ca47d0a176cc425bc7f34a4b4749f0389bc897",
+      "nbytes": 80280,
+      "shape": [
+        10035,
+        2
+      ]
+    },
+    "effect_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/effect_meta_bucket.npy",
+      "file_sha256": "287a00692a368fb17969f6245d15ec9a62612520362c9920711e1a5fbe28d192",
+      "nbytes": 80280,
+      "shape": [
+        10035,
+        2
+      ]
+    },
+    "episode_id": {
+      "dtype": "int64",
+      "file": "columns/episode_id.npy",
+      "file_sha256": "9e32d773c0ae55a5c396e5b6e56faa60cede860206202fc2e56d6007596238ee",
+      "nbytes": 80280,
+      "shape": [
+        10035
+      ]
+    },
+    "is_attack": {
+      "dtype": "bool",
+      "file": "columns/is_attack.npy",
+      "file_sha256": "0328e3af19bf4ea8afe325fd7c1ddb3e74b2d1f9bc504185afb132ab85b20aa4",
+      "nbytes": 10035,
+      "shape": [
+        10035
+      ]
+    },
+    "is_self": {
+      "dtype": "float32",
+      "file": "columns/is_self.npy",
+      "file_sha256": "3f01d9bb548df2f5d8deda11fcd1ae345420f938803ec949660c94f7101210ca",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "new_episode": {
+      "dtype": "bool",
+      "file": "columns/new_episode.npy",
+      "file_sha256": "02e6c64535e72ed7b527bd330dfca2ddfda941192449f717cb31edfd38a2b9b3",
+      "nbytes": 10035,
+      "shape": [
+        10035
+      ]
+    },
+    "opp_deck_flag": {
+      "dtype": "float32",
+      "file": "columns/opp_deck_flag.npy",
+      "file_sha256": "093260879a362a313706e326c2f967c491afb699075f495ef5f32f052af64588",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "opp_deck_id": {
+      "dtype": "int32",
+      "file": "columns/opp_deck_id.npy",
+      "file_sha256": "6b0ea267bb08825d0ab7c15a8a9704817807392a86eb02b9fd27130a7dfa67ea",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "opp_deck_mask": {
+      "dtype": "float32",
+      "file": "columns/opp_deck_mask.npy",
+      "file_sha256": "eab938e50d1bc706f00c28f76cabb65f654f345014bf08513827b40c09a7c5e2",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "opp_deck_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/opp_deck_meta_bucket.npy",
+      "file_sha256": "8af1443ee8b775bc4b8f0e226c050b61021096a1ab0e050163b91733cd5787ec",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "opp_discard_id": {
+      "dtype": "int32",
+      "file": "columns/opp_discard_id.npy",
+      "file_sha256": "0edb72bac07630affbc744c8025eda7b0d783ed73161b1422bcf9c59c12e4b47",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "opp_discard_mask": {
+      "dtype": "float32",
+      "file": "columns/opp_discard_mask.npy",
+      "file_sha256": "65bbff316ce5ec859750babf8f600e40d72ecf064485d076e53dcc4613c29842",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "opp_discard_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/opp_discard_meta_bucket.npy",
+      "file_sha256": "9172b07a170cc284f50ed5b39460cb5c66b60caf81eacb270d13ab29e52a7681",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "opp_hand_flag": {
+      "dtype": "float32",
+      "file": "columns/opp_hand_flag.npy",
+      "file_sha256": "d184bbbec0a8ccbcb91d68d0022c377e3359bb63d3ce7d06866dd85cd312c336",
+      "nbytes": 1204200,
+      "shape": [
+        10035,
+        30
+      ]
+    },
+    "opp_hand_id": {
+      "dtype": "int32",
+      "file": "columns/opp_hand_id.npy",
+      "file_sha256": "9dba61da21e7a8b75a78352f35706f30405713a7a12e70a6156d51a3643776dd",
+      "nbytes": 1204200,
+      "shape": [
+        10035,
+        30
+      ]
+    },
+    "opp_hand_mask": {
+      "dtype": "float32",
+      "file": "columns/opp_hand_mask.npy",
+      "file_sha256": "97db624b6799f50dfb7c7a495a860a63978a92b9489996a87a9d2855f4eca4ee",
+      "nbytes": 1204200,
+      "shape": [
+        10035,
+        30
+      ]
+    },
+    "opp_hand_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/opp_hand_meta_bucket.npy",
+      "file_sha256": "a2c5dc67ef79d7c558a13bafa3ab36621b990213d246a0db4522ba060f615684",
+      "nbytes": 1204200,
+      "shape": [
+        10035,
+        30
+      ]
+    },
+    "opp_prize_id": {
+      "dtype": "int32",
+      "file": "columns/opp_prize_id.npy",
+      "file_sha256": "c2afe5c8248d7e00423ab238b25130a4ca321cdf7197cd17560b152c7c51c691",
+      "nbytes": 240840,
+      "shape": [
+        10035,
+        6
+      ]
+    },
+    "opp_prize_mask": {
+      "dtype": "float32",
+      "file": "columns/opp_prize_mask.npy",
+      "file_sha256": "8a9e8c9242d27b68c551d0c3b21779b6c58cc365fc49b53a9ae872bbf526e8f2",
+      "nbytes": 240840,
+      "shape": [
+        10035,
+        6
+      ]
+    },
+    "opp_prize_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/opp_prize_meta_bucket.npy",
+      "file_sha256": "64780a12eb3de2eaba5a69413d89bdd358d8f9d4c48e19b2de9a20bc806a917a",
+      "nbytes": 240840,
+      "shape": [
+        10035,
+        6
+      ]
+    },
+    "opp_unit_attr": {
+      "dtype": "float32",
+      "file": "columns/opp_unit_attr.npy",
+      "file_sha256": "84b93d2e803c7f7a339d4a3b61ac430afe561ad6675f8a16f7e2ab2d5824f575",
+      "nbytes": 8670240,
+      "shape": [
+        10035,
+        9,
+        24
+      ]
+    },
+    "opp_unit_energy_id": {
+      "dtype": "int32",
+      "file": "columns/opp_unit_energy_id.npy",
+      "file_sha256": "5aa5cbb52b47c32f17dfd80d87ef48d79b76c5f54cb5be79f78c3e84af7e657b",
+      "nbytes": 1445040,
+      "shape": [
+        10035,
+        9,
+        4
+      ]
+    },
+    "opp_unit_energy_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/opp_unit_energy_meta_bucket.npy",
+      "file_sha256": "b39854b5dd6b20ca77f57aff13af3c299bfd1388c2d6b4566f81fa2fe9f942e3",
+      "nbytes": 1445040,
+      "shape": [
+        10035,
+        9,
+        4
+      ]
+    },
+    "opp_unit_mask": {
+      "dtype": "float32",
+      "file": "columns/opp_unit_mask.npy",
+      "file_sha256": "9e5cfb5597be6b1f650d86a3a30ebb0219b5d087acf330ef34946b5ed218e3a1",
+      "nbytes": 361260,
+      "shape": [
+        10035,
+        9
+      ]
+    },
+    "opp_unit_preevo_id": {
+      "dtype": "int32",
+      "file": "columns/opp_unit_preevo_id.npy",
+      "file_sha256": "e15c20134689ee5f8a18cfcdb59c7e5a4b7967d140f4a1f991ecaf6120587102",
+      "nbytes": 722520,
+      "shape": [
+        10035,
+        9,
+        2
+      ]
+    },
+    "opp_unit_preevo_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/opp_unit_preevo_meta_bucket.npy",
+      "file_sha256": "b6915268132199e8b8fcb961d2576fb1670ce5337f495db1dfc1091b01045c2d",
+      "nbytes": 722520,
+      "shape": [
+        10035,
+        9,
+        2
+      ]
+    },
+    "opp_unit_tool_id": {
+      "dtype": "int32",
+      "file": "columns/opp_unit_tool_id.npy",
+      "file_sha256": "94e13d7396639f16b1e2dda558eaffb6b9ae7f8fef025e1cdd5316de73864600",
+      "nbytes": 1445040,
+      "shape": [
+        10035,
+        9,
+        4
+      ]
+    },
+    "opp_unit_tool_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/opp_unit_tool_meta_bucket.npy",
+      "file_sha256": "6d2f196225858b3be2eac797e6683acf4ee83e33ac95b3c222c974d490a47124",
+      "nbytes": 1445040,
+      "shape": [
+        10035,
+        9,
+        4
+      ]
+    },
+    "opp_unit_top_id": {
+      "dtype": "int32",
+      "file": "columns/opp_unit_top_id.npy",
+      "file_sha256": "2539833185bc559d1fa3cd2ab6b2dc98c13ffc4222e3a0e66176ed30c9a378cf",
+      "nbytes": 361260,
+      "shape": [
+        10035,
+        9
+      ]
+    },
+    "opp_unit_top_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/opp_unit_top_meta_bucket.npy",
+      "file_sha256": "724db287c1bd6371cd7cafb7e3574d3207b13598a789ec4a2623fd5daa5a0d25",
+      "nbytes": 361260,
+      "shape": [
+        10035,
+        9
+      ]
+    },
+    "opponent_agent_bucket": {
+      "dtype": "int32",
+      "file": "columns/opponent_agent_bucket.npy",
+      "file_sha256": "868e64e476f7fc019bc2cb57b5c5c289f235dfe48b4c2db7b06fd45b01e48c44",
+      "nbytes": 40140,
+      "shape": [
+        10035,
+        1
+      ]
+    },
+    "opponent_deck_bucket": {
+      "dtype": "int32",
+      "file": "columns/opponent_deck_bucket.npy",
+      "file_sha256": "868e64e476f7fc019bc2cb57b5c5c289f235dfe48b4c2db7b06fd45b01e48c44",
+      "nbytes": 40140,
+      "shape": [
+        10035,
+        1
+      ]
+    },
+    "opt_attack_id": {
+      "dtype": "int32",
+      "file": "columns/opt_attack_id.npy",
+      "file_sha256": "f8ede5aa40677cfcb92340b4a011916189ba6947233d5792700c5ecf9c43e21c",
+      "nbytes": 7706880,
+      "shape": [
+        10035,
+        192
+      ]
+    },
+    "opt_attr": {
+      "dtype": "float32",
+      "file": "columns/opt_attr.npy",
+      "file_sha256": "26559e0c82c2ed61c09ad69a0e84024c336d36290642dcdf538085c8a0f55739",
+      "nbytes": 277447680,
+      "shape": [
+        10035,
+        192,
+        36
+      ]
+    },
+    "opt_group": {
+      "dtype": "int32",
+      "file": "columns/opt_group.npy",
+      "file_sha256": "8ef7c42d4a3e93dd5896a150d9da5fb045ac4388b5325258db89617bde824aae",
+      "nbytes": 7747020,
+      "shape": [
+        10035,
+        193
+      ]
+    },
+    "opt_src_card": {
+      "dtype": "int32",
+      "file": "columns/opt_src_card.npy",
+      "file_sha256": "eb53a19341378c4b71f061d12e3dadd231f41875ee6f879f0dfe22d28199bb18",
+      "nbytes": 7706880,
+      "shape": [
+        10035,
+        192
+      ]
+    },
+    "opt_src_pos": {
+      "dtype": "int32",
+      "file": "columns/opt_src_pos.npy",
+      "file_sha256": "c27a204a335082f1364853e0793447c048f39a77b7518e8522f841809f392fc8",
+      "nbytes": 7706880,
+      "shape": [
+        10035,
+        192
+      ]
+    },
+    "opt_tgt_card": {
+      "dtype": "int32",
+      "file": "columns/opt_tgt_card.npy",
+      "file_sha256": "61dd60a6cf9b233c2fb76974aef0f94d2aef19a2ee1c01cbb221d6fad1db6d57",
+      "nbytes": 7706880,
+      "shape": [
+        10035,
+        192
+      ]
+    },
+    "opt_tgt_pos": {
+      "dtype": "int32",
+      "file": "columns/opt_tgt_pos.npy",
+      "file_sha256": "471e38a68c6dbf0bad411ca4074946fd10c15d22745452994915d90d680ef59e",
+      "nbytes": 7706880,
+      "shape": [
+        10035,
+        192
+      ]
+    },
+    "opt_verb": {
+      "dtype": "int32",
+      "file": "columns/opt_verb.npy",
+      "file_sha256": "88ca69f5d3a79fa70b632d4627ac07bfd38dbe3a7e63f4ee61c5395ac86993ee",
+      "nbytes": 7706880,
+      "shape": [
+        10035,
+        192
+      ]
+    },
+    "outcome": {
+      "dtype": "float32",
+      "file": "columns/outcome.npy",
+      "file_sha256": "9f8334784897baa468e1164fdf1171ca851770521fac66d3cd86eee520aa7f43",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "reward": {
+      "dtype": "float32",
+      "file": "columns/reward.npy",
+      "file_sha256": "533f3067441af84bd18861732398a73486e1403c85d079b08a5f70a51ff4025c",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "select_context": {
+      "dtype": "int32",
+      "file": "columns/select_context.npy",
+      "file_sha256": "b732e35025793ce1ae0b908519901aeedded203fcdcb0c1accf329255d59627b",
+      "nbytes": 40140,
+      "shape": [
+        10035,
+        1
+      ]
+    },
+    "select_type": {
+      "dtype": "int32",
+      "file": "columns/select_type.npy",
+      "file_sha256": "510d325364c827688bfe0cb61e7e7135e0ded845460153b7f773ce2acb2b4b13",
+      "nbytes": 40140,
+      "shape": [
+        10035,
+        1
+      ]
+    },
+    "self_deck_flag": {
+      "dtype": "float32",
+      "file": "columns/self_deck_flag.npy",
+      "file_sha256": "fa2d63c2adeea0bcb2b25e282c7cddf34809adafc95f6e98d0bab450b997d480",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "self_deck_id": {
+      "dtype": "int32",
+      "file": "columns/self_deck_id.npy",
+      "file_sha256": "91730e894a7c518c758af244686201b9d6fc50bedb66d2e3d932dbfb7ff62266",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "self_deck_mask": {
+      "dtype": "float32",
+      "file": "columns/self_deck_mask.npy",
+      "file_sha256": "eab938e50d1bc706f00c28f76cabb65f654f345014bf08513827b40c09a7c5e2",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "self_deck_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/self_deck_meta_bucket.npy",
+      "file_sha256": "9302fa62ede15d288cb66933b9ffa78c9bbf6f63113a66d46f9b6ad4a17cd640",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "self_discard_id": {
+      "dtype": "int32",
+      "file": "columns/self_discard_id.npy",
+      "file_sha256": "fb3cd4e30c3bdc6a6d93356a1bb688b6a8fb140dc6391cfa9ded5d5ae5ced7bf",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "self_discard_mask": {
+      "dtype": "float32",
+      "file": "columns/self_discard_mask.npy",
+      "file_sha256": "fb38ae977174dfc7475327c2277ac0effe77ccdd43fd02bfb29bc1cb55850f80",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "self_discard_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/self_discard_meta_bucket.npy",
+      "file_sha256": "9cc3891dc01b421c326b30daad7e94649b248b143b8f4be5d8a5e0ca6f09c5a1",
+      "nbytes": 2408400,
+      "shape": [
+        10035,
+        60
+      ]
+    },
+    "self_hand_id": {
+      "dtype": "int32",
+      "file": "columns/self_hand_id.npy",
+      "file_sha256": "2e4ec47ce81adda31940fa6f1ca2451a7483ddc49f1acd1ac3a8c7584f6cab00",
+      "nbytes": 1204200,
+      "shape": [
+        10035,
+        30
+      ]
+    },
+    "self_hand_mask": {
+      "dtype": "float32",
+      "file": "columns/self_hand_mask.npy",
+      "file_sha256": "77cb028e27180ccd57390db7090b12e868dc2552fdbb0b3751580a7eb72b7c8e",
+      "nbytes": 1204200,
+      "shape": [
+        10035,
+        30
+      ]
+    },
+    "self_hand_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/self_hand_meta_bucket.npy",
+      "file_sha256": "7709a6de5a0279e27fc29c3d4e5fb5d4e8f39a46cac14d12f92893bc43e586d5",
+      "nbytes": 1204200,
+      "shape": [
+        10035,
+        30
+      ]
+    },
+    "self_prize_id": {
+      "dtype": "int32",
+      "file": "columns/self_prize_id.npy",
+      "file_sha256": "38684bcacfe3a5701f1b8a1bb0b52566c71087dec1af85f5f3dbaeae4cfeff4c",
+      "nbytes": 240840,
+      "shape": [
+        10035,
+        6
+      ]
+    },
+    "self_prize_mask": {
+      "dtype": "float32",
+      "file": "columns/self_prize_mask.npy",
+      "file_sha256": "6d0bba082f28acbefadb772feaca45d956c6f483e3d8712bfbce4b325141ced2",
+      "nbytes": 240840,
+      "shape": [
+        10035,
+        6
+      ]
+    },
+    "self_prize_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/self_prize_meta_bucket.npy",
+      "file_sha256": "64780a12eb3de2eaba5a69413d89bdd358d8f9d4c48e19b2de9a20bc806a917a",
+      "nbytes": 240840,
+      "shape": [
+        10035,
+        6
+      ]
+    },
+    "self_unit_attr": {
+      "dtype": "float32",
+      "file": "columns/self_unit_attr.npy",
+      "file_sha256": "6007154b910fabe09da3b885b0e42215f80097fe6996cad014374b38335d3fa7",
+      "nbytes": 8670240,
+      "shape": [
+        10035,
+        9,
+        24
+      ]
+    },
+    "self_unit_energy_id": {
+      "dtype": "int32",
+      "file": "columns/self_unit_energy_id.npy",
+      "file_sha256": "17c249bc0dce29e09d52ee10d0fdcf84e26cc986a64f2bf3943092f7badde969",
+      "nbytes": 1445040,
+      "shape": [
+        10035,
+        9,
+        4
+      ]
+    },
+    "self_unit_energy_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/self_unit_energy_meta_bucket.npy",
+      "file_sha256": "5d2a4d7395d6627b5ed9aa9509fda27cc3f45239dd5b5c3d8b061bc0c791dbea",
+      "nbytes": 1445040,
+      "shape": [
+        10035,
+        9,
+        4
+      ]
+    },
+    "self_unit_mask": {
+      "dtype": "float32",
+      "file": "columns/self_unit_mask.npy",
+      "file_sha256": "462d77530eea49ac62566c5b07e7312ec7e261b6b3ef9a8778a2314ab931b58f",
+      "nbytes": 361260,
+      "shape": [
+        10035,
+        9
+      ]
+    },
+    "self_unit_preevo_id": {
+      "dtype": "int32",
+      "file": "columns/self_unit_preevo_id.npy",
+      "file_sha256": "777706ddc477168ca4e42e83e848c2ffd7172cbf20be594c1a51f6419534cb42",
+      "nbytes": 722520,
+      "shape": [
+        10035,
+        9,
+        2
+      ]
+    },
+    "self_unit_preevo_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/self_unit_preevo_meta_bucket.npy",
+      "file_sha256": "f72d42db6db03dda9cc49e7436d38992080fd0763f22050469d0e735c86c0680",
+      "nbytes": 722520,
+      "shape": [
+        10035,
+        9,
+        2
+      ]
+    },
+    "self_unit_tool_id": {
+      "dtype": "int32",
+      "file": "columns/self_unit_tool_id.npy",
+      "file_sha256": "02ca5cf5c475365a70bba663f4775751f4751c35f1db7c8096884d7522167adb",
+      "nbytes": 1445040,
+      "shape": [
+        10035,
+        9,
+        4
+      ]
+    },
+    "self_unit_tool_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/self_unit_tool_meta_bucket.npy",
+      "file_sha256": "4545916320b6ce0c8fde287dd8a44f6c851563e05db116ba0fa958377d088fd5",
+      "nbytes": 1445040,
+      "shape": [
+        10035,
+        9,
+        4
+      ]
+    },
+    "self_unit_top_id": {
+      "dtype": "int32",
+      "file": "columns/self_unit_top_id.npy",
+      "file_sha256": "bb44ef7d45ecfdf2cddf4978064fa65d793b1d7f56bc0121058e4a526282a15c",
+      "nbytes": 361260,
+      "shape": [
+        10035,
+        9
+      ]
+    },
+    "self_unit_top_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/self_unit_top_meta_bucket.npy",
+      "file_sha256": "d23f739f8acb2656779104ac039fe530b9de565b67a04f829fc069f6b4eb50de",
+      "nbytes": 361260,
+      "shape": [
+        10035,
+        9
+      ]
+    },
+    "side": {
+      "dtype": "int32",
+      "file": "columns/side.npy",
+      "file_sha256": "366f46a297c8e127137a05c6190f319f386156e31154e65c25034381bc8ba67d",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "stadium_id": {
+      "dtype": "int32",
+      "file": "columns/stadium_id.npy",
+      "file_sha256": "0f3fd7a75e997b6a895057001db4e79394d519bef2b97c6c8a9ab9b00f2c274d",
+      "nbytes": 80280,
+      "shape": [
+        10035,
+        2
+      ]
+    },
+    "stadium_mask": {
+      "dtype": "float32",
+      "file": "columns/stadium_mask.npy",
+      "file_sha256": "ac26341b85425711f97429f527a5dbe57205f3c3f0c1f48b96860808e52b92ce",
+      "nbytes": 80280,
+      "shape": [
+        10035,
+        2
+      ]
+    },
+    "stadium_meta_bucket": {
+      "dtype": "int32",
+      "file": "columns/stadium_meta_bucket.npy",
+      "file_sha256": "3e0d295779d36721727b8e62efeedb00bff2892245ca0386215b7836eb58d641",
+      "nbytes": 80280,
+      "shape": [
+        10035,
+        2
+      ]
+    },
+    "step_id": {
+      "dtype": "int32",
+      "file": "columns/step_id.npy",
+      "file_sha256": "ea2983c9aeb6d83df97590e5f27a47c0a9f9a31b6617f3459af61228f01ab282",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "substep": {
+      "dtype": "int32",
+      "file": "columns/substep.npy",
+      "file_sha256": "8c95ff2057444449ea2c027442435e4dd91d7902ba0fc96c6591622f8a5e8495",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    },
+    "terminal": {
+      "dtype": "bool",
+      "file": "columns/terminal.npy",
+      "file_sha256": "07fd2911d982c6d1f16b9533b87abd1ba521c79bcb52739c7173a00be4a281c0",
+      "nbytes": 10035,
+      "shape": [
+        10035
+      ]
+    },
+    "y": {
+      "dtype": "int32",
+      "file": "columns/y.npy",
+      "file_sha256": "06823e4038c189e8353a96288f8948d76479c9d914711a4694877689314162bc",
+      "nbytes": 40140,
+      "shape": [
+        10035
+      ]
+    }
+  },
+  "columns": [
+    "action_mask",
+    "cls_scalars",
+    "day_index_norm",
+    "effect_id",
+    "effect_mask",
+    "effect_meta_bucket",
+    "opp_deck_flag",
+    "opp_deck_id",
+    "opp_deck_mask",
+    "opp_deck_meta_bucket",
+    "opp_discard_id",
+    "opp_discard_mask",
+    "opp_discard_meta_bucket",
+    "opp_hand_flag",
+    "opp_hand_id",
+    "opp_hand_mask",
+    "opp_hand_meta_bucket",
+    "opp_prize_id",
+    "opp_prize_mask",
+    "opp_prize_meta_bucket",
+    "opp_unit_attr",
+    "opp_unit_energy_id",
+    "opp_unit_energy_meta_bucket",
+    "opp_unit_mask",
+    "opp_unit_preevo_id",
+    "opp_unit_preevo_meta_bucket",
+    "opp_unit_tool_id",
+    "opp_unit_tool_meta_bucket",
+    "opp_unit_top_id",
+    "opp_unit_top_meta_bucket",
+    "opponent_agent_bucket",
+    "opponent_deck_bucket",
+    "opt_attack_id",
+    "opt_attr",
+    "opt_src_card",
+    "opt_src_pos",
+    "opt_tgt_card",
+    "opt_tgt_pos",
+    "opt_verb",
+    "select_context",
+    "select_type",
+    "self_deck_flag",
+    "self_deck_id",
+    "self_deck_mask",
+    "self_deck_meta_bucket",
+    "self_discard_id",
+    "self_discard_mask",
+    "self_discard_meta_bucket",
+    "self_hand_id",
+    "self_hand_mask",
+    "self_hand_meta_bucket",
+    "self_prize_id",
+    "self_prize_mask",
+    "self_prize_meta_bucket",
+    "self_unit_attr",
+    "self_unit_energy_id",
+    "self_unit_energy_meta_bucket",
+    "self_unit_mask",
+    "self_unit_preevo_id",
+    "self_unit_preevo_meta_bucket",
+    "self_unit_tool_id",
+    "self_unit_tool_meta_bucket",
+    "self_unit_top_id",
+    "self_unit_top_meta_bucket",
+    "stadium_id",
+    "stadium_mask",
+    "stadium_meta_bucket",
+    "y",
+    "is_attack",
+    "opt_group",
+    "aux_ko",
+    "aux_prize_delta",
+    "aux_terminal",
+    "aux_return",
+    "aux_valid",
+    "episode_id",
+    "side",
+    "step_id",
+    "decision_id",
+    "substep",
+    "new_episode",
+    "terminal",
+    "reward",
+    "outcome",
+    "is_self",
+    "day_id"
+  ],
+  "data_digest": "332fbacd00a30cefc5446c1424f0eacae9e88fe5e2a98a9dcb82705f534474a5",
+  "format": "fixed-width-npy-mmap",
+  "format_version": 2,
+  "logical_bytes": 418820760,
+  "required_contract": {
+    "auxiliary": [
+      "aux_ko",
+      "aux_prize_delta",
+      "aux_terminal",
+      "aux_return",
+      "aux_valid"
+    ],
+    "columns": [
+      "action_mask",
+      "cls_scalars",
+      "day_index_norm",
+      "effect_id",
+      "effect_mask",
+      "effect_meta_bucket",
+      "opp_deck_flag",
+      "opp_deck_id",
+      "opp_deck_mask",
+      "opp_deck_meta_bucket",
+      "opp_discard_id",
+      "opp_discard_mask",
+      "opp_discard_meta_bucket",
+      "opp_hand_flag",
+      "opp_hand_id",
+      "opp_hand_mask",
+      "opp_hand_meta_bucket",
+      "opp_prize_id",
+      "opp_prize_mask",
+      "opp_prize_meta_bucket",
+      "opp_unit_attr",
+      "opp_unit_energy_id",
+      "opp_unit_energy_meta_bucket",
+      "opp_unit_mask",
+      "opp_unit_preevo_id",
+      "opp_unit_preevo_meta_bucket",
+      "opp_unit_tool_id",
+      "opp_unit_tool_meta_bucket",
+      "opp_unit_top_id",
+      "opp_unit_top_meta_bucket",
+      "opponent_agent_bucket",
+      "opponent_deck_bucket",
+      "opt_attack_id",
+      "opt_attr",
+      "opt_src_card",
+      "opt_src_pos",
+      "opt_tgt_card",
+      "opt_tgt_pos",
+      "opt_verb",
+      "select_context",
+      "select_type",
+      "self_deck_flag",
+      "self_deck_id",
+      "self_deck_mask",
+      "self_deck_meta_bucket",
+      "self_discard_id",
+      "self_discard_mask",
+      "self_discard_meta_bucket",
+      "self_hand_id",
+      "self_hand_mask",
+      "self_hand_meta_bucket",
+      "self_prize_id",
+      "self_prize_mask",
+      "self_prize_meta_bucket",
+      "self_unit_attr",
+      "self_unit_energy_id",
+      "self_unit_energy_meta_bucket",
+      "self_unit_mask",
+      "self_unit_preevo_id",
+      "self_unit_preevo_meta_bucket",
+      "self_unit_tool_id",
+      "self_unit_tool_meta_bucket",
+      "self_unit_top_id",
+      "self_unit_top_meta_bucket",
+      "stadium_id",
+      "stadium_mask",
+      "stadium_meta_bucket",
+      "y",
+      "is_attack",
+      "opt_group",
+      "aux_ko",
+      "aux_prize_delta",
+      "aux_terminal",
+      "aux_return",
+      "aux_valid",
+      "episode_id",
+      "side",
+      "step_id",
+      "decision_id",
+      "substep",
+      "new_episode",
+      "terminal",
+      "reward",
+      "outcome",
+      "is_self",
+      "day_id"
+    ],
+    "labels": [
+      "y",
+      "is_attack",
+      "opt_group"
+    ],
+    "model_input_columns": [
+      "action_mask",
+      "cls_scalars",
+      "day_index_norm",
+      "effect_id",
+      "effect_mask",
+      "effect_meta_bucket",
+      "opp_deck_flag",
+      "opp_deck_id",
+      "opp_deck_mask",
+      "opp_deck_meta_bucket",
+      "opp_discard_id",
+      "opp_discard_mask",
+      "opp_discard_meta_bucket",
+      "opp_hand_flag",
+      "opp_hand_id",
+      "opp_hand_mask",
+      "opp_hand_meta_bucket",
+      "opp_prize_id",
+      "opp_prize_mask",
+      "opp_prize_meta_bucket",
+      "opp_unit_attr",
+      "opp_unit_energy_id",
+      "opp_unit_energy_meta_bucket",
+      "opp_unit_mask",
+      "opp_unit_preevo_id",
+      "opp_unit_preevo_meta_bucket",
+      "opp_unit_tool_id",
+      "opp_unit_tool_meta_bucket",
+      "opp_unit_top_id",
+      "opp_unit_top_meta_bucket",
+      "opponent_agent_bucket",
+      "opponent_deck_bucket",
+      "opt_attack_id",
+      "opt_attr",
+      "opt_src_card",
+      "opt_src_pos",
+      "opt_tgt_card",
+      "opt_tgt_pos",
+      "opt_verb",
+      "select_context",
+      "select_type",
+      "self_deck_flag",
+      "self_deck_id",
+      "self_deck_mask",
+      "self_deck_meta_bucket",
+      "self_discard_id",
+      "self_discard_mask",
+      "self_discard_meta_bucket",
+      "self_hand_id",
+      "self_hand_mask",
+      "self_hand_meta_bucket",
+      "self_prize_id",
+      "self_prize_mask",
+      "self_prize_meta_bucket",
+      "self_unit_attr",
+      "self_unit_energy_id",
+      "self_unit_energy_meta_bucket",
+      "self_unit_mask",
+      "self_unit_preevo_id",
+      "self_unit_preevo_meta_bucket",
+      "self_unit_tool_id",
+      "self_unit_tool_meta_bucket",
+      "self_unit_top_id",
+      "self_unit_top_meta_bucket",
+      "stadium_id",
+      "stadium_mask",
+      "stadium_meta_bucket"
+    ],
+    "order": [
+      "episode_id",
+      "side",
+      "step_id",
+      "decision_id",
+      "substep"
+    ]
+  },
+  "row_order": {
+    "columns": [
+      "episode_id",
+      "side",
+      "step_id",
+      "decision_id",
+      "substep"
+    ],
+    "train_digest": "d188409b827097abb4ec8527bc1755fc6068666a080332c0e5885f9e02c36345",
+    "train_rows": 9155,
+    "val_digest": "8ea3c674748786e5c2b52ed80a9bdfb1539904d9d66eae1db2668b51460e11f6",
+    "val_rows": 880
+  },
+  "selected_rows": 10035,
+  "selection": {
+    "max_rows": 10000,
+    "seed_semantics": "not used for episode selection; trainer shuffle only",
+    "selected_episode_ids": [
+      90848813,
+      90848904,
+      90848967,
+      90848974,
+      90848975,
+      90849002,
+      90849004,
+      90849005,
+      90849006,
+      90849007,
+      90849010,
+      90849011,
+      90849035,
+      90849058,
+      90849072,
+      90849076,
+      90849103,
+      90849692,
+      90849728,
+      90849798,
+      90849847,
+      90849849,
+      90849867,
+      90849869,
+      90849874,
+      90849880,
+      90849891,
+      90849896,
+      90849901,
+      90849903,
+      90849909,
+      90849911,
+      90849939,
+      90849945,
+      90849969,
+      90850000,
+      90850459,
+      90850515,
+      90850553,
+      90850599,
+      90850602,
+      90850624,
+      90850671,
+      90850764,
+      90850808,
+      90850811,
+      90850821,
+      90850826,
+      90850831,
+      90850833,
+      90851359,
+      90851388,
+      90851420,
+      90851422,
+      90851446,
+      90851484,
+      90851536,
+      90851548,
+      90851553
+    ],
+    "train_episode_ids": [
+      90849004,
+      90849005,
+      90849006,
+      90849007,
+      90849010,
+      90849011,
+      90849035,
+      90849058,
+      90849072,
+      90849076,
+      90849103,
+      90849692,
+      90849728,
+      90849798,
+      90849847,
+      90849849,
+      90849867,
+      90849869,
+      90849874,
+      90849880,
+      90849891,
+      90849896,
+      90849901,
+      90849903,
+      90849909,
+      90849911,
+      90849939,
+      90849945,
+      90849969,
+      90850000,
+      90850459,
+      90850515,
+      90850553,
+      90850599,
+      90850602,
+      90850624,
+      90850671,
+      90850764,
+      90850808,
+      90850811,
+      90850821,
+      90850826,
+      90850831,
+      90850833,
+      90851359,
+      90851388,
+      90851420,
+      90851422,
+      90851446,
+      90851484,
+      90851536,
+      90851548,
+      90851553
+    ],
+    "train_rows": 9155,
+    "val_episode_ids": [
+      90848813,
+      90848904,
+      90848967,
+      90848974,
+      90848975,
+      90849002
+    ],
+    "val_frac": 0.1,
+    "val_rows": 880
+  },
+  "source_file_sha256": [
+    "ed4b392a41dc363d7175bffcdfdca105a21450fc209c36320a561e3631a8f1f0",
+    "c6a31adfa9dbf196b9461a04b97ce4e04a150d704c4ccc6fcc9de3e8c705cf48"
+  ],
+  "source_manifest_sha256": [
+    "aadb62af7d42e979630f2628d6070eb30902617500313ef92516ba3f31371e3b",
+    "21e93326b46253648bab718e4429f05d1b278efaf921945f95117ea225b67398"
+  ],
+  "source_paths": [
+    "data/bc_data/2026-08-08.parquet",
+    "data/bc_data/2026-08-09.parquet"
+  ],
+  "source_row_groups": 48,
+  "source_rows": 1630725,
+  "source_sha256": "dcfa720558140946957dd28f2d6d0b6691c196bb0c7c023c2861beb03091858a"
+}

@@ -50,7 +50,13 @@ from rl.encoder.card_features import get_card_table
 from rl.encoder.enc_constants import OPT_WK
 from rl.encoder.encoding import TokenEncoder
 from rl.lr_schedule import lr_at
-from rl.packed_data import PackedArrayStore, sha256_file, validate_selection
+from rl.packed_data import (
+    PackedArrayStore,
+    required_trainer_columns,
+    sha256_file,
+    source_digest,
+    validate_selection,
+)
 from rl.policy_mlx import build_token_net_mlx
 from rl.results_db import ResultsDB
 from rl.train_config import load_config
@@ -2091,19 +2097,18 @@ def main() -> None:
     # fixed source, cap, split fraction, and seed.
     packed_meta_store = None
     packed_selection = None
+    packed_required_columns = required_trainer_columns(enc_shapes)
     if a.packed_data:
-        if len(dataset_paths) != 1:
-            raise ValueError("--packed-data requires exactly one Parquet source day")
         packed_meta_store = PackedArrayStore(
             a.packed_data,
             columns=["episode_id", "side", "step_id"],
+            required_columns=packed_required_columns,
         )
         validate_selection(
             packed_meta_store,
-            source_sha256=sha256_file(dataset_paths[0]),
+            source_sha256=source_digest(dataset_paths),
             max_rows=int(a.max_rows),
             val_frac=float(a.val_frac),
-            seed=int(a.seed),
         )
         packed_selection = packed_meta_store.manifest["selection"]
         manifest_selected = np.asarray(
@@ -2167,7 +2172,10 @@ def main() -> None:
 
     _use_tbptt = bool(a.tbptt_chunk > 0)
     if a.packed_data and not _use_tbptt:
-        raise ValueError("--packed-data currently requires the Stage-4 TBPTT path")
+        raise ValueError(
+            "unsupported packed-data combination: fixed-width stores require "
+            "the Stage-4 TBPTT path (set --tbptt-chunk > 0); no Parquet fallback"
+        )
 
     # ---- validation split: streamed via a dedicated KV row_group cache ----
     # No pre-materialization. Scan pass 1 records per-val-row

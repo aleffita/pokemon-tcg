@@ -5,8 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -19,38 +17,12 @@ from rl.packed_data import (
     PACKED_FORMAT_VERSION,
     _digest_array,
     _digest_columns,
+    required_trainer_columns,
     sha256_file,
+    source_digest,
     split_episode_ids,
+    TRAINER_ORDER_COLUMNS,
 )
-
-
-_ORDER_COLUMNS = [
-    "episode_id",
-    "side",
-    "step_id",
-    "decision_id",
-    "substep",
-    "new_episode",
-    "terminal",
-    "reward",
-    "outcome",
-    "is_self",
-    "day_id",
-]
-_TRAIN_METADATA_COLUMNS = [
-    "y",
-    "is_attack",
-    "opt_group",
-    "aux_ko",
-    "aux_prize_delta",
-    "aux_terminal",
-    "aux_return",
-    "aux_valid",
-]
-
-
-def _sha256_json(path: Path) -> str:
-    return sha256_file(path)
 
 
 def _read_normalized_batch(batch, name, enc, int_keys):
@@ -61,20 +33,33 @@ def _read_normalized_batch(batch, name, enc, int_keys):
     return _read_batch_column(batch, name, enc.shapes, int_keys)
 
 
-def build(source: Path, output: Path, *, max_rows: int, val_frac: float, seed: int) -> dict:
+def build(
+    source: Path | list[Path],
+    output: Path,
+    *,
+    max_rows: int,
+    val_frac: float,
+    seed: int,
+) -> dict:
     if output.exists():
         raise FileExistsError(f"refusing to overwrite packed output: {output}")
     output.mkdir(parents=True)
 
+    sources = [source] if isinstance(source, Path) else list(source)
+    if not sources:
+        raise ValueError("packed ETL requires at least one Parquet source")
+    if any(path.suffix != ".parquet" for path in sources):
+        raise ValueError("packed ETL supports only .parquet sources")
+
     enc = TokenEncoder(get_card_table())
     int_keys = set(enc.int_keys)
-    columns = sorted(enc.shapes) + _TRAIN_METADATA_COLUMNS + _ORDER_COLUMNS
+    columns = required_trainer_columns(enc.shapes)
     if len(columns) != len(set(columns)):
         raise ValueError("packed column list contains duplicates")
 
-    source_hash = sha256_file(source)
-    source_pf = pq.ParquetFile(source)
-    dataset = pads.dataset([str(source)], format="parquet")
+    source_hash = source_digest([str(path) for path in sources])
+    source_pfs = [pq.ParquetFile(path) for path in sources]
+    dataset = pads.dataset([str(path) for path in sources], format="parquet")
     scan_parts = []
     for batch in dataset.to_batches(columns=["episode_id"]):
         if batch.num_rows:
@@ -93,15 +78,29 @@ def build(source: Path, output: Path, *, max_rows: int, val_frac: float, seed: i
             continue
         for name in columns:
             parts[name].append(_read_normalized_batch(batch, name, enc, int_keys))
-    arrays: dict[str, np.ndarray] = {}
+    raw_arrays: dict[str, np.ndarray] = {}
     for name in columns:
         if not parts[name]:
             raise ValueError(f"selected source has no rows for column {name}")
-        arrays[name] = np.ascontiguousarray(np.concatenate(parts[name], axis=0))
+        raw_arrays[name] = np.ascontiguousarray(np.concatenate(parts[name], axis=0))
+    raw_episode_ids = raw_arrays["episode_id"]
+    selected_mask = np.isin(raw_episode_ids, selected_eids)
+    val_mask = np.isin(raw_episode_ids, val_eids)
+    train_mask = np.isin(raw_episode_ids, train_eids)
+    if np.any(val_mask & train_mask) or not np.array_equal(
+        np.flatnonzero(selected_mask), np.concatenate([np.flatnonzero(val_mask), np.flatnonzero(train_mask)])
+    ):
+        raise AssertionError("selected source rows are not partitioned into val then train")
+    arrays = {
+        name: np.ascontiguousarray(
+            np.concatenate([raw_arrays[name][val_mask], raw_arrays[name][train_mask]], axis=0)
+        )
+        for name in columns
+    }
     selected_rows = len(arrays[columns[0]])
-    if selected_rows != int(sum(np.isin(all_episode_ids, selected_eids))):
+    if selected_rows != int(np.isin(all_episode_ids, selected_eids).sum()):
         raise AssertionError("selected row count mismatch while building packed store")
-    if not np.array_equal(np.unique(arrays["episode_id"]), np.unique(selected_eids)):
+    if not np.array_equal(np.unique(raw_episode_ids[selected_mask]), np.unique(selected_eids)):
         raise AssertionError("selected episode IDs mismatch while building packed store")
 
     columns_dir = output / "columns"
@@ -120,17 +119,20 @@ def build(source: Path, output: Path, *, max_rows: int, val_frac: float, seed: i
         }
         column_digests[name] = _digest_array(arrays[name])
 
-    source_manifest = source.with_name(source.stem + ".manifest.json")
     manifest = {
         "format": "fixed-width-npy-mmap",
         "format_version": PACKED_FORMAT_VERSION,
-        "source_path": str(source),
+        "source_paths": [str(path) for path in sources],
         "source_sha256": source_hash,
-        "source_manifest_sha256": sha256_file(source_manifest)
-        if source_manifest.is_file()
-        else None,
-        "source_rows": int(source_pf.metadata.num_rows),
-        "source_row_groups": int(source_pf.metadata.num_row_groups),
+        "source_file_sha256": [sha256_file(path) for path in sources],
+        "source_manifest_sha256": [
+            sha256_file(path.with_name(path.stem + ".manifest.json"))
+            if path.with_name(path.stem + ".manifest.json").is_file()
+            else None
+            for path in sources
+        ],
+        "source_rows": int(sum(pf.metadata.num_rows for pf in source_pfs)),
+        "source_row_groups": int(sum(pf.metadata.num_row_groups for pf in source_pfs)),
         "selected_rows": selected_rows,
         "logical_bytes": int(sum(spec["nbytes"] for spec in specs.values())),
         "columns": columns,
@@ -140,7 +142,7 @@ def build(source: Path, output: Path, *, max_rows: int, val_frac: float, seed: i
         "selection": {
             "max_rows": int(max_rows),
             "val_frac": float(val_frac),
-            "seed": int(seed),
+            "seed_semantics": "not used for episode selection; trainer shuffle only",
             "selected_episode_ids": [int(x) for x in selected_eids],
             "train_episode_ids": [int(x) for x in train_eids],
             "val_episode_ids": [int(x) for x in val_eids],
@@ -157,7 +159,25 @@ def build(source: Path, output: Path, *, max_rows: int, val_frac: float, seed: i
                 "aux_return",
                 "aux_valid",
             ],
-            "episode_order": _ORDER_COLUMNS,
+            "columns": columns,
+            "order": list(TRAINER_ORDER_COLUMNS),
+        },
+        "row_order": {
+            "columns": list(TRAINER_ORDER_COLUMNS),
+            "val_rows": int(val_mask.sum()),
+            "train_rows": int(train_mask.sum()),
+            "val_digest": _digest_columns(
+                {name: arrays[name][: int(val_mask.sum())] for name in TRAINER_ORDER_COLUMNS},
+                list(TRAINER_ORDER_COLUMNS),
+            ),
+            "train_digest": _digest_columns(
+                {name: arrays[name][int(val_mask.sum()) :] for name in TRAINER_ORDER_COLUMNS},
+                list(TRAINER_ORDER_COLUMNS),
+            ),
+        },
+        "build": {
+            "seed": int(seed),
+            "seed_semantics": "provenance only; no effect on episode selection or row order",
         },
     }
     manifest_path = output / "manifest.json"
@@ -169,14 +189,14 @@ def build(source: Path, output: Path, *, max_rows: int, val_frac: float, seed: i
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", required=True)
+    parser.add_argument("--source", action="append", required=True, help="Parquet source; repeat for consecutive days")
     parser.add_argument("--out", required=True)
     parser.add_argument("--max-rows", type=int, default=2048)
     parser.add_argument("--val-frac", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=13971479023478)
     args = parser.parse_args()
     manifest = build(
-        Path(args.source),
+        [Path(path) for path in args.source],
         Path(args.out),
         max_rows=args.max_rows,
         val_frac=args.val_frac,

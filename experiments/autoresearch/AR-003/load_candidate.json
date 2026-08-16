@@ -1,0 +1,81 @@
+{
+  "backend": "candidate",
+  "metrics": {
+    "columns": 86,
+    "constructor_s": 0.4277096660807729,
+    "decoded_bytes": 418820760,
+    "decoded_bytes_per_row": 41736.0,
+    "etl_s": 30.2,
+    "load_s": 0.4867408750578761,
+    "mmap_read_s": 0.05838404200039804,
+    "packed_data_digest": "332fbacd00a30cefc5446c1424f0eacae9e88fe5e2a98a9dcb82705f534474a5",
+    "packed_logical_bytes": 418820760,
+    "pressure": {
+      "process_major_faults": 0,
+      "process_minor_faults": 62348,
+      "process_peak_rss_bytes": 916111360,
+      "process_rss_bytes": 915062784,
+      "system_available_bytes": 14248148992,
+      "system_memory_percent": 44.7
+    },
+    "rows_per_s": 171879.15834829636,
+    "rss_peak_bytes": 914866176,
+    "selected_rows": 10035,
+    "splits": {
+      "train": {
+        "cache_report": {
+          "bytes_loaded": 382093080,
+          "evictions": 0,
+          "hits": 0,
+          "misses": 1,
+          "packed_mmap_bytes": 382093080,
+          "promotions": 0,
+          "resident_hot": 0,
+          "resident_row_groups": 0,
+          "resident_transient": 0,
+          "ssd_bytes": 0,
+          "ssd_hits": 0,
+          "ssd_resident": 0,
+          "ssd_spills": 0
+        },
+        "constructor_s": 0.2243875409476459,
+        "read_s": 0.053129208041355014,
+        "rows": 9155
+      },
+      "val": {
+        "cache_report": {
+          "bytes_loaded": 36727680,
+          "evictions": 0,
+          "hits": 0,
+          "misses": 1,
+          "packed_mmap_bytes": 36727680,
+          "promotions": 0,
+          "resident_hot": 0,
+          "resident_row_groups": 0,
+          "resident_transient": 0,
+          "ssd_bytes": 0,
+          "ssd_hits": 0,
+          "ssd_resident": 0,
+          "ssd_spills": 0
+        },
+        "constructor_s": 0.20332212513312697,
+        "read_s": 0.005254833959043026,
+        "rows": 880
+      }
+    },
+    "total_source_to_ready_s": 30.686740875057875,
+    "train_rows": 9155,
+    "val_rows": 880
+  },
+  "selection": {
+    "max_rows": 10000,
+    "seed": 13971479023478,
+    "seed_semantics": "seed does not participate in episode selection or split",
+    "val_frac": 0.1
+  },
+  "source_sha256": "dcfa720558140946957dd28f2d6d0b6691c196bb0c7c023c2861beb03091858a",
+  "sources": [
+    "data/bc_data/2026-08-08.parquet",
+    "data/bc_data/2026-08-09.parquet"
+  ]
+}
