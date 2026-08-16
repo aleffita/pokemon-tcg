@@ -4,14 +4,21 @@ import numpy as np
 import pytest
 
 from rl.packed_data import (
+    PACKED_BACKEND_NAME,
+    PACKED_DEDUP_CONTRACT,
     PACKED_FORMAT_VERSION,
+    PACKED_TBPTT_CONTRACT,
     PackedArrayStore,
     TRAINER_ORDER_COLUMNS,
+    build_resume_identity,
     _digest_array,
     _digest_columns,
     required_trainer_columns,
     sha256_file,
     split_episode_ids,
+    source_digest,
+    validate_packed_tbptt_compatibility,
+    validate_resume_identity,
     validate_selection,
 )
 
@@ -101,3 +108,251 @@ def test_packed_store_is_mmap_read_only_and_contract_checked(tmp_path):
             max_rows=3,
             val_frac=0.1,
         )
+
+
+def _write_strict_store(root):
+    """Write a complete small v2 store for runtime-contract tests."""
+    root.mkdir(parents=True, exist_ok=True)
+    n_rows = 6
+    arrays = {
+        "action_mask": np.arange(n_rows * 2, dtype=np.float32).reshape(n_rows, 2),
+        "episode_id": np.array([10, 10, 11, 11, 11, 12], dtype=np.int64),
+        "side": np.array([0, 0, 0, 0, 0, 1], dtype=np.int32),
+        "step_id": np.array([1, 1, 1, 2, 2, 1], dtype=np.int32),
+        "decision_id": np.array([100, 100, 110, 111, 111, 120], dtype=np.int32),
+        "substep": np.array([0, 1, 0, 0, 1, 0], dtype=np.int32),
+        "y": np.arange(n_rows, dtype=np.int32),
+        "is_attack": np.array([True, False, True, False, True, False]),
+        "opt_group": np.zeros((n_rows, 2), dtype=np.int32),
+        "aux_ko": np.zeros(n_rows, dtype=np.int32),
+        "aux_prize_delta": np.zeros(n_rows, dtype=np.float32),
+        "aux_terminal": np.zeros(n_rows, dtype=bool),
+        "aux_return": np.zeros(n_rows, dtype=np.float32),
+        "aux_valid": np.ones(n_rows, dtype=np.int32),
+        "new_episode": np.zeros(n_rows, dtype=bool),
+        "terminal": np.zeros(n_rows, dtype=bool),
+        "reward": np.zeros(n_rows, dtype=np.float32),
+        "outcome": np.zeros(n_rows, dtype=np.float32),
+        "is_self": np.ones(n_rows, dtype=bool),
+        "day_id": np.ones(n_rows, dtype=np.float32),
+    }
+    columns = required_trainer_columns(["action_mask"])
+    assert set(columns) == set(arrays)
+    specs, digests = {}, {}
+    column_dir = root / "columns"
+    column_dir.mkdir()
+    for name in columns:
+        array = arrays[name]
+        path = column_dir / f"{name}.npy"
+        np.save(path, array, allow_pickle=False)
+        specs[name] = {
+            "file": f"columns/{name}.npy",
+            "dtype": str(array.dtype),
+            "shape": list(array.shape),
+            "nbytes": int(array.nbytes),
+            "file_sha256": sha256_file(path),
+        }
+        digests[name] = _digest_array(array)
+    order = list(TRAINER_ORDER_COLUMNS)
+    manifest = {
+        "format": PACKED_BACKEND_NAME,
+        "format_version": PACKED_FORMAT_VERSION,
+        "backend": {
+            "name": PACKED_BACKEND_NAME,
+            "format": PACKED_BACKEND_NAME,
+            "format_version": PACKED_FORMAT_VERSION,
+        },
+        "source_sha256": "synthetic-source",
+        "selected_rows": n_rows,
+        "logical_bytes": sum(array.nbytes for array in arrays.values()),
+        "columns": columns,
+        "column_specs": specs,
+        "column_digests": digests,
+        "data_digest": _digest_columns(arrays, columns),
+        "selection": {
+            "max_rows": 0,
+            "val_frac": 0.25,
+            "selected_episode_ids": [10, 11, 12],
+            "val_episode_ids": [10],
+            "train_episode_ids": [11, 12],
+            "val_rows": 2,
+            "train_rows": 4,
+        },
+        "required_contract": {
+            "model_input_columns": ["action_mask"],
+            "labels": ["y", "is_attack", "opt_group"],
+            "auxiliary": [
+                "aux_ko",
+                "aux_prize_delta",
+                "aux_terminal",
+                "aux_return",
+                "aux_valid",
+            ],
+            "columns": columns,
+            "order": order,
+            "dedup": PACKED_DEDUP_CONTRACT,
+            "tbptt": PACKED_TBPTT_CONTRACT,
+        },
+        "row_order": {
+            "columns": order,
+            "val_rows": 2,
+            "train_rows": 4,
+            "val_digest": _digest_columns(
+                {name: arrays[name][:2] for name in order}, order
+            ),
+            "train_digest": _digest_columns(
+                {name: arrays[name][2:] for name in order}, order
+            ),
+        },
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest))
+    return arrays
+
+
+def _strict_store(root):
+    arrays = _write_strict_store(root)
+    columns = required_trainer_columns(["action_mask"])
+    return PackedArrayStore(
+        root,
+        columns=columns,
+        required_columns=columns,
+        strict_contract=True,
+    ), arrays
+
+
+def test_strict_runtime_opens_all_order_columns_and_validates_split(tmp_path):
+    store, arrays = _strict_store(tmp_path)
+    assert set(TRAINER_ORDER_COLUMNS).issubset(store.columns)
+    assert store.selected_rows == len(arrays["episode_id"])
+
+
+def test_tampered_boundary_and_order_fail_closed(tmp_path):
+    _write_strict_store(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["row_order"]["val_rows"] = 3
+    manifest["row_order"]["train_rows"] = 3
+    manifest["selection"]["val_rows"] = 3
+    manifest["selection"]["train_rows"] = 3
+    manifest_path.write_text(json.dumps(manifest))
+    columns = required_trainer_columns(["action_mask"])
+    with pytest.raises(ValueError, match="packed val rows|row-order digest"):
+        PackedArrayStore(
+            tmp_path,
+            columns=columns,
+            required_columns=columns,
+            strict_contract=True,
+        )
+
+    _write_strict_store(tmp_path / "order")
+    order_root = tmp_path / "order"
+    side_path = order_root / "columns" / "side.npy"
+    side = np.load(side_path, allow_pickle=False).copy()
+    side[0] = 1
+    np.save(side_path, side, allow_pickle=False)
+    order_manifest_path = order_root / "manifest.json"
+    order_manifest = json.loads(order_manifest_path.read_text())
+    order_manifest["column_specs"]["side"]["file_sha256"] = sha256_file(side_path)
+    order_manifest["column_digests"]["side"] = _digest_array(side)
+    order_manifest_path.write_text(json.dumps(order_manifest))
+    with pytest.raises(ValueError, match="row-order digest"):
+        PackedArrayStore(
+            order_root,
+            columns=columns,
+            required_columns=columns,
+            strict_contract=True,
+        )
+
+
+def test_required_order_column_missing_is_rejected(tmp_path):
+    _write_strict_store(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["columns"].remove("decision_id")
+    manifest["required_contract"]["columns"].remove("decision_id")
+    manifest_path.write_text(json.dumps(manifest))
+    columns = required_trainer_columns(["action_mask"])
+    with pytest.raises(ValueError, match="missing required trainer columns"):
+        PackedArrayStore(
+            tmp_path,
+            columns=columns,
+            required_columns=columns,
+            strict_contract=True,
+        )
+
+
+@pytest.mark.parametrize("field", ["dedup", "tbptt"])
+def test_dedup_and_tbptt_metadata_are_required(tmp_path, field):
+    _write_strict_store(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["required_contract"][field]
+    manifest_path.write_text(json.dumps(manifest))
+    columns = required_trainer_columns(["action_mask"])
+    with pytest.raises(ValueError, match="metadata|contract"):
+        PackedArrayStore(
+            tmp_path,
+            columns=columns,
+            required_columns=columns,
+            strict_contract=True,
+        )
+
+
+def test_inverted_source_order_is_rejected(tmp_path):
+    source_a = tmp_path / "a.parquet"
+    source_b = tmp_path / "b.parquet"
+    source_a.write_bytes(b"source-a")
+    source_b.write_bytes(b"source-b")
+    _write_strict_store(tmp_path / "store")
+    store = PackedArrayStore(tmp_path / "store", columns=["action_mask"])
+    with pytest.raises(ValueError, match="contract mismatch"):
+        validate_selection(
+            store,
+            source_sha256=source_digest([source_b, source_a]),
+            max_rows=0,
+            val_frac=0.25,
+        )
+
+
+def test_seed_variants_do_not_change_zero_cap_membership():
+    ids = np.array([20, 20, 21, 22, 22, 23], dtype=np.int64)
+    first = split_episode_ids(ids, max_rows=0, val_frac=0.25)
+    second = split_episode_ids(ids, max_rows=0, val_frac=0.25)
+    assert [part.tolist() for part in first] == [part.tolist() for part in second]
+
+
+def test_resume_identity_rejects_mismatch_and_handles_legacy_policy():
+    identity = build_resume_identity(
+        source_sha256="source",
+        selection={"max_rows": 0},
+        split={"val_rows": 2, "train_rows": 4},
+        backend={"name": PACKED_BACKEND_NAME, "data_digest": "packed"},
+        seed=7,
+        dedup=True,
+        tbptt_chunk=16,
+    )
+    assert validate_resume_identity(identity, identity, packed=True) == "validated"
+    changed = dict(identity)
+    changed["backend"] = {"name": PACKED_BACKEND_NAME, "data_digest": "other"}
+    with pytest.raises(ValueError, match="identity mismatch"):
+        validate_resume_identity(identity, changed, packed=True)
+    with pytest.raises(ValueError, match="legacy checkpoint"):
+        validate_resume_identity(None, identity, packed=True)
+    assert (
+        validate_resume_identity(
+            None,
+            identity,
+            packed=True,
+            allow_legacy_stage4_warmstart=True,
+        )
+        == "legacy-stage4-warmstart-no-data-identity"
+    )
+    with pytest.raises(ValueError, match="only an explicit Stage 4 warm-start"):
+        validate_resume_identity(None, identity, packed=False)
+
+
+def test_packed_without_tbptt_is_rejected(tmp_path):
+    store, _ = _strict_store(tmp_path)
+    with pytest.raises(ValueError, match="no Parquet fallback"):
+        validate_packed_tbptt_compatibility(store, 0)
+    validate_packed_tbptt_compatibility(store, 16)

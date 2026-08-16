@@ -24,6 +24,7 @@ import numpy as np
 
 
 PACKED_FORMAT_VERSION = 2
+PACKED_BACKEND_NAME = "fixed-width-npy-mmap"
 
 # These are deliberately independent of the Parquet sidecar manifest.  The
 # trainer's runtime contract must not shrink when a producer forgets to update
@@ -57,6 +58,22 @@ TRAINER_METADATA_COLUMNS = (
     "is_self",
     "day_id",
 )
+
+PACKED_DEDUP_CONTRACT = {
+    "column": "opt_group",
+    "available": True,
+}
+PACKED_TBPTT_CONTRACT = {
+    "metadata_columns": list(TRAINER_ORDER_COLUMNS),
+    "group_columns": ["episode_id", "side"],
+    "decision_columns": [
+        "episode_id",
+        "side",
+        "step_id",
+        "decision_id",
+        "substep",
+    ],
+}
 
 
 def required_trainer_columns(input_columns) -> list[str]:
@@ -116,6 +133,19 @@ def _digest_columns(columns: dict[str, np.ndarray], names: list[str]) -> str:
     return digest.hexdigest()
 
 
+def _ordered_unique(values: np.ndarray) -> np.ndarray:
+    """Return first-appearance values without changing their order."""
+    array = np.asarray(values)
+    if not len(array):
+        return array.copy()
+    keep = np.empty(len(array), dtype=bool)
+    seen = set()
+    for index, value in enumerate(array.tolist()):
+        keep[index] = value not in seen
+        seen.add(value)
+    return array[keep]
+
+
 def split_episode_ids(
     episode_ids: np.ndarray,
     *,
@@ -158,6 +188,7 @@ class PackedArrayStore:
         row_stop: int | None = None,
         columns: list[str] | tuple[str, ...] | None = None,
         required_columns: list[str] | tuple[str, ...] | None = None,
+        strict_contract: bool = False,
     ) -> None:
         self.root = Path(root)
         manifest_path = self.root / "manifest.json"
@@ -184,6 +215,7 @@ class PackedArrayStore:
             raise ValueError(f"invalid packed row range {row_start}:{row_stop}")
         self.row_start = row_start
         self.row_stop = row_stop
+        self.strict_contract = bool(strict_contract)
         self._arrays: dict[str, np.ndarray] = {}
         self._bytes_returned = 0
         self._read_calls = 0
@@ -193,6 +225,20 @@ class PackedArrayStore:
         unknown_columns = set(self._column_names) - set(self.manifest["columns"])
         if unknown_columns:
             raise ValueError(f"packed columns are absent from manifest: {sorted(unknown_columns)}")
+        if self.strict_contract:
+            if row_start != 0 or row_stop != total_rows:
+                raise ValueError(
+                    "strict packed contract validation requires the complete store"
+                )
+            if required_columns is None:
+                raise ValueError(
+                    "strict packed contract validation requires required_columns"
+                )
+            if set(self._column_names) != set(required_columns):
+                raise ValueError(
+                    "strict packed validation must open every required trainer column"
+                )
+            self._validate_manifest_contract(required_columns)
         for name in self._column_names:
             spec = self.manifest["column_specs"][name]
             path = self.root / spec["file"]
@@ -212,14 +258,63 @@ class PackedArrayStore:
                 actual = _digest_array(np.asarray(self._arrays[name][row_start:row_stop]))
                 if actual != expected:
                     raise ValueError(f"packed column value digest mismatch: {name}")
-            self._validate_order_digest()
+            if set(TRAINER_ORDER_COLUMNS).issubset(self._arrays):
+                self._validate_order_digest()
+            elif self.strict_contract:
+                raise ValueError(
+                    "strict packed validation did not open every order column"
+                )
+
+    def _validate_manifest_contract(self, required_columns) -> None:
+        """Reject incomplete manifests before any packed training can start."""
+        required = set(required_columns)
+        manifest_columns = set(self.manifest.get("columns", []))
+        if required - manifest_columns:
+            raise ValueError(
+                "packed store is missing required trainer columns: "
+                f"{sorted(required - manifest_columns)}"
+            )
+        if not self.manifest.get("source_sha256"):
+            raise ValueError("packed manifest is missing source_sha256")
+
+        contract = self.manifest.get("required_contract")
+        if not isinstance(contract, dict):
+            raise ValueError("packed manifest is missing required_contract metadata")
+        contract_columns = contract.get("columns")
+        if not isinstance(contract_columns, list) or set(contract_columns) != required:
+            raise ValueError(
+                "packed required_contract columns do not match the trainer contract"
+            )
+        if contract.get("order") != list(TRAINER_ORDER_COLUMNS):
+            raise ValueError("packed required_contract is missing the order contract")
+        if contract.get("dedup") != PACKED_DEDUP_CONTRACT:
+            raise ValueError("packed required_contract is missing dedup metadata")
+        if contract.get("tbptt") != PACKED_TBPTT_CONTRACT:
+            raise ValueError("packed required_contract is missing TBPTT metadata")
+
+        selection = self.manifest.get("selection")
+        if not isinstance(selection, dict):
+            raise ValueError("packed manifest is missing selection metadata")
+        selection_fields = {
+            "max_rows",
+            "val_frac",
+            "selected_episode_ids",
+            "train_episode_ids",
+            "val_episode_ids",
+            "train_rows",
+            "val_rows",
+        }
+        missing_selection = sorted(selection_fields - set(selection))
+        if missing_selection:
+            raise ValueError(
+                "packed manifest is missing selection fields: "
+                f"{missing_selection}"
+            )
 
     def _validate_order_digest(self) -> None:
         order = self.manifest.get("row_order")
         if not order:
-            if set(TRAINER_ORDER_COLUMNS).issubset(self._arrays):
-                raise ValueError("packed manifest is missing the row-level order contract")
-            return
+            raise ValueError("packed manifest is missing the row-level order contract")
         names = list(order.get("columns", []))
         if list(TRAINER_ORDER_COLUMNS) != names:
             raise ValueError(
@@ -228,7 +323,16 @@ class PackedArrayStore:
             )
         missing = [name for name in names if name not in self._arrays]
         if missing:
-            return
+            raise ValueError(
+                "packed row-order contract was not opened for columns: "
+                f"{missing}"
+            )
+        required_order_fields = {"val_rows", "train_rows", "val_digest", "train_digest"}
+        missing_order = sorted(required_order_fields - set(order))
+        if missing_order:
+            raise ValueError(
+                "packed row-order contract is missing fields: " f"{missing_order}"
+            )
         boundary = int(order.get("val_rows", -1))
         if boundary < 0 or boundary > self.manifest["selected_rows"]:
             raise ValueError(f"invalid packed val/train row boundary: {boundary}")
@@ -236,15 +340,34 @@ class PackedArrayStore:
         if int(order.get("train_rows", -1)) != expected_train_rows:
             raise ValueError("packed row-order train_rows disagrees with val boundary")
         selection = self.manifest.get("selection", {})
-        if "val_episode_ids" in selection and "train_episode_ids" in selection:
-            actual_val = np.asarray(self._arrays["episode_id"][:boundary])
-            actual_train = np.asarray(self._arrays["episode_id"][boundary:])
-            expected_val = np.asarray(selection["val_episode_ids"], dtype=actual_val.dtype)
-            expected_train = np.asarray(selection["train_episode_ids"], dtype=actual_train.dtype)
-            if not np.array_equal(np.unique(actual_val), np.unique(expected_val)):
-                raise ValueError("packed val rows do not match manifest val episodes")
-            if not np.array_equal(np.unique(actual_train), np.unique(expected_train)):
-                raise ValueError("packed train rows do not match manifest train episodes")
+        for field in (
+            "selected_episode_ids",
+            "val_episode_ids",
+            "train_episode_ids",
+            "val_rows",
+            "train_rows",
+        ):
+            if field not in selection:
+                raise ValueError(f"packed selection is missing {field}")
+        if int(selection["val_rows"]) != boundary:
+            raise ValueError("packed selection val_rows disagrees with val boundary")
+        if int(selection["train_rows"]) != expected_train_rows:
+            raise ValueError("packed selection train_rows disagrees with val boundary")
+        actual_val = np.asarray(self._arrays["episode_id"][:boundary])
+        actual_train = np.asarray(self._arrays["episode_id"][boundary:])
+        expected_val = np.asarray(selection["val_episode_ids"], dtype=actual_val.dtype)
+        expected_train = np.asarray(selection["train_episode_ids"], dtype=actual_train.dtype)
+        expected_selected = np.asarray(
+            selection["selected_episode_ids"], dtype=actual_val.dtype
+        )
+        if not np.array_equal(_ordered_unique(actual_val), expected_val):
+            raise ValueError("packed val rows do not match manifest val episodes")
+        if not np.array_equal(_ordered_unique(actual_train), expected_train):
+            raise ValueError("packed train rows do not match manifest train episodes")
+        if not np.array_equal(
+            np.concatenate([expected_val, expected_train]), expected_selected
+        ):
+            raise ValueError("packed selected episodes do not match the train/val split")
         for split, start, stop in (
             ("val", 0, boundary),
             ("train", boundary, int(self.manifest["selected_rows"])),
@@ -350,8 +473,78 @@ def validate_selection(
         raise ValueError(f"packed selection contract mismatch: {mismatches}")
 
 
+def validate_packed_tbptt_compatibility(store: PackedArrayStore, tbptt_chunk: int) -> None:
+    """Reject the packed backend unless the sequential TBPTT path is active."""
+    if int(tbptt_chunk) <= 0:
+        raise ValueError(
+            "unsupported packed-data combination: fixed-width stores require "
+            "the Stage-4 TBPTT path (set --tbptt-chunk > 0); no Parquet fallback"
+        )
+    contract = store.manifest.get("required_contract", {}).get("tbptt")
+    if contract != PACKED_TBPTT_CONTRACT:
+        raise ValueError("packed store has no validated TBPTT metadata")
+
+
+def build_resume_identity(
+    *,
+    source_sha256: str,
+    selection: dict,
+    split: dict,
+    backend: dict,
+    seed: int,
+    dedup: bool,
+    tbptt_chunk: int,
+) -> dict:
+    """Build the canonical data/backend identity stored in checkpoints."""
+    return {
+        "version": 1,
+        "source": {"sha256": str(source_sha256)},
+        "selection": selection,
+        "split": split,
+        "backend": backend,
+        "trainer": {
+            "seed": int(seed),
+            "dedup": bool(dedup),
+            "tbptt_chunk": int(tbptt_chunk),
+        },
+    }
+
+
+def validate_resume_identity(
+    saved: dict | None,
+    current: dict,
+    *,
+    packed: bool,
+    allow_legacy_stage4_warmstart: bool = False,
+) -> str:
+    """Validate checkpoint data identity with an explicit legacy policy."""
+    if saved is None:
+        if allow_legacy_stage4_warmstart:
+            return "legacy-stage4-warmstart-no-data-identity"
+        if packed:
+            raise ValueError(
+                "checkpoint has no data_identity; refusing legacy checkpoint with "
+                "--packed-data to prevent corpus mixing"
+            )
+        raise ValueError(
+            "checkpoint has no data_identity; only an explicit Stage 4 warm-start "
+            "may use a legacy checkpoint"
+        )
+    if not isinstance(saved, dict):
+        raise ValueError("checkpoint data_identity must be an object")
+    if saved != current:
+        raise ValueError(
+            "checkpoint data/backend identity mismatch: "
+            f"saved={saved!r}, current={current!r}"
+        )
+    return "validated"
+
+
 __all__ = [
+    "PACKED_BACKEND_NAME",
     "PACKED_FORMAT_VERSION",
+    "PACKED_DEDUP_CONTRACT",
+    "PACKED_TBPTT_CONTRACT",
     "PackedArrayStore",
     "TRAINER_METADATA_COLUMNS",
     "TRAINER_ORDER_COLUMNS",
@@ -362,4 +555,7 @@ __all__ = [
     "sha256_file",
     "split_episode_ids",
     "validate_selection",
+    "validate_packed_tbptt_compatibility",
+    "build_resume_identity",
+    "validate_resume_identity",
 ]

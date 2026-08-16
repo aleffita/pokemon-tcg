@@ -14,7 +14,10 @@ import pyarrow.parquet as pq
 from rl.encoder.card_features import get_card_table
 from rl.encoder.encoding import TokenEncoder
 from rl.packed_data import (
+    PACKED_BACKEND_NAME,
+    PACKED_DEDUP_CONTRACT,
     PACKED_FORMAT_VERSION,
+    PACKED_TBPTT_CONTRACT,
     _digest_array,
     _digest_columns,
     required_trainer_columns,
@@ -122,6 +125,11 @@ def build(
     manifest = {
         "format": "fixed-width-npy-mmap",
         "format_version": PACKED_FORMAT_VERSION,
+        "backend": {
+            "name": PACKED_BACKEND_NAME,
+            "format": "fixed-width-npy-mmap",
+            "format_version": PACKED_FORMAT_VERSION,
+        },
         "source_paths": [str(path) for path in sources],
         "source_sha256": source_hash,
         "source_file_sha256": [sha256_file(path) for path in sources],
@@ -161,6 +169,8 @@ def build(
             ],
             "columns": columns,
             "order": list(TRAINER_ORDER_COLUMNS),
+            "dedup": PACKED_DEDUP_CONTRACT,
+            "tbptt": PACKED_TBPTT_CONTRACT,
         },
         "row_order": {
             "columns": list(TRAINER_ORDER_COLUMNS),

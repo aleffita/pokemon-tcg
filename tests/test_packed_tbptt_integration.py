@@ -47,7 +47,15 @@ def _write_store(root):
         "source_sha256": "synthetic", "selected_rows": 6,
         "columns": list(arrays), "column_specs": specs, "column_digests": digests,
         "data_digest": _digest_columns(arrays, list(arrays)),
-        "selection": {"max_rows": 0, "val_frac": 0.25},
+        "selection": {
+            "max_rows": 0,
+            "val_frac": 0.25,
+            "selected_episode_ids": [10, 11, 12],
+            "val_episode_ids": [10],
+            "train_episode_ids": [11, 12],
+            "val_rows": 2,
+            "train_rows": 4,
+        },
         "row_order": {
             "columns": order, "val_rows": 2, "train_rows": 4,
             "val_digest": _digest_columns({name: arrays[name][:2] for name in order}, order),

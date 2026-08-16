@@ -51,10 +51,14 @@ from rl.encoder.enc_constants import OPT_WK
 from rl.encoder.encoding import TokenEncoder
 from rl.lr_schedule import lr_at
 from rl.packed_data import (
+    PACKED_BACKEND_NAME,
     PackedArrayStore,
+    build_resume_identity,
     required_trainer_columns,
     sha256_file,
     source_digest,
+    validate_packed_tbptt_compatibility,
+    validate_resume_identity,
     validate_selection,
 )
 from rl.policy_mlx import build_token_net_mlx
@@ -2098,15 +2102,17 @@ def main() -> None:
     packed_meta_store = None
     packed_selection = None
     packed_required_columns = required_trainer_columns(enc_shapes)
+    resolved_source_sha256 = source_digest(dataset_paths)
     if a.packed_data:
         packed_meta_store = PackedArrayStore(
             a.packed_data,
-            columns=["episode_id", "side", "step_id"],
+            columns=packed_required_columns,
             required_columns=packed_required_columns,
+            strict_contract=True,
         )
         validate_selection(
             packed_meta_store,
-            source_sha256=source_digest(dataset_paths),
+            source_sha256=resolved_source_sha256,
             max_rows=int(a.max_rows),
             val_frac=float(a.val_frac),
         )
@@ -2171,11 +2177,8 @@ def main() -> None:
     )
 
     _use_tbptt = bool(a.tbptt_chunk > 0)
-    if a.packed_data and not _use_tbptt:
-        raise ValueError(
-            "unsupported packed-data combination: fixed-width stores require "
-            "the Stage-4 TBPTT path (set --tbptt-chunk > 0); no Parquet fallback"
-        )
+    if packed_meta_store is not None:
+        validate_packed_tbptt_compatibility(packed_meta_store, a.tbptt_chunk)
 
     # ---- validation split: streamed via a dedicated KV row_group cache ----
     # No pre-materialization. Scan pass 1 records per-val-row
@@ -2331,6 +2334,49 @@ def main() -> None:
             "selected training days"
         )
 
+    if packed_meta_store is not None:
+        packed_backend_identity = {
+            "name": PACKED_BACKEND_NAME,
+            "format": packed_meta_store.manifest["format"],
+            "format_version": int(packed_meta_store.manifest["format_version"]),
+            "data_digest": packed_meta_store.manifest["data_digest"],
+        }
+        packed_row_order = packed_meta_store.manifest["row_order"]
+    else:
+        packed_backend_identity = {
+            "name": "parquet",
+            "format": "pyarrow-dataset",
+            "format_version": 1,
+        }
+        packed_row_order = {
+            "columns": [],
+            "val_rows": n_val,
+            "train_rows": n_train,
+            "val_digest": None,
+            "train_digest": None,
+        }
+    data_identity = build_resume_identity(
+        source_sha256=resolved_source_sha256,
+        selection={
+            "max_rows": int(a.max_rows),
+            "max_rows_per_day": int(a.max_rows_per_day),
+            "top_elo": int(a.top_elo),
+            "val_frac": float(a.val_frac),
+            "selected_episode_ids": [int(value) for value in selected_eids],
+        },
+        split={
+            "val_episode_ids": [int(value) for value in val_episode_ids],
+            "train_episode_ids": [int(value) for value in train_episode_ids],
+            "val_rows": int(n_val),
+            "train_rows": int(n_train),
+            "row_order": packed_row_order,
+        },
+        backend=packed_backend_identity,
+        seed=int(a.seed),
+        dedup=bool(a.dedup),
+        tbptt_chunk=int(a.tbptt_chunk),
+    )
+
     # --- model (MLX!) ---
     net_cfg = {
         "arch": "transformer2",
@@ -2352,11 +2398,29 @@ def main() -> None:
     start_epoch = 0
     best = 0.0
     gstep = 0
+    resume_compatibility = "fresh-run"
     if a.resume:
         import pickle
 
         with open(a.resume, "rb") as f:
             state = pickle.load(f)
+        legacy_stage4_warmstart = (
+            Path(a.resume).name == "stage4_root.pkl"
+            and a.optimizer_state == "reset"
+            and a.scheduler_state == "reset"
+        )
+        resume_compatibility = validate_resume_identity(
+            state.get("data_identity"),
+            data_identity,
+            packed=bool(a.packed_data),
+            allow_legacy_stage4_warmstart=legacy_stage4_warmstart,
+        )
+        if resume_compatibility != "validated":
+            print(
+                "[bc-train-mlx] resume compatibility: "
+                f"{resume_compatibility}; data identity was absent from the legacy checkpoint",
+                flush=True,
+            )
         model_params = state["model"]
         if isinstance(model_params, dict):
             model.update(model_params)
@@ -2748,6 +2812,8 @@ def main() -> None:
             },
             "dataset_manifest": dataset_manifest,
             "dataset_build_fingerprint": dataset_build_fingerprint,
+            "data_identity": data_identity,
+            "resume_compatibility": resume_compatibility,
             "phase_id": a.phase_id,
             "epoch": epoch,
             "gstep": gstep,

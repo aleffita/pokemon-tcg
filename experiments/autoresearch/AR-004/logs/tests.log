@@ -1,0 +1,14 @@
+AR-004 focused test command
+============================
+$ uv run --locked pytest -q tests/test_packed_data.py tests/test_packed_tbptt_integration.py scripts/validate/test_checkpoint.py
+...................                                                      [100%]
+19 passed in 0.55s
+
+Additional collection check
+===========================
+$ uv run --locked pytest -q scripts/validate/test_bc_train_progress.py
+ERROR during collection: ImportError: cannot import name '_standard_microbatch_count'
+from scripts.bc.bc_train_mlx
+
+The additional check is pre-existing outside AR-004 scope: the symbol is absent
+from the baseline trainer at the preserved Stage 4 root. It was not changed.
