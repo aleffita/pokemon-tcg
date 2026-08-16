@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-08-16T20:41:00Z",
+  "author": "Antigravity Research Swarm",
+  "contract_reference": ".agents/orchestrator/CODEX_TO_ANTIGRAVITY_AR035_TARGETED_DECKS.md",
+  "tournament_findings": {
+    "AR-034": {
+      "deck_v5_apex_omnipotent": "75.0% win rate vs lb814 Crustle (3-1)",
+      "generated_turn0": "25.0% win rate vs lb826 Alakazam (1-3)",
+      "bottleneck": "0% win rate vs lb1009 Mega Lucario ex & lb945 Multiply Ivan across all previous decks"
+    },
+    "root_cause_analysis": {
+      "lb1009_and_lb945_archetype": "Pure Fighting {F} multi-attacker deck with 4x Mega Lucario ex (340 HP), 2x Hariyama (150 HP non-ex), 3x Solrock/Lunatone (110 HP), 4x Riolu, 3x Boss's Orders, 4x Carmine, 1x Hero's Cape.",
+      "failure_mode_1": "Mimikyu Safeguard blocks Mega Lucario ex, but Hariyama and Solrock (non-ex) bypass Safeguard and KO Mimikyu (70 HP).",
+      "failure_mode_2": "Opponent uses 3x Boss's Orders to pull benched Ogerpon ex around Mimikyu and OHKOs with Mega Brave (270 dmg).",
+      "counter_vector": "Exploit 2x PSYCHIC WEAKNESS across ALL opponent Fighting Pokémon (Riolu 80 HP -> 40 dmg OHKO, Makuhita 80 HP -> 40 dmg OHKO, Mega Lucario 340 HP -> 170 dmg OHKO)."
+    }
+  },
+  "delivered_candidates": {
+    "004_anti_lucario_specialist.json": {
+      "role": "Hard Anti-Lucario / Anti-Fighting Assassin",
+      "key_tech": [
+        "2x XerneasEX (ID 331): Rising Horns deals 220 base dmg vs ex -> 440 DAMAGE with {P} weakness, OHKOing Mega Lucario ex even with Hero's Cape.",
+        "2x Flutter Mane (ID 56): Midnight Fluttering disables opponent active abilities; Hex Hurl (90/180 dmg) snipes benched Riolus.",
+        "2x Mimikyu (ID 767): Safeguard physical wall."
+      ]
+    },
+    "005_anti_ivan_specialist.json": {
+      "role": "Anti-Ivan Multi-Attacker Suppressor",
+      "key_tech": [
+        "2x Scream Tail ex (ID 969): T1 Scream locks opponent Supporter cards (Carmine/Lillie), Crunch discards active Fighting energy.",
+        "2x Lillie's Clefairy ex (ID 272): Full Moon Rondo deals 220 dmg (440 with {P} weakness) for 2 energy across 10 benched Pokémon.",
+        "1x Iron Leaves ex (ID 75): Rapid Vernier surprise pivot 180 dmg."
+      ]
+    },
+    "006_apex_bridge_omni.json": {
+      "role": "Robust Bridge Omnipotent",
+      "key_tech": [
+        "2x Tapu Bulu (ID 920): Preserves 75% WR vs Crustle (220 dmg non-ex).",
+        "2x Judge (ID 1213) + 1x Unfair Stamp (ID 1080): Preserves 25% WR vs Alakazam.",
+        "1x XerneasEX (ID 331) + 1x Iron Leaves ex (ID 75) + 2x Mimikyu (ID 767): Solves Lucario/Ivan."
+      ]
+    }
+  },
+  "inbox_status": "6 active validated 60-card decks in experiments/decks/swarm/inbox/ (within 8 max limit)"
+}
