@@ -1,0 +1,52 @@
+{
+  "algorithm": "sibling_fiber_grpo_grouped",
+  "approx_kl_behavior": -1.3699676948419892e-08,
+  "branch_logical_decisions": 14,
+  "branch_only_credit": false,
+  "changed_parameters": 1293305,
+  "clip_fraction": 0.0,
+  "continuation_credit": true,
+  "continuation_credit_sum": -18.771034240722656,
+  "continuation_discount": 0.97,
+  "continuation_logical_decisions": 1065,
+  "credit_scope": "branch_and_continuation",
+  "credited_logical_actions": 1079,
+  "gradient_norm": 0.5238350033760071,
+  "group_count": 4,
+  "group_sizes": [
+    4,
+    4,
+    4,
+    2
+  ],
+  "logical_decisions": 1079,
+  "loss": 0.017396682873368263,
+  "optimizer_steps": 1,
+  "parameter_count": 1302151,
+  "parameter_l2": 0.009213928003272408,
+  "parameter_max_abs": 1.0132789611816406e-05,
+  "policy_loss": 0.017396682873368263,
+  "policy_only": true,
+  "precision": "FP32",
+  "ratio_max": 1.0000035762786865,
+  "ratio_mean": 1.0,
+  "ratio_min": 0.9999942779541016,
+  "return_mean": 0.375,
+  "return_means": [
+    0.5,
+    0.5,
+    0.5,
+    0.0
+  ],
+  "return_std": 0.8995190411806107,
+  "return_stds": [
+    0.8660253882408142,
+    0.8660253882408142,
+    0.8660253882408142,
+    1.0
+  ],
+  "update_seconds": 8.520291083026677,
+  "value_loss": 0.0,
+  "zero_variance_group": false,
+  "zero_variance_groups": 0
+}

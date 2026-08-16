@@ -4,7 +4,7 @@ Captured: 2026-08-16
 
 - Current best and fallback: frozen Stage 4 root
 - Stage 4 root SHA-256: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`
-- Active experiment: AR-020 dynamic prospective sibling-fiber GRPO micro-update
+- Active experiment: AR-021 grouped dynamic prospective sibling-fiber GRPO
 - AR-018 code commits: `434d3f6`, repaired by `28c2b96` and `4cfe5e8`
 - AR-018 status: corrected gate passed review; keep foundation
 - AR-019 implementation commit: `5dd6cfc`
@@ -37,8 +37,16 @@ Captured: 2026-08-16
   promotion; root remains fallback. The earlier public-deck diagnostic was
   `2-8-0` and is not the artifact-deck gate.
 - No RoPE-ND, package, submission, MoE, Parquet, or packed-data path was run.
-- Next action: start the next bounded research hypothesis with dynamic-K and
-  multi-deck tournament evidence; preserve root fallback.
+- AR-021 implementation commit: `a536142`
+- AR-021 candidate SHA-256: `52702295763ecee036e4f6bfaac6660df6ca5ec1cfca66efab5146ae8b292718`
+- AR-021 grouped dynamic-K run: 4 bases, effective K `[4,4,4,2]`, 14 fibers,
+  1,079 logical decisions, 69.245 decisions/s, one grouped optimizer step.
+- AR-021 tournament: same-deck candidate-vs-root `22-8-0` in 30; candidate
+  panel `8-22-0`; root panel `7-23-0`. Keep experimental only: root-relative
+  gain is strong but external-panel strength remains weak.
+- No RoPE-ND, package, submission, MoE, Parquet, or packed-data path was run.
+- Next action: train grouped sibling fibers with external-opponent deck strata;
+  preserve root fallback until the panel improves.
 
 Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-019/manifest.json`, `AR-019/metrics.json`, `AR-019/logs/tests.log`,
@@ -50,4 +58,8 @@ Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-020/tournament_root_panel_10.json`,
 `AR-020/tournament_candidate_vs_root_same_deck_30.json`,
 `AR-020/tournament_candidate_artifact_deck_panel_10.json`,
-`AR-020/tournament_root_artifact_deck_panel_10.json`, `STATE_CAPSULE_020.md`.
+`AR-020/tournament_root_artifact_deck_panel_10.json`, `STATE_CAPSULE_020.md`,
+`AR-021/report.md`, `AR-021/manifest.json`, `AR-021/metrics.json`,
+`AR-021/tournament_candidate_vs_root_same_deck_30.json`,
+`AR-021/tournament_candidate_panel_10.json`,
+`AR-021/tournament_root_panel_10.json`, `STATE_CAPSULE_021.md`.
