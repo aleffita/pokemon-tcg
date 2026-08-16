@@ -16,9 +16,16 @@ from scripts.rl.trajectory_group_grpo import (
     GRPO_FORMAT,
     _git_commit,
     collect_stage4_trajectory_group,
+    flatten_provenance_bundle,
     normalize_group_returns,
     save_grpo_candidate_checkpoint,
     trajectory_group_grpo_update,
+)
+from scripts.rl.ppo_micro_update import (
+    build_sample_manifest,
+    save_compressed_bundle,
+    validate_bundle,
+    validate_candidate_provenance,
 )
 from scripts.rl.trajectory_probe import (
     APPROVED_STAGE4_ROOT_SHA256,
@@ -33,6 +40,22 @@ from scripts.rl.trajectory_probe import (
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def _manifest_rows(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build the row-side digest view consumed by the existing bundle validator."""
+    return [
+        {
+            "sample_index": item["sample_index"],
+            "episode_id": item["episode_id"],
+            "env_step": item["env_step"],
+            "legal_action_mask_digest": item["action_mask_digest"],
+            "memory_input_digest": item["memory_input_digest"],
+            "model_input_digests": item["model_input_digests"],
+            "done": item["done"],
+        }
+        for item in manifest["order"]
+    ]
 
 
 def _write_report(
@@ -76,8 +99,11 @@ promotion was run.
   substeps of that decision. No separate substep-relative credit is used.
 - Zero-variance groups normalize to zero advantages and perform zero optimizer
   steps. This run had `zero_variance_group={metrics['zero_variance_group']}`.
-- Candidate checkpoint is strict FP32 inference format and is independent of
-  any persisted rollout bundle. No large rollout artifact was written.
+- Candidate checkpoint is strict FP32 inference format and is linked to the
+  adjacent compact bounded provenance bundle. No unbounded rollout buffer was
+  written.
+- Existing candidate provenance preflight passed for the root, manifest, and
+  trajectory bundle: `{manifest['candidate_preflight']['passed']}`.
 
 ## Limitations
 
@@ -93,6 +119,12 @@ candidate has not been promoted.
 - Root SHA-256: `{manifest['root_sha256']}`
 - Candidate SHA-256: `{manifest['candidate_sha256']}`
 - Candidate path: `{manifest['candidate']}`
+- Sample manifest: `{manifest['sample_manifest']}`
+- Sample manifest file SHA-256: `{manifest['sample_manifest_sha256']}`
+- Sample manifest content SHA-256: `{manifest['sample_manifest_content_sha256']}`
+- Trajectory bundle: `{manifest['trajectory_bundle']}`
+- Trajectory bundle SHA-256: `{manifest['bundle_sha256']}`
+- Candidate preflight: `{manifest['candidate_preflight']}`
 - Rollout persistence: `{manifest['rollout_persistence']}`
 """
     (output_dir / "report.md").write_text(report)
@@ -111,6 +143,11 @@ Captured {manifest['captured_at']}.
 - Candidate: `{manifest['candidate_sha256']}` ({manifest['candidate_bytes']} bytes).
 - Candidate parameter L2 delta: `{metrics['parameter_l2']}`; changed parameters:
   `{metrics['changed_parameters']}`.
+- Compact provenance manifest: `{manifest['sample_manifest']}`;
+  SHA-256 `{manifest['sample_manifest_sha256']}`.
+- Compact trajectory bundle: `{manifest['trajectory_bundle']}`;
+  SHA-256 `{manifest['bundle_sha256']}`.
+- Candidate provenance preflight passed: `{manifest['candidate_preflight']['passed']}`.
 - No tournament, package, submission, promotion, MoE, RoPE-ND, or historical
   ETL/Parquet/packed-data work was run.
 
@@ -120,6 +157,8 @@ Captured {manifest['captured_at']}.
 - `experiments/autoresearch/AR-019/manifest.json`
 - `experiments/autoresearch/AR-019/metrics.json`
 - `experiments/autoresearch/AR-019/logs/tests.log`
+- `experiments/autoresearch/AR-019/sample.manifest.json`
+- `experiments/autoresearch/AR-019/trajectory_bundle.pt.gz`
 - `experiments/autoresearch/AR-019/candidate.pt`
 
 ## Metrics
@@ -169,6 +208,24 @@ def run_ar019(
         games=4,
         seed=seed,
     )
+    provenance_bundle = flatten_provenance_bundle(trajectories)
+    sample_manifest = build_sample_manifest(
+        provenance_bundle,
+        root_sha256=root_hash,
+        metadata_date=meta_date,
+        deck_content_sha256=deck_hash,
+        deck_source_file_sha256=deck_source_hash,
+    )
+    validate_bundle(provenance_bundle, _manifest_rows(sample_manifest))
+    sample_manifest_path = output_dir / "sample.manifest.json"
+    trajectory_bundle_path = output_dir / "trajectory_bundle.pt.gz"
+    _write_json(sample_manifest_path, sample_manifest)
+    bundle_hash = save_compressed_bundle(
+        trajectory_bundle_path,
+        provenance_bundle,
+        sample_manifest,
+    )
+    sample_manifest_file_hash = sha256_file(sample_manifest_path)
     advantages, group_stats = normalize_group_returns(collection["returns"])
     metrics = trajectory_group_grpo_update(
         model,
@@ -187,7 +244,7 @@ def run_ar019(
         "value_loss": 0.0,
         "selfplay_mode": "current_vs_current_true_recurrent",
         "behavior_snapshot": "frozen Stage4 root",
-        "rollout_storage": "in-memory compact tensors only",
+        "rollout_storage": "compact bounded provenance bundle persisted adjacent to candidate",
     }
     candidate_path = output_dir / "candidate.pt"
     candidate_hash = save_grpo_candidate_checkpoint(
@@ -195,8 +252,15 @@ def run_ar019(
         model,
         metadata,
         root_sha256=root_hash,
+        sample_manifest_sha256=sample_manifest_file_hash,
+        bundle_sha256=bundle_hash,
+        sample_manifest_content_sha256=sample_manifest["sha256"],
         config=config,
         diagnostics=metrics,
+    )
+    preflight_artifacts = validate_candidate_provenance(
+        candidate_path,
+        approved_root_sha256=APPROVED_STAGE4_ROOT_SHA256,
     )
     candidate_bytes = candidate_path.stat().st_size
     captured_at = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -210,6 +274,18 @@ def run_ar019(
         "candidate": str(candidate_path),
         "candidate_sha256": candidate_hash,
         "candidate_bytes": candidate_bytes,
+        "sample_manifest": str(sample_manifest_path),
+        "sample_manifest_sha256": sample_manifest_file_hash,
+        "sample_manifest_content_sha256": sample_manifest["sha256"],
+        "trajectory_bundle": str(trajectory_bundle_path),
+        "bundle_sha256": bundle_hash,
+        "candidate_preflight": {
+            "passed": True,
+            "approved_root_sha256": APPROVED_STAGE4_ROOT_SHA256,
+            "artifacts": {
+                name: str(path) for name, path in preflight_artifacts.items()
+            },
+        },
         "metadata_date": meta_date,
         "deck": str(deck_path),
         "deck_content_sha256": deck_hash,
@@ -229,7 +305,10 @@ def run_ar019(
         "trajectory_summaries": collection["trajectory_summaries"],
         "metrics": metrics,
         "config": config,
-        "rollout_persistence": "none; compact tensors retained in memory only",
+        "rollout_persistence": (
+            "compact bounded provenance bundle persisted; "
+            "no unbounded rollout buffer"
+        ),
         "invariants": {
             "behavior_snapshot_is_frozen_stage4_root": root_hash == APPROVED_STAGE4_ROOT_SHA256,
             "terminal_returns_in_minus_one_zero_plus_one": True,
@@ -241,6 +320,8 @@ def run_ar019(
             "group_credit_shared_across_logical_decisions_and_substeps": True,
             "zero_variance_group_fail_closed": True,
             "value_loss_zero": True,
+            "bounded_provenance_bundle_persisted": True,
+            "candidate_preflight_passed": True,
             "no_tournament": True,
             "stage4_root_preserved": True,
         },
@@ -259,6 +340,12 @@ def run_ar019(
                 f"collection_seconds={collection['collection_seconds']}",
                 f"update_seconds={metrics['update_seconds']}",
                 f"candidate_sha256={candidate_hash}",
+                f"sample_manifest={sample_manifest_path}",
+                f"sample_manifest_sha256={sample_manifest_file_hash}",
+                f"sample_manifest_content_sha256={sample_manifest['sha256']}",
+                f"trajectory_bundle={trajectory_bundle_path}",
+                f"bundle_sha256={bundle_hash}",
+                "candidate_preflight=passed",
                 "tournament=not_run",
             ]
         )

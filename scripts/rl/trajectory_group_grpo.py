@@ -1,8 +1,9 @@
-"""In-memory trajectory-group GRPO for the first AR-019 micro-update.
+"""Bounded trajectory-group GRPO for the first AR-019 micro-update.
 
 The collector intentionally reuses the corrected AR-018 current-vs-current
-recurrent environment path.  Only compact tensors needed by one update stay
-in memory; no rollout bundle is serialized by this module.
+recurrent environment path. Only the K=4 samples needed by one update are
+retained, and the same bounded tensors may be persisted as provenance evidence
+for the candidate preflight. This is not an unbounded rollout buffer.
 """
 
 from __future__ import annotations
@@ -121,6 +122,7 @@ def trajectory_from_bundle(
         "episode_id": str(rows[0]["episode_id"]),
         "terminal_return": terminal_return,
         "decisions": tuple(decisions),
+        "provenance_bundle": tuple(bundle),
         "logical_decisions": len(decisions),
         "substeps": len(bundle),
     }
@@ -142,6 +144,42 @@ def _flatten_trajectory_decisions(
     if not samples or not decision_trajectory:
         raise ValueError("trajectory group contains no update samples")
     return samples, decision_trajectory, decision_substeps
+
+
+def flatten_provenance_bundle(trajectories: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten the collected K=4 bundles into one globally ordered evidence set."""
+    flattened: list[dict[str, Any]] = []
+    for trajectory_index, trajectory in enumerate(trajectories):
+        bundle = trajectory.get("provenance_bundle")
+        if not isinstance(bundle, (list, tuple)) or not bundle:
+            raise ValueError(f"trajectory {trajectory_index} has no provenance bundle")
+        expected_substeps = sum(len(decision) for decision in trajectory["decisions"])
+        if len(bundle) != expected_substeps:
+            raise ValueError(
+                f"trajectory {trajectory_index} bundle/decision count mismatch: "
+                f"{len(bundle)} != {expected_substeps}"
+            )
+        for sample in bundle:
+            if not isinstance(sample, dict):
+                raise TypeError("trajectory provenance samples must be objects")
+            if sample.get("episode_id") != trajectory["episode_id"]:
+                raise ValueError("trajectory provenance sample has the wrong episode")
+            copied = dict(sample)
+            copied["sample_index"] = len(flattened)
+            copied["model_input"] = {
+                key: value.detach().to(device="cpu").clone()
+                for key, value in sample["model_input"].items()
+            }
+            copied["action_mask"] = sample["action_mask"].detach().to(
+                device="cpu", dtype=torch.float32
+            ).clone()
+            copied["memory_input"] = sample["memory_input"].detach().to(
+                device="cpu", dtype=torch.float32
+            ).clone()
+            flattened.append(copied)
+    if not flattened:
+        raise ValueError("trajectory group provenance bundle is empty")
+    return flattened
 
 
 def _batch_samples(samples: list[dict[str, Any]]) -> tuple[
@@ -340,11 +378,14 @@ def save_grpo_candidate_checkpoint(
     model_metadata: dict[str, Any],
     *,
     root_sha256: str,
+    sample_manifest_sha256: str,
+    bundle_sha256: str,
+    sample_manifest_content_sha256: str,
     config: dict[str, Any],
     diagnostics: dict[str, Any],
     experiment: str = "AR-019",
 ) -> str:
-    """Write a strict inference checkpoint without persisting the rollout."""
+    """Write a strict inference checkpoint linked to adjacent bounded evidence."""
     arch_config = {
         key: value
         for key, value in model_metadata.items()
@@ -356,7 +397,7 @@ def save_grpo_candidate_checkpoint(
         "inference_config": dict(model_metadata["inference_config"]),
         "training_config": dict(model_metadata.get("training_config", {})),
         "static_card_features": (
-            getattr(model, "card_feat").detach().to(device="cpu", dtype=torch.float32).clone()
+            getattr(model, "card_feat", None).detach().to(device="cpu", dtype=torch.float32).clone()
             if getattr(model, "card_feat", None) is not None
             else None
         ),
@@ -368,9 +409,19 @@ def save_grpo_candidate_checkpoint(
         "autoresearch": {
             "experiment": experiment,
             "root_sha256": root_sha256,
+            "sample_manifest_sha256": sample_manifest_sha256,
+            "bundle_sha256": bundle_sha256,
+            "sample_manifest_content_sha256": sample_manifest_content_sha256,
+            "artifacts": {
+                "sample_manifest": "sample.manifest.json",
+                "trajectory_bundle": "trajectory_bundle.pt.gz",
+            },
             "config": config,
             "diagnostics": diagnostics,
-            "rollout_persistence": "none; compact tensors were in-memory only",
+            "rollout_persistence": (
+                "compact bounded provenance bundle persisted; "
+                "no unbounded rollout buffer"
+            ),
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -469,6 +520,7 @@ __all__ = [
     "GRPO_FORMAT",
     "collect_stage4_trajectory_group",
     "expand_group_advantages",
+    "flatten_provenance_bundle",
     "normalize_group_returns",
     "recompute_logprobs_by_decision",
     "save_grpo_candidate_checkpoint",
