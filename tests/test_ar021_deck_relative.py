@@ -7,6 +7,7 @@ import torch
 
 import scripts.rl.run_ar021 as run_ar021_module
 from scripts.rl.run_ar021 import (
+    _pool_deck_paths,
     _save_completed_epoch_checkpoint,
     deck_relative_group_advantages,
 )
@@ -52,6 +53,21 @@ def test_deck_credit_prefers_dense_policy_scores_over_tied_terminal_returns() ->
     advantages, cohorts = deck_relative_group_advantages([left, right])
     assert advantages == pytest.approx([1.0, -1.0])
     assert cohorts[0]["zero_variance"] is False
+
+
+def test_zero_deck_pool_limit_consumes_every_ranked_candidate(tmp_path) -> None:
+    for name in ("003_c.json", "001_a.json", "002_b.json"):
+        (tmp_path / name).write_text("[]")
+
+    assert [path.name for path in _pool_deck_paths(tmp_path, 0)] == [
+        "001_a.json",
+        "002_b.json",
+        "003_c.json",
+    ]
+    assert [path.name for path in _pool_deck_paths(tmp_path, 2)] == [
+        "001_a.json",
+        "002_b.json",
+    ]
 
 
 def test_completed_epoch_checkpoint_validates_before_atomic_promotion(

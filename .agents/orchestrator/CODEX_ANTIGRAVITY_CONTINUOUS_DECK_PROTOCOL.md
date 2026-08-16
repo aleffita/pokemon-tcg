@@ -31,8 +31,9 @@ priority. Use a temporary filename that does not end in `.json`, then rename
 it atomically only after validation. Never rewrite a published `.json` in
 place.
 
-Keep only the strongest current candidates in `inbox/`. Antigravity may remove
-or replace superseded inbox candidates after a newer result snapshot exists.
+Keep the strongest current candidates in `inbox/`. There is no fixed eight-deck
+cap: the GRPO runner consumes every unique content hash by default. Antigravity
+may remove or replace superseded inbox candidates after a newer result snapshot exists.
 Move historically useful candidates to `archive/`; Codex copies every consumed
 deck into its AR run directory, so removal from the live inbox cannot detach
 completed-run provenance.
@@ -93,6 +94,8 @@ weaknesses. It must distinguish GRPO rollout return from tournament win rate.
   CPU-light and filesystem/SQLite-read-only outside its owned directories.
 - Do not modify a deck while a `.json` publish is visible. Atomic rename is the
   publication boundary.
-- Do not place more than eight live candidates in `inbox/`; archive the rest.
+- Rank candidates with numeric prefixes, but do not truncate the live pool to
+  eight. Publish every materially distinct candidate justified by current
+  evidence; archive exact duplicates and clearly dominated superseded decks.
 - Do not copy a result file back into the inbox and do not infer model promotion
   from training loss alone. Tournament evidence remains the competitive gate.

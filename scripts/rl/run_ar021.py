@@ -244,7 +244,7 @@ def _pool_deck_paths(pool_dir: Path | None, limit: int) -> list[Path]:
     if limit < 0:
         raise ValueError("--deck-pool-limit must be non-negative")
     paths = sorted(path for path in pool_dir.glob("*.json") if path.is_file())
-    return paths[:limit]
+    return paths if limit == 0 else paths[:limit]
 
 
 def _resolve_update_device(requested: str) -> torch.device:
@@ -404,7 +404,7 @@ def run_ar021(
     dense_reward_weight: float = 0.49,
     include_generated_deck: bool = True,
     deck_pool_dir: Path | None = Path("experiments/decks/swarm/inbox"),
-    deck_pool_limit: int = 8,
+    deck_pool_limit: int = 0,
     swarm_results_dir: Path = Path("experiments/decks/swarm/results"),
     update_device: str = "auto",
     seed: int = 21021,
@@ -1090,7 +1090,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("experiments/decks/swarm/inbox"),
     )
-    parser.add_argument("--deck-pool-limit", type=int, default=8)
+    parser.add_argument(
+        "--deck-pool-limit",
+        type=int,
+        default=0,
+        help="Maximum inbox decks to consume; zero consumes every unique deck.",
+    )
     parser.add_argument(
         "--swarm-results-dir",
         type=Path,
