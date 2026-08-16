@@ -56,7 +56,7 @@ def sha256_bytes(data: bytes) -> str:
 def digest_tensor(value: torch.Tensor | None) -> str:
     if value is None:
         raise ValueError("trajectory memory digest cannot be computed from None")
-    tensor = value.detach().to(device="cpu", dtype=torch.float32).contiguous()
+    tensor = value.detach().to(device="cpu").contiguous()
     header = f"{tuple(tensor.shape)}|{tensor.dtype}".encode("ascii")
     return sha256_bytes(header + tensor.numpy().tobytes(order="C"))
 
@@ -267,7 +267,7 @@ def collect_episode(
     opponent_mode: str,
     reset_seed: int,
     deck_content_hash: str,
-    deck_file_hash: str,
+    deck_source_file_hash: str,
     model_hash: str,
     action_generator: torch.Generator,
     bundle: list[dict[str, Any]],
@@ -330,9 +330,13 @@ def collect_episode(
                 "truncated": bool(truncated),
                 "memory_input_digest": digest_tensor(memory_input),
                 "memory_output_digest": digest_tensor(memory_out),
+                "model_input_digests": [
+                    {"name": key, "sha256": digest_tensor(value)}
+                    for key, value in model_input.items()
+                ],
                 "opponent_mode": opponent_mode,
                 "deck_content_sha256": deck_content_hash,
-                "deck_file_sha256": deck_file_hash,
+                "deck_source_file_sha256": deck_source_file_hash,
                 "model_hash": model_hash,
                 "metadata_date": encoder.meta_date,
             }
@@ -429,7 +433,7 @@ def write_outputs(
         f"metadata_date={manifest['metadata_date']}",
         f"model_sha256={manifest['model_sha256']}",
         f"deck_content_sha256={manifest.get('deck_content_sha256', manifest.get('deck_sha256', ''))}",
-        f"deck_file_sha256={manifest.get('deck_file_sha256', '')}",
+        f"deck_source_file_sha256={manifest.get('deck_source_file_sha256', '')}",
         f"rows={manifest['row_count']}",
         f"trajectory_sha256={manifest['trajectory_sha256']}",
         f"sample_manifest_sha256={manifest.get('sample_manifest_sha256', '')}",
@@ -460,7 +464,7 @@ def run_probe(
     encoder = DateBoundEncoder(TokenEncoder(card_table), meta_date)
     model_hash = sha256_file(checkpoint)
     deck_content_hash = deck_content_sha256(deck)
-    deck_file_hash = sha256_file(deck_path)
+    deck_source_file_hash = sha256_file(deck_path)
 
     np.random.seed(seed)
     random.seed(seed)
@@ -493,7 +497,7 @@ def run_probe(
                     mode,
                     seed + mode_index * 100 + game_index,
                     deck_content_hash,
-                    deck_file_hash,
+                    deck_source_file_hash,
                     model_hash,
                     action_generator,
                     bundle,
@@ -515,12 +519,13 @@ def run_probe(
         root_sha256=model_hash,
         metadata_date=meta_date,
         deck_content_sha256=deck_content_hash,
-        deck_file_sha256=deck_file_hash,
+        deck_source_file_sha256=deck_source_file_hash,
     )
     experiment_dir = output_dir.parent
     sample_manifest_path = experiment_dir / "sample.manifest.json"
     sample_manifest_path.parent.mkdir(parents=True, exist_ok=True)
     sample_manifest_path.write_text(json.dumps(sample_manifest, indent=2, sort_keys=True) + "\n")
+    sample_manifest_file_hash = sha256_file(sample_manifest_path)
     bundle_path = experiment_dir / "trajectory_bundle.pt.gz"
     bundle_hash = save_compressed_bundle(bundle_path, bundle, sample_manifest)
     root_reference = copy.deepcopy(model).eval()
@@ -552,9 +557,11 @@ def run_probe(
         model,
         model_metadata,
         root_sha256=model_hash,
-        sample_manifest_sha256=str(sample_manifest["sha256"]),
+        sample_manifest_sha256=sample_manifest_file_hash,
+        bundle_sha256=bundle_hash,
         config=ppo_config,
         diagnostics=ppo_metrics,
+        sample_manifest_content_sha256=str(sample_manifest["sha256"]),
     )
     manifest = {
         "format": "ptcg-stage4-ppo-micro-update-v1",
@@ -563,7 +570,7 @@ def run_probe(
         "model_sha256": model_hash,
         "deck": str(deck_path),
         "deck_content_sha256": deck_content_hash,
-        "deck_file_sha256": deck_file_hash,
+        "deck_source_file_sha256": deck_source_file_hash,
         "opponent_modes": ["random", "mirror_no_memory"],
         "counts_by_mode": counts_by_mode,
         "episodes": games_per_mode * 2,
@@ -571,7 +578,8 @@ def run_probe(
         "rows_per_second": round(len(rows) / elapsed, 3) if elapsed else None,
         "parquet_provenance": parquet_provenance,
         "packed_used": False,
-        "sample_manifest_sha256": sample_manifest["sha256"],
+        "sample_manifest_sha256": sample_manifest_file_hash,
+        "sample_manifest_content_sha256": sample_manifest["sha256"],
         "sample_manifest": str(sample_manifest_path),
         "bundle": str(bundle_path),
         "bundle_sha256": bundle_hash,

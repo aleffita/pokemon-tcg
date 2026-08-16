@@ -23,6 +23,17 @@ from rl.token_schema import ARCH_VERSION, TOKEN_SCHEMA_VERSION, T_META_CTX, N_TT
 
 TORCH_INFERENCE_FORMAT = "ptcg-torch-fp32-v1"
 
+
+def _disabled_prospective_config(*, provenance: str) -> dict[str, Any]:
+    """Return the safe legacy contract consumed by the public opt-in agent."""
+    return {
+        "enabled": False,
+        "config": None,
+        "runtime": None,
+        "trained_optimizer_steps": 0,
+        "provenance": provenance,
+    }
+
 # Checkpoint loading is STRICT: every key in the current model must appear in
 # the checkpoint with the exact expected shape. Legacy checkpoints (predating
 # aux heads, meta embeddings, or T_META_CTX rows in type_emb) fail loudly --
@@ -117,6 +128,9 @@ def checkpoint_inference_config(state: dict[str, Any]) -> dict[str, Any]:
             "bc_would_ko": False,
             "bc_wk_nvar": 10,
             "provenance": "legacy-checkpoint-default",
+            "prospective_planner": _disabled_prospective_config(
+                provenance="legacy-checkpoint-default"
+            ),
         }
     if not isinstance(cfg, dict):
         raise ValueError("checkpoint inference_config must be an object")
@@ -136,6 +150,13 @@ def checkpoint_inference_config(state: dict[str, Any]) -> dict[str, Any]:
         "bc_would_ko": bool(cfg["bc_would_ko"]),
         "bc_wk_nvar": int(cfg["bc_wk_nvar"]),
         "provenance": str(cfg.get("provenance", "trainer-checkpoint")),
+        "prospective_planner": _disabled_prospective_config(
+            provenance=(
+                "checkpoint-disabled"
+                if "prospective_planner" in cfg
+                else "legacy-checkpoint-default"
+            )
+        ),
     }
 
 

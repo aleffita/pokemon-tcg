@@ -86,6 +86,18 @@ else:
             _MODEL_PATH = candidate
             break
 
+if _OPT_IN_MODEL_PATH:
+    # Candidate provenance is checked before the strict model loader. This is
+    # deliberately opt-in only; the normal submission search and checkpoint
+    # path remain unchanged.
+    from scripts.rl.ppo_micro_update import validate_candidate_provenance
+    from scripts.rl.trajectory_probe import APPROVED_STAGE4_ROOT_SHA256
+
+    _OPT_IN_PROVENANCE = validate_candidate_provenance(
+        _MODEL_PATH,
+        approved_root_sha256=APPROVED_STAGE4_ROOT_SHA256,
+    )
+
 # ---- load once at import ----
 if _MODEL_PATH is None:
     print("[bc-agent] WARNING: no checkpoint found, using random policy")

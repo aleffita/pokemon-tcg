@@ -29,7 +29,7 @@ def _sha256_bytes(data: bytes) -> str:
 
 
 def _tensor_digest(value: torch.Tensor) -> str:
-    tensor = value.detach().to(device="cpu", dtype=torch.float32).contiguous()
+    tensor = value.detach().to(device="cpu").contiguous()
     header = f"{tuple(tensor.shape)}|{tensor.dtype}".encode("ascii")
     return _sha256_bytes(header + tensor.numpy().tobytes(order="C"))
 
@@ -37,6 +37,29 @@ def _tensor_digest(value: torch.Tensor) -> str:
 def _mask_digest(value: torch.Tensor) -> str:
     tensor = value.detach().to(device="cpu", dtype=torch.float32).contiguous()
     return _sha256_bytes(tensor.numpy().tobytes(order="C"))
+
+
+def _model_input_digests(model_input: dict[str, torch.Tensor]) -> list[dict[str, str]]:
+    """Digest every model input in the encoder's insertion/collection order."""
+    return [
+        {"name": name, "sha256": _tensor_digest(tensor)}
+        for name, tensor in model_input.items()
+    ]
+
+
+def _manifest_content_sha256(manifest: dict[str, Any]) -> str:
+    content = dict(manifest)
+    content.pop("sha256", None)
+    canonical = json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return _sha256_bytes(canonical)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _finite(value: torch.Tensor | float) -> bool:
@@ -113,6 +136,9 @@ def validate_bundle(bundle: list[dict[str, Any]], rows: list[dict[str, Any]]) ->
             raise ValueError(f"PPO sample {index} action-mask digest mismatch")
         if row.get("memory_input_digest") != _tensor_digest(memory_input):
             raise ValueError(f"PPO sample {index} memory-input digest mismatch")
+        expected_input_digests = _model_input_digests(model_input)
+        if row.get("model_input_digests") != expected_input_digests:
+            raise ValueError(f"PPO sample {index} model-input digest mismatch")
         if bool(row.get("done")) != sample["done"]:
             raise ValueError(f"PPO sample {index} done flag disagrees with row")
 
@@ -123,7 +149,7 @@ def build_sample_manifest(
     root_sha256: str,
     metadata_date: str,
     deck_content_sha256: str,
-    deck_file_sha256: str,
+    deck_source_file_sha256: str,
 ) -> dict[str, Any]:
     """Create a deterministic, tensor-digest-linked sample manifest."""
     samples = []
@@ -138,6 +164,7 @@ def build_sample_manifest(
                 "action": int(sample["action"]),
                 "action_mask_digest": _mask_digest(sample["action_mask"]),
                 "memory_input_digest": _tensor_digest(sample["memory_input"]),
+                "model_input_digests": _model_input_digests(sample["model_input"]),
                 "behavior_logprob": float(sample["behavior_logprob"]),
                 "value": float(sample["value"]),
                 "reward": float(sample["reward"]),
@@ -149,7 +176,7 @@ def build_sample_manifest(
         "root_sha256": root_sha256,
         "metadata_date": metadata_date,
         "deck_content_sha256": deck_content_sha256,
-        "deck_file_sha256": deck_file_sha256,
+        "deck_source_file_sha256": deck_source_file_sha256,
         "sample_count": len(samples),
         "order": samples,
         "truncated_bptt": {
@@ -157,8 +184,7 @@ def build_sample_manifest(
             "gradient_boundary": "no gradient crosses recurrent memory input",
         },
     }
-    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    manifest["sha256"] = _sha256_bytes(canonical)
+    manifest["sha256"] = _manifest_content_sha256(manifest)
     return manifest
 
 
@@ -342,8 +368,11 @@ def save_candidate_checkpoint(
     *,
     root_sha256: str,
     sample_manifest_sha256: str,
+    bundle_sha256: str,
     config: dict[str, Any],
     diagnostics: dict[str, Any],
+    sample_manifest_content_sha256: str | None = None,
+    artifact_paths: dict[str, str] | None = None,
 ) -> str:
     """Save a strict portable inference checkpoint with experiment provenance."""
     arch_config = {
@@ -371,7 +400,15 @@ def save_candidate_checkpoint(
         "autoresearch": {
             "experiment": "AR-009",
             "root_sha256": root_sha256,
+            # These are file-byte hashes. The manifest's own ``sha256`` is a
+            # separate canonical-content digest recorded below.
             "sample_manifest_sha256": sample_manifest_sha256,
+            "bundle_sha256": bundle_sha256,
+            "sample_manifest_content_sha256": sample_manifest_content_sha256,
+            "artifacts": dict(artifact_paths or {
+                "sample_manifest": "sample.manifest.json",
+                "trajectory_bundle": "trajectory_bundle.pt.gz",
+            }),
             "config": config,
             "diagnostics": diagnostics,
         },
@@ -381,6 +418,121 @@ def save_candidate_checkpoint(
     return _sha256_bytes(path.read_bytes())
 
 
+def _resolve_artifact_path(candidate_path: Path, value: Any, label: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"candidate provenance is missing {label} path")
+    path = Path(value)
+    return path if path.is_absolute() else candidate_path.parent / path
+
+
+def _load_bundle_payload(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"candidate provenance artifact is missing: {path}")
+    try:
+        raw = gzip.decompress(path.read_bytes())
+        payload = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=True)
+    except Exception as exc:
+        raise ValueError(f"candidate trajectory bundle cannot be loaded: {path}") from exc
+    if not isinstance(payload, dict) or payload.get("format") != BUNDLE_FORMAT:
+        raise ValueError("candidate trajectory bundle format is unsupported")
+    return payload
+
+
+def validate_candidate_provenance(
+    candidate_path: Path,
+    *,
+    approved_root_sha256: str,
+) -> dict[str, Path]:
+    """Fail closed before model loading if AR candidate evidence is detached."""
+    candidate_path = Path(candidate_path)
+    if not candidate_path.is_file():
+        raise FileNotFoundError(f"candidate checkpoint does not exist: {candidate_path}")
+    try:
+        payload = torch.load(candidate_path, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        raise ValueError(f"candidate checkpoint cannot be loaded: {candidate_path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("candidate checkpoint payload must be an object")
+    provenance = payload.get("autoresearch")
+    if not isinstance(provenance, dict):
+        raise ValueError("candidate checkpoint has no autoresearch provenance")
+    if provenance.get("root_sha256") != approved_root_sha256:
+        raise ValueError(
+            "candidate root_sha256 does not match the approved frozen Stage4 root: "
+            f"{provenance.get('root_sha256')!r} != {approved_root_sha256!r}"
+        )
+    sample_manifest_hash = provenance.get("sample_manifest_sha256")
+    bundle_hash = provenance.get("bundle_sha256")
+    if not isinstance(sample_manifest_hash, str) or len(sample_manifest_hash) != 64:
+        raise ValueError("candidate provenance is missing the sample-manifest file hash")
+    if not isinstance(bundle_hash, str) or len(bundle_hash) != 64:
+        raise ValueError("candidate provenance is missing the trajectory-bundle file hash")
+    artifacts = provenance.get("artifacts")
+    if artifacts is None:
+        artifacts = {}
+    if not isinstance(artifacts, dict):
+        raise ValueError("candidate provenance artifacts must be an object")
+    sample_manifest_path = _resolve_artifact_path(
+        candidate_path,
+        artifacts.get("sample_manifest", "sample.manifest.json"),
+        "sample-manifest",
+    )
+    bundle_path = _resolve_artifact_path(
+        candidate_path,
+        artifacts.get("trajectory_bundle", "trajectory_bundle.pt.gz"),
+        "trajectory-bundle",
+    )
+    if not sample_manifest_path.is_file():
+        raise FileNotFoundError(f"candidate provenance sample manifest is missing: {sample_manifest_path}")
+    if not bundle_path.is_file():
+        raise FileNotFoundError(f"candidate provenance trajectory bundle is missing: {bundle_path}")
+    if sha256_file(sample_manifest_path) != sample_manifest_hash:
+        raise ValueError("candidate sample-manifest file hash mismatch")
+    if sha256_file(bundle_path) != bundle_hash:
+        raise ValueError("candidate trajectory-bundle file hash mismatch")
+    try:
+        manifest = json.loads(sample_manifest_path.read_text())
+    except Exception as exc:
+        raise ValueError("candidate sample manifest is not valid JSON") from exc
+    if not isinstance(manifest, dict) or manifest.get("format") != BUNDLE_FORMAT:
+        raise ValueError("candidate sample manifest format is unsupported")
+    if manifest.get("root_sha256") != approved_root_sha256:
+        raise ValueError("candidate sample manifest root provenance mismatch")
+    if manifest.get("sha256") != _manifest_content_sha256(manifest):
+        raise ValueError("candidate sample manifest content hash mismatch")
+    content_hash = provenance.get("sample_manifest_content_sha256")
+    if content_hash != manifest["sha256"]:
+        raise ValueError("candidate metadata is not linked to sample-manifest content")
+
+    bundle_payload = _load_bundle_payload(bundle_path)
+    if bundle_payload.get("manifest") != manifest:
+        raise ValueError("candidate trajectory bundle is not linked to the sample manifest")
+    samples = bundle_payload.get("samples")
+    order = manifest.get("order")
+    if not isinstance(samples, list) or not isinstance(order, list):
+        raise ValueError("candidate provenance bundle or manifest order is invalid")
+    if len(samples) != len(order) or manifest.get("sample_count") != len(order):
+        raise ValueError("candidate provenance sample counts disagree")
+    rows = []
+    for index, item in enumerate(order):
+        if not isinstance(item, dict):
+            raise ValueError(f"candidate sample manifest row {index} is invalid")
+        rows.append({
+            "sample_index": item.get("sample_index"),
+            "episode_id": item.get("episode_id"),
+            "env_step": item.get("env_step"),
+            "legal_action_mask_digest": item.get("action_mask_digest"),
+            "memory_input_digest": item.get("memory_input_digest"),
+            "model_input_digests": item.get("model_input_digests"),
+            "done": item.get("done"),
+        })
+    validate_bundle(samples, rows)
+    for index, sample in enumerate(samples):
+        if _model_input_digests(sample["model_input"]) != order[index]["model_input_digests"]:
+            raise ValueError(f"candidate model-input digest mismatch at sample {index}")
+    return {"sample_manifest": sample_manifest_path, "trajectory_bundle": bundle_path}
+
+
 __all__ = [
     "BUNDLE_FORMAT",
     "build_sample_manifest",
@@ -388,5 +540,7 @@ __all__ = [
     "ppo_micro_update",
     "save_candidate_checkpoint",
     "save_compressed_bundle",
+    "sha256_file",
+    "validate_candidate_provenance",
     "validate_bundle",
 ]

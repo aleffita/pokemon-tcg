@@ -13,6 +13,7 @@ from rl.encoder.encoding import SUBMIT_ACTION, build_mask
 from rl.encoder.card_features import get_card_table
 from rl.policy_infer_torch import load_inference_checkpoint
 from scripts.rl.ppo_micro_update import (
+    _model_input_digests,
     ppo_micro_update,
     save_candidate_checkpoint,
     validate_bundle,
@@ -190,6 +191,7 @@ def _sample_bundle():
                 "env_step": index,
                 "legal_action_mask_digest": hashlib.sha256(mask.numpy().tobytes()).hexdigest(),
                 "memory_input_digest": digest_tensor(memory),
+                "model_input_digests": _model_input_digests(model_input),
                 "done": done,
             }
         )
@@ -201,6 +203,14 @@ def test_bundle_preserves_shape_order_and_digests():
     validate_bundle(bundle, rows)
     rows[1]["legal_action_mask_digest"] = "wrong"
     with pytest.raises(ValueError, match="mask digest"):
+        validate_bundle(bundle, rows)
+
+
+def test_bundle_rejects_model_input_tensor_tamper():
+    bundle, rows = _sample_bundle()
+    validate_bundle(bundle, rows)
+    bundle[1]["model_input"]["feature"][0, 0] = 99.0
+    with pytest.raises(ValueError, match="model-input digest"):
         validate_bundle(bundle, rows)
 
 
@@ -239,9 +249,11 @@ def test_candidate_checkpoint_strict_loads_via_inference_entrypoint(tmp_path):
         model,
         metadata,
         root_sha256=APPROVED_STAGE4_ROOT_SHA256,
-        sample_manifest_sha256="sample-manifest",
+        sample_manifest_sha256="a" * 64,
+        bundle_sha256="b" * 64,
         config={"algorithm": "PPO", "epochs": 1},
         diagnostics={"root_reference_kl_mean": 0.0},
+        sample_manifest_content_sha256="c" * 64,
     )
     loaded, loaded_metadata = load_inference_checkpoint(path, card_table)
     assert next(loaded.parameters()).dtype == torch.float32
