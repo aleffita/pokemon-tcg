@@ -1,0 +1,92 @@
+{
+  "our_agent": "/Users/alefita/workdir/pokemon-tcg/agent/main.py",
+  "our_deck_file": "/Users/alefita/workdir/pokemon-tcg/experiments/decks/deck_supreme_60.json",
+  "our_deck_files": [
+    "/Users/alefita/workdir/pokemon-tcg/experiments/decks/deck_supreme_60.json"
+  ],
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 1,
+  "note": "AR-028 alternate-deck list smoke",
+  "rows": [
+    {
+      "opponent_label": "random",
+      "opponent_path": "random",
+      "deck_id": 949,
+      "opp_deck_id": null,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 0.7500910758972168,
+      "error": null
+    },
+    {
+      "opponent_label": "first",
+      "opponent_path": "first",
+      "deck_id": 949,
+      "opp_deck_id": null,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 1.1354570388793945,
+      "error": null
+    },
+    {
+      "opponent_label": "lb1009_mega_lucario_ex_islet",
+      "opponent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "deck_id": 949,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 0.2424778938293457,
+      "error": null
+    },
+    {
+      "opponent_label": "lb945_multiply_ivan",
+      "opponent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "deck_id": 949,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 0.5862367153167725,
+      "error": null
+    },
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "deck_id": 949,
+      "opp_deck_id": 4,
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 0.42725110054016113,
+      "error": null
+    },
+    {
+      "opponent_label": "lb814_crustle_emre",
+      "opponent_path": "public_agents/lb814_crustle_emre/main.py",
+      "deck_id": 949,
+      "opp_deck_id": 3,
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "wr_pct": 100.0,
+      "elapsed_s": 0.672461986541748,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 1,
+    "losses": 5,
+    "draws": 0,
+    "wr_pct": 16.666666666666664,
+    "elapsed_s": 3.8431708812713623
+  }
+}

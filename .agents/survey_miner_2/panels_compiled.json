@@ -1,0 +1,2291 @@
+{
+  "Panel 1: Control & Energy Punishment (Alakazam / Hand Disruption)": {
+    "meta": {
+      "primary": "lb826_alakazam_seok",
+      "variants": [
+        "lb881_alakazam_v1",
+        "lb966_akalazam_v2_deck_updated",
+        "lb1004_alakazam_v3"
+      ],
+      "archetype_role": "Control / Hand & Energy Disruption / Damage Fixing",
+      "leaderboard_elo": 826.0,
+      "key_mechanics": "Xerosic's Machinations (forces discard to 3), Enhanced Hammer / Crushing Hammer (energy denial), Nighttime Mine (+1 retreat penalty), Alakazam Telekinesis (spread damage), Dudunsparce draw engine."
+    },
+    "pokemon": [
+      {
+        "id": 741,
+        "qty": 4,
+        "name": "Abra",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "50",
+        "type": "{P}",
+        "weakness": "{D}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Teleportation Attack",
+            "cost": "{P}",
+            "damage": "10",
+            "effect": "Switch this Pok\u00e9mon with 1 of your Benched Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 742,
+        "qty": 4,
+        "name": "Kadabra",
+        "stage": "Stage 1 Pok\u00e9mon",
+        "hp": "80",
+        "type": "{P}",
+        "weakness": "{D}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Psychic Draw",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, when you play this Pok\u00e9mon from your hand to evolve 1 of your Pok\u00e9mon, you may use this Ability. Draw 2 cards."
+          },
+          {
+            "name": "Super Psy Bolt",
+            "cost": "{P}",
+            "damage": "30",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 743,
+        "qty": 3,
+        "name": "Alakazam",
+        "stage": "Stage 2 Pok\u00e9mon",
+        "hp": "140",
+        "type": "{P}",
+        "weakness": "{D}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Psychic Draw",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, when you play this Pok\u00e9mon from your hand to evolve 1 of your Pok\u00e9mon, you may use this Ability. Draw 3 cards."
+          },
+          {
+            "name": "Powerful Hand",
+            "cost": "{P}",
+            "damage": "n/a",
+            "effect": "Place 2 damage counters on your opponent\u2019s Active Pok\u00e9mon for each card in your hand."
+          }
+        ]
+      },
+      {
+        "id": 305,
+        "qty": 3,
+        "name": "Dunsparce",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "70",
+        "type": "{C}",
+        "weakness": "{F}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Trading Places",
+            "cost": "\u25cf",
+            "damage": "n/a",
+            "effect": "Switch this Pok\u00e9mon with 1 of your Benched Pok\u00e9mon."
+          },
+          {
+            "name": "Ram",
+            "cost": "\u25cf\u25cf",
+            "damage": "20",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 66,
+        "qty": 2,
+        "name": "Dudunsparce",
+        "stage": "Stage 1 Pok\u00e9mon",
+        "hp": "140",
+        "type": "{C}",
+        "weakness": "{F}",
+        "retreat": "3",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Run Away Draw",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, you may draw 3 cards. If you drew any cards in this way, shuffle this Pok\u00e9mon and all attached cards into your deck."
+          },
+          {
+            "name": "Land Crush",
+            "cost": "\u25cf\u25cf\u25cf",
+            "damage": "90",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 140,
+        "qty": 1,
+        "name": "Fezandipiti ex",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "210",
+        "type": "{D}",
+        "weakness": "{F}",
+        "retreat": "1",
+        "rule": "Pok\u00e9mon ex",
+        "moves": [
+          {
+            "name": "[Ability] Flip the Script",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, if any of your Pok\u00e9mon were Knocked Out during your opponent\u2019s last turn, you may draw 3 cards. You can\u2019t use more than 1 Flip the Script Ability each turn."
+          },
+          {
+            "name": "Cruel Arrow",
+            "cost": "\u25cf\u25cf\u25cf",
+            "damage": "n/a",
+            "effect": "This attack does 100 damage to 1 of your opponent\u2019s Pok\u00e9mon. (Don\u2019t apply Weakness and Resistance for Benched Pok\u00e9mon.)"
+          }
+        ]
+      },
+      {
+        "id": 142,
+        "qty": 1,
+        "name": "Genesect",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "110",
+        "type": "{M}",
+        "weakness": "{R}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] ACE Nullifier",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "If this Pok\u00e9mon has a Pok\u00e9mon Tool attached, your opponent can\u2019t play any {ACE SPEC} cards from their hand."
+          },
+          {
+            "name": "Magnetic Blast",
+            "cost": "{M}\u25cf\u25cf",
+            "damage": "100",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 858,
+        "qty": 1,
+        "name": "Psyduck",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "70",
+        "type": "{W}",
+        "weakness": "{L}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Damp",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Pok\u00e9mon in play\u00a0(both yours and your opponent\u2019s)\u00a0lose any Ability that requires the Pok\u00e9mon using it to Knock Out itself."
+          },
+          {
+            "name": "Ram",
+            "cost": "\u25cf\u25cf",
+            "damage": "20",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 343,
+        "qty": 1,
+        "name": "Shaymin",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "80",
+        "type": "{G}",
+        "weakness": "{R}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Flower Curtain",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Prevent all damage done to your Benched Pok\u00e9mon that don\u2019t have a Rule Box by attacks from your opponent\u2019s Pok\u00e9mon. (Pok\u00e9mon {ex}, Pok\u00e9mon {V}, etc. have Rule Boxes.)"
+          },
+          {
+            "name": "Smash Kick",
+            "cost": "\u25cf\u25cf",
+            "damage": "30",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 1152,
+        "qty": 4,
+        "name": "Pok\u00e9 Pad",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for a Pok\u00e9mon that doesn\u2019t have a Rule Box, reveal it, and put it into your hand. Then, shuffle your deck. (Pok\u00e9mon {ex}, Pok\u00e9mon {V}, etc. have Rule Boxes.)"
+          }
+        ]
+      },
+      {
+        "id": 1086,
+        "qty": 4,
+        "name": "Buddy-Buddy Poffin",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for up to 2 Basic Pok\u00e9mon with 70 HP or less and put them onto your Bench. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1079,
+        "qty": 3,
+        "name": "Rare Candy",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Choose 1 of your Basic Pok\u00e9mon in play. If you have a Stage 2 card in your hand that evolves from that Pok\u00e9mon, put that card onto the Basic Pok\u00e9mon to evolve it, skipping the Stage 1. You can\u2019t use this card during your first turn or on a Basic Pok\u00e9mon that was put into play this turn."
+          }
+        ]
+      },
+      {
+        "id": 1097,
+        "qty": 1,
+        "name": "Night Stretcher",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Put a Pok\u00e9mon or a Basic Energy card from your discard pile into your hand."
+          }
+        ]
+      },
+      {
+        "id": 1129,
+        "qty": 1,
+        "name": "Sacred Ash",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Shuffle up to 5 Pok\u00e9mon from your discard pile into your deck."
+          }
+        ]
+      },
+      {
+        "id": 1156,
+        "qty": 3,
+        "name": "Lucky Helmet",
+        "stage": "Pok\u00e9mon Tool",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "If the Pok\u00e9mon this card is attached to is in the Active Spot and is damaged by an attack from your opponent\u2019s Pok\u00e9mon (even if this Pok\u00e9mon is Knocked Out), draw 2 cards."
+          }
+        ]
+      },
+      {
+        "id": 1081,
+        "qty": 3,
+        "name": "Enhanced Hammer",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Discard a Special Energy from 1 of your opponent\u2019s Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 1182,
+        "qty": 2,
+        "name": "Boss\u2019s Orders",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Switch in 1 of your opponent\u2019s Benched Pok\u00e9mon to the Active Spot."
+          }
+        ]
+      },
+      {
+        "id": 1231,
+        "qty": 4,
+        "name": "Dawn",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for a Basic Pok\u00e9mon, a Stage 1 Pok\u00e9mon, and a Stage 2 Pok\u00e9mon, reveal them, and put them into your hand. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1225,
+        "qty": 4,
+        "name": "Hilda",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for an Evolution Pok\u00e9mon and an Energy card, reveal them, and put them into your hand. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1264,
+        "qty": 4,
+        "name": "Battle Cage",
+        "stage": "Stadium",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Prevent all damage counters from being placed on Benched Pok\u00e9mon (both yours and your opponent\u2019s) by effects of attacks and Abilities from the opponent\u2019s Pok\u00e9mon. (Damage from attacks is still taken.)"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "qty": 2,
+        "name": "Basic {P} Energy",
+        "stage": "Basic Energy",
+        "hp": "n/a",
+        "type": "{P}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": []
+      },
+      {
+        "id": 19,
+        "qty": 4,
+        "name": "Telepath Psychic Energy",
+        "stage": "Special Energy",
+        "hp": "n/a",
+        "type": "{P}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "As long as this card is attached to a Pok\u00e9mon, it provides {P} Energy.\nWhen you attach this card from your hand to a {P} Pok\u00e9mon, search your deck for up to 2 Basic {P} Pok\u00e9mon and put them onto your Bench. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "qty": 1,
+        "name": "Enriching Energy",
+        "stage": "Special Energy",
+        "hp": "n/a",
+        "type": "{C}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "ACE SPEC",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "As long as this card is attached to a Pok\u00e9mon, it provides {C} Energy.\n\nWhen you attach this card from your hand to a Pok\u00e9mon, draw 4 cards."
+          }
+        ]
+      }
+    ],
+    "trainers": [],
+    "energies": []
+  },
+  "Panel 2: Top Leaderboard Fast Aggro (Mega Lucario & Multipliers)": {
+    "meta": {
+      "primary": "lb1009_mega_lucario_ex_islet",
+      "variants": [
+        "lb945_multiply_ivan"
+      ],
+      "archetype_role": "Fast Burst Aggro / OHKO Sweeper",
+      "leaderboard_elo": 1009.0,
+      "key_mechanics": "Mega Lucario ex (340 HP, Stage 1, massive Fighting damage), Carmine (Turn 1 Supporter when going first), Lillie's Determination (draw 6/8), Fighting Gong + Premium Power Pro (damage booster), Solrock/Lunatone support."
+    },
+    "pokemon": [
+      {
+        "id": 673,
+        "qty": 2,
+        "name": "Makuhita",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "80",
+        "type": "{F}",
+        "weakness": "{P}",
+        "retreat": "2",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Corkscrew Punch",
+            "cost": "{F}",
+            "damage": "10",
+            "effect": "n/a"
+          },
+          {
+            "name": "Confront",
+            "cost": "{F}{F}",
+            "damage": "30",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 674,
+        "qty": 2,
+        "name": "Hariyama",
+        "stage": "Stage 1 Pok\u00e9mon",
+        "hp": "150",
+        "type": "{F}",
+        "weakness": "{P}",
+        "retreat": "3",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Heave-Ho Catcher",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, when you play this Pok\u00e9mon from your hand to evolve 1 of your Pok\u00e9mon, you may use this Ability. Switch in 1 of your opponent\u2019s Benched Pok\u00e9mon to the Active Spot."
+          },
+          {
+            "name": "Wild Press",
+            "cost": "{F}{F}{F}",
+            "damage": "210",
+            "effect": "This Pok\u00e9mon also does 70 damage to itself."
+          }
+        ]
+      },
+      {
+        "id": 675,
+        "qty": 2,
+        "name": "Lunatone",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "110",
+        "type": "{F}",
+        "weakness": "{G}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Lunar Cycle",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, if you have Solrock in play, you may discard a Basic {F} Energy card from your hand in order to use this Ability. Draw 3 cards. You can\u2019t use more than 1 Lunar Cycle Ability each turn."
+          },
+          {
+            "name": "Power Gem",
+            "cost": "{F}{F}",
+            "damage": "50",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 676,
+        "qty": 3,
+        "name": "Solrock",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "110",
+        "type": "{F}",
+        "weakness": "{G}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Cosmic Beam",
+            "cost": "{F}",
+            "damage": "70",
+            "effect": "If you don\u2019t have Lunatone on your Bench, this attack does nothing. This attack\u2019s damage isn\u2019t affected by Weakness or Resistance."
+          }
+        ]
+      },
+      {
+        "id": 677,
+        "qty": 4,
+        "name": "Riolu",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "80",
+        "type": "{F}",
+        "weakness": "{P}",
+        "retreat": "2",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Accelerating Stab",
+            "cost": "{F}",
+            "damage": "30",
+            "effect": "During your next turn, this Pok\u00e9mon can\u2019t use Accelerating Stab."
+          }
+        ]
+      },
+      {
+        "id": 678,
+        "qty": 4,
+        "name": "Mega Lucario ex",
+        "stage": "Stage 1 Pok\u00e9mon",
+        "hp": "340",
+        "type": "{F}",
+        "weakness": "{P}",
+        "retreat": "2",
+        "rule": "Mega Pok\u00e9mon ex",
+        "moves": [
+          {
+            "name": "Aura Jab",
+            "cost": "{F}",
+            "damage": "130",
+            "effect": "Attach up to 3 Basic {F} Energy cards from your discard pile to your Benched Pok\u00e9mon in any way you like."
+          },
+          {
+            "name": "Mega Brave",
+            "cost": "{F}{F}",
+            "damage": "270",
+            "effect": "During your next turn, this Pok\u00e9mon can\u2019t use Mega Brave."
+          }
+        ]
+      },
+      {
+        "id": 1102,
+        "qty": 4,
+        "name": "Dusk Ball",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Look at the bottom 7 cards of your deck. You may reveal a Pok\u00e9mon you find there and put it into your hand. Shuffle the other cards back into your deck."
+          }
+        ]
+      },
+      {
+        "id": 1123,
+        "qty": 2,
+        "name": "Switch",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Switch your Active Pok\u00e9mon with 1 of your Benched Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 1141,
+        "qty": 4,
+        "name": "Premium Power Pro",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "During this turn, attacks used by your {F} Pok\u00e9mon do 30 more damage to your opponent\u2019s Active Pok\u00e9mon (before applying Weakness and Resistance)."
+          }
+        ]
+      },
+      {
+        "id": 1142,
+        "qty": 4,
+        "name": "Fighting Gong",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for a Basic {F} Energy card or a Basic {F} Pok\u00e9mon, reveal it, and put it into your hand. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1152,
+        "qty": 2,
+        "name": "Pok\u00e9 Pad",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for a Pok\u00e9mon that doesn\u2019t have a Rule Box, reveal it, and put it into your hand. Then, shuffle your deck. (Pok\u00e9mon {ex}, Pok\u00e9mon {V}, etc. have Rule Boxes.)"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "qty": 14,
+        "name": "Basic {F} Energy",
+        "stage": "Basic Energy",
+        "hp": "n/a",
+        "type": "{F}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": []
+      },
+      {
+        "id": 1159,
+        "qty": 1,
+        "name": "Hero\u2019s Cape",
+        "stage": "Pok\u00e9mon Tool",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "ACE SPEC",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "The Pok\u00e9mon this card is attached to gets +100 HP."
+          }
+        ]
+      },
+      {
+        "id": 1182,
+        "qty": 3,
+        "name": "Boss\u2019s Orders",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Switch in 1 of your opponent\u2019s Benched Pok\u00e9mon to the Active Spot."
+          }
+        ]
+      },
+      {
+        "id": 1192,
+        "qty": 4,
+        "name": "Carmine",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "If you go first, you may use this card during your first turn.\n\nDiscard your hand and draw 5 cards."
+          }
+        ]
+      },
+      {
+        "id": 1227,
+        "qty": 4,
+        "name": "Lillie's Determination",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Shuffle your hand into your deck. Then, draw 6 cards. If you have exactly 6 Prize cards remaining, draw 8 cards instead."
+          }
+        ]
+      },
+      {
+        "id": 1252,
+        "qty": 1,
+        "name": "Gravity Mountain",
+        "stage": "Stadium",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Each Stage 2 Pok\u00e9mon in play (both yours and your opponent\u2019s) gets -30 HP."
+          }
+        ]
+      }
+    ],
+    "trainers": [],
+    "energies": []
+  },
+  "Panel 3: Spread Damage & Bench Snipes (Crustle, Lucario, Dragapult ex)": {
+    "meta": {
+      "primary": "lb600_dragapult_ex",
+      "variants": [
+        "lb814_crustle_emre",
+        "lb798_lucario_pilkwang",
+        "lb600_mega_lucario_ex"
+      ],
+      "archetype_role": "Spread Damage / Bench Sniping / Energy Acceleration",
+      "leaderboard_elo": 814.0,
+      "key_mechanics": "Dragapult ex Phantom Dive (200 active + 60 damage counters on bench), Crispin + Brock's Scouting (dual energy acceleration Fire/Psychic), Unfair Stamp (ACE SPEC hand disruption), Fezandipiti ex (revenge draw 3)."
+    },
+    "pokemon": [
+      {
+        "id": 119,
+        "qty": 4,
+        "name": "Dreepy",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "70",
+        "type": "\u7adc",
+        "weakness": "n/a",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Petty Grudge",
+            "cost": "{P}",
+            "damage": "10",
+            "effect": "n/a"
+          },
+          {
+            "name": "Bite",
+            "cost": "{R}{P}",
+            "damage": "40",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 120,
+        "qty": 4,
+        "name": "Drakloak",
+        "stage": "Stage 1 Pok\u00e9mon",
+        "hp": "90",
+        "type": "\u7adc",
+        "weakness": "n/a",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Recon Directive",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, you may look at the top 2 cards of your deck and put 1 of them into your hand. Put the other card on the bottom of your deck."
+          },
+          {
+            "name": "Dragon Headbutt",
+            "cost": "{R}{P}",
+            "damage": "70",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 121,
+        "qty": 3,
+        "name": "Dragapult ex",
+        "stage": "Stage 2 Pok\u00e9mon",
+        "hp": "320",
+        "type": "\u7adc",
+        "weakness": "n/a",
+        "retreat": "1",
+        "rule": "Pok\u00e9mon ex",
+        "moves": [
+          {
+            "name": "[Tera]",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "As long as this Pok\u00e9mon is on your Bench, prevent all damage done to this Pok\u00e9mon by attacks (both yours and your opponent\u2019s)."
+          },
+          {
+            "name": "Jet Headbutt",
+            "cost": "\u25cf",
+            "damage": "70",
+            "effect": "n/a"
+          },
+          {
+            "name": "Phantom Dive",
+            "cost": "{R}{P}",
+            "damage": "200",
+            "effect": "Put 6 damage counters on your opponent\u2019s Benched Pok\u00e9mon in any way you like."
+          }
+        ]
+      },
+      {
+        "id": 140,
+        "qty": 1,
+        "name": "Fezandipiti ex",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "210",
+        "type": "{D}",
+        "weakness": "{F}",
+        "retreat": "1",
+        "rule": "Pok\u00e9mon ex",
+        "moves": [
+          {
+            "name": "[Ability] Flip the Script",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, if any of your Pok\u00e9mon were Knocked Out during your opponent\u2019s last turn, you may draw 3 cards. You can\u2019t use more than 1 Flip the Script Ability each turn."
+          },
+          {
+            "name": "Cruel Arrow",
+            "cost": "\u25cf\u25cf\u25cf",
+            "damage": "n/a",
+            "effect": "This attack does 100 damage to 1 of your opponent\u2019s Pok\u00e9mon. (Don\u2019t apply Weakness and Resistance for Benched Pok\u00e9mon.)"
+          }
+        ]
+      },
+      {
+        "id": 184,
+        "qty": 1,
+        "name": "Latias ex",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "210",
+        "type": "{P}",
+        "weakness": "{D}",
+        "retreat": "2",
+        "rule": "Pok\u00e9mon ex",
+        "moves": [
+          {
+            "name": "[Ability] Skyliner",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Your Basic Pok\u00e9mon in play have no Retreat Cost."
+          },
+          {
+            "name": "Eon Blade",
+            "cost": "{P}{P}\u25cf",
+            "damage": "200",
+            "effect": "During your next turn, this Pok\u00e9mon can\u2019t use attacks."
+          }
+        ]
+      },
+      {
+        "id": 235,
+        "qty": 2,
+        "name": "Budew",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "30",
+        "type": "{G}",
+        "weakness": "{R}",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Itchy Pollen",
+            "cost": "No cost",
+            "damage": "10",
+            "effect": "During your opponent\u2019s next turn, they can\u2019t play any Item cards from their hand."
+          }
+        ]
+      },
+      {
+        "id": 1071,
+        "qty": 1,
+        "name": "Meowth ex",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "170",
+        "type": "{C}",
+        "weakness": "{F}",
+        "retreat": "1",
+        "rule": "Pok\u00e9mon ex",
+        "moves": [
+          {
+            "name": "[Ability] Last-Ditch Catch",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, when you play this Pok\u00e9mon from your hand onto your Bench, you may use this Ability. Search your deck for a Supporter card, reveal it, and put it into your hand. Then, shuffle your deck. You can\u2019t use more than 1 Ability that has \u201cLast-Ditch\u201d in its name each turn."
+          },
+          {
+            "name": "Tuck Tail",
+            "cost": "\u25cf\u25cf\u25cf",
+            "damage": "60",
+            "effect": "Put this Pok\u00e9mon and all attached cards into your hand."
+          }
+        ]
+      },
+      {
+        "id": 1079,
+        "qty": 2,
+        "name": "Rare Candy",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Choose 1 of your Basic Pok\u00e9mon in play. If you have a Stage 2 card in your hand that evolves from that Pok\u00e9mon, put that card onto the Basic Pok\u00e9mon to evolve it, skipping the Stage 1. You can\u2019t use this card during your first turn or on a Basic Pok\u00e9mon that was put into play this turn."
+          }
+        ]
+      },
+      {
+        "id": 1080,
+        "qty": 1,
+        "name": "Unfair Stamp",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "ACE SPEC",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "You can use this card only if any of your Pok\u00e9mon were Knocked Out during your opponent\u2019s last turn.\n\nEach player shuffles their hand into their deck. Then, you draw 5 cards, and your opponent draws 2 cards."
+          }
+        ]
+      },
+      {
+        "id": 1086,
+        "qty": 4,
+        "name": "Buddy-Buddy Poffin",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for up to 2 Basic Pok\u00e9mon with 70 HP or less and put them onto your Bench. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1097,
+        "qty": 2,
+        "name": "Night Stretcher",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Put a Pok\u00e9mon or a Basic Energy card from your discard pile into your hand."
+          }
+        ]
+      },
+      {
+        "id": 1120,
+        "qty": 4,
+        "name": "Crushing Hammer",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Flip a coin. If heads, discard an Energy from 1 of your opponent\u2019s Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 1121,
+        "qty": 4,
+        "name": "Ultra Ball",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "You can use this card only if you discard 2 other cards from your hand.\n\nSearch your deck for a Pok\u00e9mon, reveal it, and put it into your hand. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1152,
+        "qty": 3,
+        "name": "Pok\u00e9 Pad",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for a Pok\u00e9mon that doesn\u2019t have a Rule Box, reveal it, and put it into your hand. Then, shuffle your deck. (Pok\u00e9mon {ex}, Pok\u00e9mon {V}, etc. have Rule Boxes.)"
+          }
+        ]
+      },
+      {
+        "id": 1156,
+        "qty": 1,
+        "name": "Lucky Helmet",
+        "stage": "Pok\u00e9mon Tool",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "If the Pok\u00e9mon this card is attached to is in the Active Spot and is damaged by an attack from your opponent\u2019s Pok\u00e9mon (even if this Pok\u00e9mon is Knocked Out), draw 2 cards."
+          }
+        ]
+      },
+      {
+        "id": 1182,
+        "qty": 3,
+        "name": "Boss\u2019s Orders",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Switch in 1 of your opponent\u2019s Benched Pok\u00e9mon to the Active Spot."
+          }
+        ]
+      },
+      {
+        "id": 1198,
+        "qty": 4,
+        "name": "Crispin",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for up to 2 Basic Energy cards of different types, reveal them, and put 1 of them into your hand. Attach the other to 1 of your Pok\u00e9mon. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1210,
+        "qty": 2,
+        "name": "Brock\u2019s Scouting",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for up to 2 Basic Pok\u00e9mon or 1 Evolution Pok\u00e9mon, reveal them, and put them into your hand. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1227,
+        "qty": 4,
+        "name": "Lillie's Determination",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Shuffle your hand into your deck. Then, draw 6 cards. If you have exactly 6 Prize cards remaining, draw 8 cards instead."
+          }
+        ]
+      },
+      {
+        "id": 1256,
+        "qty": 2,
+        "name": "Team Rocket's Watchtower",
+        "stage": "Stadium",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "{C} Pok\u00e9mon in play (both yours and your opponent\u2019s) have no Abilities."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "qty": 4,
+        "name": "Basic {R} Energy",
+        "stage": "Basic Energy",
+        "hp": "n/a",
+        "type": "{R}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": []
+      },
+      {
+        "id": 5,
+        "qty": 4,
+        "name": "Basic {P} Energy",
+        "stage": "Basic Energy",
+        "hp": "n/a",
+        "type": "{P}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": []
+      }
+    ],
+    "trainers": [],
+    "energies": []
+  },
+  "Panel 4: Internal Baselines & First Submission": {
+    "meta": {
+      "primary": "first_sub_kaggle_2707",
+      "variants": [
+        "fitalabs_hero_deck251",
+        "agent_deck_csv"
+      ],
+      "archetype_role": "1-Prize Alakazam Stage 2 Engine / Single Prize Attrition",
+      "leaderboard_elo": 270.7,
+      "key_mechanics": "Alakazam (140 HP single-prize), Dawn + Hilda search engine, Rare Candy rapid Stage 2 setup, Enhanced Hammer, Fezandipiti ex + Shaymin tech."
+    },
+    "pokemon": [
+      {
+        "id": 5,
+        "qty": 3,
+        "name": "Basic {P} Energy",
+        "stage": "Basic Energy",
+        "hp": "n/a",
+        "type": "{P}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": []
+      },
+      {
+        "id": 13,
+        "qty": 1,
+        "name": "Enriching Energy",
+        "stage": "Special Energy",
+        "hp": "n/a",
+        "type": "{C}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "ACE SPEC",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "As long as this card is attached to a Pok\u00e9mon, it provides {C} Energy.\n\nWhen you attach this card from your hand to a Pok\u00e9mon, draw 4 cards."
+          }
+        ]
+      },
+      {
+        "id": 19,
+        "qty": 4,
+        "name": "Telepath Psychic Energy",
+        "stage": "Special Energy",
+        "hp": "n/a",
+        "type": "{P}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "As long as this card is attached to a Pok\u00e9mon, it provides {P} Energy.\nWhen you attach this card from your hand to a {P} Pok\u00e9mon, search your deck for up to 2 Basic {P} Pok\u00e9mon and put them onto your Bench. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 65,
+        "qty": 4,
+        "name": "Dunsparce",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "60",
+        "type": "{C}",
+        "weakness": "{F}",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Gnaw",
+            "cost": "\u25cf",
+            "damage": "10",
+            "effect": "n/a"
+          },
+          {
+            "name": "Dig",
+            "cost": "\u25cf\u25cf",
+            "damage": "30",
+            "effect": "Flip a coin. If heads, during your opponent\u2019s next turn, prevent all damage from and effects of attacks done to this Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 66,
+        "qty": 3,
+        "name": "Dudunsparce",
+        "stage": "Stage 1 Pok\u00e9mon",
+        "hp": "140",
+        "type": "{C}",
+        "weakness": "{F}",
+        "retreat": "3",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Run Away Draw",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, you may draw 3 cards. If you drew any cards in this way, shuffle this Pok\u00e9mon and all attached cards into your deck."
+          },
+          {
+            "name": "Land Crush",
+            "cost": "\u25cf\u25cf\u25cf",
+            "damage": "90",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 741,
+        "qty": 4,
+        "name": "Abra",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "50",
+        "type": "{P}",
+        "weakness": "{D}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Teleportation Attack",
+            "cost": "{P}",
+            "damage": "10",
+            "effect": "Switch this Pok\u00e9mon with 1 of your Benched Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 742,
+        "qty": 4,
+        "name": "Kadabra",
+        "stage": "Stage 1 Pok\u00e9mon",
+        "hp": "80",
+        "type": "{P}",
+        "weakness": "{D}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Psychic Draw",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, when you play this Pok\u00e9mon from your hand to evolve 1 of your Pok\u00e9mon, you may use this Ability. Draw 2 cards."
+          },
+          {
+            "name": "Super Psy Bolt",
+            "cost": "{P}",
+            "damage": "30",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 743,
+        "qty": 4,
+        "name": "Alakazam",
+        "stage": "Stage 2 Pok\u00e9mon",
+        "hp": "140",
+        "type": "{P}",
+        "weakness": "{D}",
+        "retreat": "1",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "[Ability] Psychic Draw",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, when you play this Pok\u00e9mon from your hand to evolve 1 of your Pok\u00e9mon, you may use this Ability. Draw 3 cards."
+          },
+          {
+            "name": "Powerful Hand",
+            "cost": "{P}",
+            "damage": "n/a",
+            "effect": "Place 2 damage counters on your opponent\u2019s Active Pok\u00e9mon for each card in your hand."
+          }
+        ]
+      },
+      {
+        "id": 1079,
+        "qty": 4,
+        "name": "Rare Candy",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Choose 1 of your Basic Pok\u00e9mon in play. If you have a Stage 2 card in your hand that evolves from that Pok\u00e9mon, put that card onto the Basic Pok\u00e9mon to evolve it, skipping the Stage 1. You can\u2019t use this card during your first turn or on a Basic Pok\u00e9mon that was put into play this turn."
+          }
+        ]
+      },
+      {
+        "id": 1081,
+        "qty": 4,
+        "name": "Enhanced Hammer",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Discard a Special Energy from 1 of your opponent\u2019s Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 1086,
+        "qty": 4,
+        "name": "Buddy-Buddy Poffin",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for up to 2 Basic Pok\u00e9mon with 70 HP or less and put them onto your Bench. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1097,
+        "qty": 3,
+        "name": "Night Stretcher",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Put a Pok\u00e9mon or a Basic Energy card from your discard pile into your hand."
+          }
+        ]
+      },
+      {
+        "id": 1129,
+        "qty": 1,
+        "name": "Sacred Ash",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Shuffle up to 5 Pok\u00e9mon from your discard pile into your deck."
+          }
+        ]
+      },
+      {
+        "id": 1152,
+        "qty": 4,
+        "name": "Pok\u00e9 Pad",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for a Pok\u00e9mon that doesn\u2019t have a Rule Box, reveal it, and put it into your hand. Then, shuffle your deck. (Pok\u00e9mon {ex}, Pok\u00e9mon {V}, etc. have Rule Boxes.)"
+          }
+        ]
+      },
+      {
+        "id": 1182,
+        "qty": 2,
+        "name": "Boss\u2019s Orders",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Switch in 1 of your opponent\u2019s Benched Pok\u00e9mon to the Active Spot."
+          }
+        ]
+      },
+      {
+        "id": 1184,
+        "qty": 1,
+        "name": "Lana\u2019s Aid",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Put up to 3 in any combination of Pok\u00e9mon that don\u2019t have a Rule Box and Basic Energy cards from your discard pile into your hand. (Pok\u00e9mon {ex}, Pok\u00e9mon {V}, etc. have Rule Boxes.)"
+          }
+        ]
+      },
+      {
+        "id": 1197,
+        "qty": 2,
+        "name": "Xerosic\u2019s Machinations",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Your opponent discards cards from their hand until they have 3 cards in their hand."
+          }
+        ]
+      },
+      {
+        "id": 1225,
+        "qty": 4,
+        "name": "Hilda",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for an Evolution Pok\u00e9mon and an Energy card, reveal them, and put them into your hand. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1231,
+        "qty": 4,
+        "name": "Dawn",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for a Basic Pok\u00e9mon, a Stage 1 Pok\u00e9mon, and a Stage 2 Pok\u00e9mon, reveal them, and put them into your hand. Then, shuffle your deck."
+          }
+        ]
+      }
+    ],
+    "trainers": [],
+    "energies": []
+  },
+  "Panel 5: Heavy Tank Ramp (Mega Abomasnow ex & Iono Bellibolt ex)": {
+    "meta": {
+      "primary": "lb510_mega_abomasnow_ex",
+      "variants": [
+        "lb526_iono"
+      ],
+      "archetype_role": "Superheavy HP Wall / Mono-Energy Saturation / Fast Mega Evolution",
+      "leaderboard_elo": 510.0,
+      "key_mechanics": "Mega Abomasnow ex (350 HP, highest in meta, 34 Water Energy, Precious Trolley ACE SPEC, Surfing Beach), Iono's Bellibolt ex (280 HP, 22 Lightning Energy, Canari acceleration, Levincia stadium)."
+    },
+    "pokemon": [
+      {
+        "id": 721,
+        "qty": 2,
+        "name": "Kyogre",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "150",
+        "type": "{W}",
+        "weakness": "{L}",
+        "retreat": "3",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Riptide",
+            "cost": "{W}",
+            "damage": "20\u00d7",
+            "effect": "This attack does 20 damage for each Basic {W} Energy card in your discard pile. Then, shuffle those cards into your deck."
+          },
+          {
+            "name": "Swirling Waves",
+            "cost": "{W}{W}\u25cf",
+            "damage": "130",
+            "effect": "Discard 2 Energy from this Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 722,
+        "qty": 4,
+        "name": "Snover",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "90",
+        "type": "{W}",
+        "weakness": "{M}",
+        "retreat": "3",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Beat",
+            "cost": "{W}",
+            "damage": "10",
+            "effect": "n/a"
+          },
+          {
+            "name": "Icy Snow",
+            "cost": "{W}{W}",
+            "damage": "30",
+            "effect": "n/a"
+          }
+        ]
+      },
+      {
+        "id": 723,
+        "qty": 4,
+        "name": "Mega Abomasnow ex",
+        "stage": "Stage 1 Pok\u00e9mon",
+        "hp": "350",
+        "type": "{W}",
+        "weakness": "{M}",
+        "retreat": "4",
+        "rule": "Mega Pok\u00e9mon ex",
+        "moves": [
+          {
+            "name": "Hammer-lanche",
+            "cost": "{W}{W}",
+            "damage": "100\u00d7",
+            "effect": "Discard the top 6 cards of your deck, and this attack does 100 damage for each Basic {W} Energy card that you discarded in this way."
+          },
+          {
+            "name": "Frost Barrier",
+            "cost": "{W}{W}{W}",
+            "damage": "200",
+            "effect": "During your opponent\u2019s next turn, this Pok\u00e9mon takes 30 less damage from attacks (after applying Weakness and Resistance)."
+          }
+        ]
+      },
+      {
+        "id": 1121,
+        "qty": 4,
+        "name": "Ultra Ball",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "You can use this card only if you discard 2 other cards from your hand.\n\nSearch your deck for a Pok\u00e9mon, reveal it, and put it into your hand. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1126,
+        "qty": 1,
+        "name": "Precious Trolley",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "ACE SPEC",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for any number of Basic Pok\u00e9mon and put them onto your Bench. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1192,
+        "qty": 4,
+        "name": "Carmine",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "If you go first, you may use this card during your first turn.\n\nDiscard your hand and draw 5 cards."
+          }
+        ]
+      },
+      {
+        "id": 1227,
+        "qty": 4,
+        "name": "Lillie's Determination",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Shuffle your hand into your deck. Then, draw 6 cards. If you have exactly 6 Prize cards remaining, draw 8 cards instead."
+          }
+        ]
+      },
+      {
+        "id": 1262,
+        "qty": 3,
+        "name": "Surfing Beach",
+        "stage": "Stadium",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during each player\u2019s turn, that player may switch their Active {W} Pok\u00e9mon with 1 of their Benched {W} Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "qty": 34,
+        "name": "Basic {W} Energy",
+        "stage": "Basic Energy",
+        "hp": "n/a",
+        "type": "{W}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": []
+      }
+    ],
+    "trainers": [],
+    "energies": []
+  },
+  "Panel 6: High Win-Rate Turbo Acceleration (Deck #633 Yan / Teal Mask Ogerpon ex & Deck #440 goonew)": {
+    "meta": {
+      "primary": "Deck #633 Yan",
+      "variants": [
+        "Deck #440 goonew",
+        "Deck #582",
+        "Deck #775",
+        "Deck #785",
+        "Deck #873"
+      ],
+      "archetype_role": "Turbo Energy Acceleration / Fast 2-Prize Sweeper / Judge Disruption",
+      "leaderboard_elo": 1150.0,
+      "key_mechanics": "Teal Mask Ogerpon ex (Teal Dance ability: attach Grass energy from hand, draw 1 card; Myriad Leaf Shower: 30 + 30 per energy attached to both active Pok\u00e9mon), Tapu Bulu (140 HP 1-prize tech), Bug Catching Set + Tera Orb, 4x Judge hand reset."
+    },
+    "pokemon": [
+      {
+        "id": 1,
+        "qty": 17,
+        "name": "Basic {G} Energy",
+        "stage": "Basic Energy",
+        "hp": "n/a",
+        "type": "{G}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": []
+      },
+      {
+        "id": 18,
+        "qty": 2,
+        "name": "Grow Grass Energy",
+        "stage": "Special Energy",
+        "hp": "n/a",
+        "type": "{G}",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "As long as this card is attached to a Pok\u00e9mon, it provides {G} Energy.\nThe {G} Pok\u00e9mon this card is attached to gets +20 HP."
+          }
+        ]
+      },
+      {
+        "id": 96,
+        "qty": 4,
+        "name": "Teal Mask Ogerpon ex",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "210",
+        "type": "{G}",
+        "weakness": "{R}",
+        "retreat": "1",
+        "rule": "Pok\u00e9mon ex",
+        "moves": [
+          {
+            "name": "[Tera]",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "As long as this Pok\u00e9mon is on your Bench, prevent all damage done to this Pok\u00e9mon by attacks (both yours and your opponent\u2019s)."
+          },
+          {
+            "name": "[Ability] Teal Dance",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Once during your turn, you may attach a Basic {G} Energy card from your hand to this Pok\u00e9mon.\u00a0If you attached Energy to a Pok\u00e9mon in this way, draw a card."
+          },
+          {
+            "name": "Myriad Leaf Shower",
+            "cost": "{G}{G}{G}",
+            "damage": "30",
+            "effect": "This attack does 30 more damage for each Energy attached to both Active Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 920,
+        "qty": 1,
+        "name": "Tapu Bulu",
+        "stage": "Basic Pok\u00e9mon",
+        "hp": "140",
+        "type": "{G}",
+        "weakness": "{R}",
+        "retreat": "3",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "Wood Hammer",
+            "cost": "{G}{G}\u25cf\u25cf",
+            "damage": "220",
+            "effect": "This Pok\u00e9mon also does 30 damage to itself."
+          }
+        ]
+      },
+      {
+        "id": 1094,
+        "qty": 4,
+        "name": "Bug Catching Set",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Look at the top 7 cards of your deck. You may reveal up to 2 in any combination of {G} Pok\u00e9mon and Basic {G} Energy cards you find there and put them into your hand. Shuffle the other cards back into your deck."
+          }
+        ]
+      },
+      {
+        "id": 1118,
+        "qty": 1,
+        "name": "Energy Retrieval",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Put up to 2 Basic Energy cards from your discard pile into your hand."
+          }
+        ]
+      },
+      {
+        "id": 1119,
+        "qty": 2,
+        "name": "Energy Search",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for a Basic Energy card, reveal it, and put it into your hand. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1120,
+        "qty": 3,
+        "name": "Crushing Hammer",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Flip a coin. If heads, discard an Energy from 1 of your opponent\u2019s Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 1122,
+        "qty": 3,
+        "name": "Pok\u00e9gear 3.0",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Look at the top 7 cards of your deck. You may reveal a Supporter card you find there and put it into your hand. Shuffle the other cards back into your deck."
+          }
+        ]
+      },
+      {
+        "id": 1127,
+        "qty": 4,
+        "name": "Tera Orb",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Search your deck for a Tera Pok\u00e9mon, reveal it, and put it into your hand. Then, shuffle your deck."
+          }
+        ]
+      },
+      {
+        "id": 1147,
+        "qty": 3,
+        "name": "Jumbo Ice Cream",
+        "stage": "Item",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Heal 80 damage from your Active Pok\u00e9mon that has 3 or more Energy attached."
+          }
+        ]
+      },
+      {
+        "id": 1159,
+        "qty": 1,
+        "name": "Hero\u2019s Cape",
+        "stage": "Pok\u00e9mon Tool",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "ACE SPEC",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "The Pok\u00e9mon this card is attached to gets +100 HP."
+          }
+        ]
+      },
+      {
+        "id": 1182,
+        "qty": 2,
+        "name": "Boss\u2019s Orders",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Switch in 1 of your opponent\u2019s Benched Pok\u00e9mon to the Active Spot."
+          }
+        ]
+      },
+      {
+        "id": 1201,
+        "qty": 1,
+        "name": "Briar",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "You can use this card only if your opponent has exactly 2 Prize cards remaining.\n\nDuring this turn, if your opponent\u2019s Active Pok\u00e9mon is Knocked Out by damage from an attack used by your Tera Pok\u00e9mon, take 1 more Prize card."
+          }
+        ]
+      },
+      {
+        "id": 1213,
+        "qty": 4,
+        "name": "Judge",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Each player shuffles their hand into their deck and draws 4 cards."
+          }
+        ]
+      },
+      {
+        "id": 1221,
+        "qty": 1,
+        "name": "N's Plan",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Move up to 2 Energy from your Benched Pok\u00e9mon to your Active Pok\u00e9mon."
+          }
+        ]
+      },
+      {
+        "id": 1223,
+        "qty": 1,
+        "name": "Harlequin",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Each player shuffles their hand into their deck. Then, flip a coin. If heads, you draw 5 cards,\u00a0and your opponent draws 3 cards. If tails, you draw 3 cards,\u00a0and your opponent draws 5 cards."
+          }
+        ]
+      },
+      {
+        "id": 1227,
+        "qty": 4,
+        "name": "Lillie's Determination",
+        "stage": "Supporter",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Shuffle your hand into your deck. Then, draw 6 cards. If you have exactly 6 Prize cards remaining, draw 8 cards instead."
+          }
+        ]
+      },
+      {
+        "id": 1251,
+        "qty": 2,
+        "name": "Lively Stadium",
+        "stage": "Stadium",
+        "hp": "n/a",
+        "type": "n/a",
+        "weakness": "",
+        "retreat": "n/a",
+        "rule": "n/a",
+        "moves": [
+          {
+            "name": "n/a",
+            "cost": "n/a",
+            "damage": "n/a",
+            "effect": "Each Basic Pok\u00e9mon in play (both yours and your opponent\u2019s) gets +30 HP."
+          }
+        ]
+      }
+    ],
+    "trainers": [],
+    "energies": []
+  }
+}

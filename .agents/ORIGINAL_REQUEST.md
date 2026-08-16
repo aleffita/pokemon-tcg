@@ -1,36 +1,56 @@
 # Original User Request
 
-## Initial Request — 2026-08-14T11:08:52-03:00
+## 2026-08-16T18:57:31Z
 
-You are the Project Orchestrator (teamwork_preview_orchestrator).
+Engenharia tática e adversarial de um deck fechado de exatamente 60 cartas para o Kaggle Pokémon TCG AI Challenge, maximizando a taxa de vitória e a robustez invariante durante o período de avaliação da ladder congelada (16 a 31 de Agosto de 2026), com integração formal ao protocolo de autoresearch do Codex (GPT-5.6-Luna-Max).
 
-Your working directory is: `/Users/alefita/workdir/pokemon-tcg/.agents/orchestrator_1/`
-The project workspace root is: `/Users/alefita/workdir/pokemon-tcg`
-The user's original request is recorded at: `/Users/alefita/workdir/pokemon-tcg/.agents/ORIGINAL_REQUEST.md`
+Working directory: /Users/alefita/workdir/pokemon-tcg
+Integrity mode: development
 
-## Mission & Requirements
-Execute and orchestrate the full research, neural expansion, dataset compilation, mathematical monograph, and cross-project knowledge base synchronization:
+## 1. Contexto & Divisão de Soberania
+- Motor Central do Codex (GPT-5.6-Luna-Max): Coordenador Chefe de Engenharia Neural, responsável pelo treinamento GRPO, coleta de trajetórias on-policy e execução de torneios locais.
+- Enxame Antigravity (Gemini 3.7 Flash High & Subagentes): Conselho Tático e Engenharia Combinatória de Decks (60 cartas).
+- Restrição Rígida de Hardware: ZERO uso de GPU/MPS/Metal e ZERO processos de treinamento concorrentes. 100% dos recursos computacionais da máquina (Apple Silicon M3 Pro) permanecem dedicados aos experimentos do Codex. O trabalho do enxame é estritamente cognitivo, combinatório e de consultas SQL em modo read-only.
 
-1. **R1. Neural Architecture & 4D RoPEND MoE Expansion**:
-   - Implement 4D Rotary Positional Embedding (RoPEND) operators ($c_1$: Step, $c_2$: Meta-Epoch, $c_3$: Urgency Clock, $c_4$: Inferred Elo) in MLX and PyTorch.
-   - Expand the validated Stage 4 base model into the Mixture-of-Experts (MoE) topology for the August 16–31 Locked Meta phase.
-   - Ensure strict FP32 precision contract across `rl/policy_infer_torch.py` and training pipeline.
+## Requirements
 
-2. **R2. Elite Pool Dataset Re-compilation & Oracles**:
-   - Compile the clean Elite Match Dataset (Elo >= 1100, ~100k matches) from local replay archives (`data/bc_replay_zip/`).
-   - Include corrected auxiliary targets (`aux_ko`, `aux_prize_delta`, `aux_terminal`, `aux_return`), C++ `bc_would_ko` damage annotations, and pre-game vehicle draft sequences.
+### R1. Mineração de Dados SQLite & Análise de Meta
+- Consultar model/results.db em modo estritamente read-only (tabelas decks, deck_cards, match_card_usage e deck_elo_daily).
+- Extrair a composição canônica completa do Deck #633 (Yan / Teal Mask Ogerpon ex - 27.9% WR) e do Deck #251 (12.9% WR).
+- Identificar as cartas individuais e combinações com maior correlação positiva de vitória em partidas de Elo >= 1100.0.
 
-3. **R3. PageRank & Abelian Graph Invariance Monograph**:
-   - Author a dedicated technical monograph and Wikifita reference analyzing the mathematical isomorphism between PageRank Markov chain stationarity (dangling mass redistribution) and Bradley-Terry Softmax Abelian Group Elo calibration.
+### R2. Modelagem Hipergeométrica & Curva de Recursos
+- Calcular a distribuição multivariada de probabilidade da mão inicial (7 cartas + compra do Turno 1).
+- Garantir matematicamente:
+  - P(Pokémon Básico Ativo no Turno 1) >= 92%.
+  - P(Mulligan) <= 8%.
+  - Sustentação da aceleração de energia para ataques efetivos a partir do Turno 2.
+- Otimizar a proporção exata entre Pokémon Básicos, Evoluções, Itens de Busca (Nest Ball, Ultra Ball, etc.), Apoiadores de Compra (Professor's Research, Iono, etc.) e Energias Básicas/Especiais.
 
-4. **R4. Canonical Wikifita Cross-Project Synchronization**:
-   - Integrate cross-project memory, editorial guidelines, and mathematical proofs into canonical Wikifita pages (`~/Claude/wikifita/kaggle/` and `~/Claude/wikifita/co-scientist/`).
-   - Execute double validation via `uv run scripts/wikifita_audit.py` (with `--fix` and without `--fix`).
+### R3. Estresse Adversarial (Red Team) contra o Painel de Oponentes
+- Modelar e blindar o deck contra os 6 arquétipos do painel externo identificados nos experimentos AR-019 a AR-025 do Codex:
+  1. lb826_alakazam_seok (controle, punição de energias e fixação de dano).
+  2. lb1009 e lb945 (agressão rápida de topo de leaderboard).
+  3. lb814, Lucario e Dragapult (spread de dano, aceleração e bench snipes).
+  4. Baselines internos e first_sub_kaggle_2707.
+- Simular rotas de saída para cenários de pior caso: disrupção de mão via Iono/Judge para 1-2 cartas, travamento no ativo via Boss's Orders sem energia de recuo, e desvantagem de fraqueza elemental.
+- Incorporar atacantes de 1 prêmio para otimizar o Prize Trade contra Pokémon ex de 2 prêmios.
 
-## Strict Acceptance Criteria
-- [ ] PyTorch inference engine (`rl/policy_infer_torch.py`) passes 100% strict FP32 checksum and static feature array SHA256 validation.
-- [ ] Tournament benchmark (`scripts/tournament.py`) executes 500 matches against `first_sub_kaggle_2707` without process hangs, NaN logits, or memory leaks.
-- [ ] The agent achieves > 40% overall win rate against `first_sub` on the Yan (#633) archetype.
-- [ ] SQLite database (`model/results.db`) maintains 100.0% physical parity against disk JSON archives with 0 unhandled foreign key errors.
-- [ ] `uv run scripts/wikifita_audit.py` passes twice in `~/Claude/wikifita/` with 0 broken `[[wikilinks]]` or orphaned records.
-- [ ] Master RFC (`docs/technical_handoff_rfc.md`) and Metanoia suite (`docs/metanoia/01..06`) remain fully indexed and synchronized.
+### R4. Síntese, Emissão de Artefatos & Notificação ao Protocolo do Codex
+- Consolidar o consenso do quórum em uma lista fechada de exatamente 60 Card IDs válidos.
+- Escrever a monografia técnica detalhada em experiments/decks/DECK_SUPREME_60.md.
+- Gerar a cápsula de deck em experiments/decks/deck_supreme_60.json e atualizar agent/deck.json.
+- Notificar o coordenador do Codex através do sistema de arquivos (read-this-agent/08_DECK_SWARM_PROTOCOL.md e experiments/decks/), permitindo ingestão direta nos torneios de self-play e GRPO.
+
+## Acceptance Criteria
+
+### Integridade Estrutural do Deck
+- [ ] O arquivo agent/deck.json contém exatamente 60 números inteiros válidos, correspondendo a Card IDs existentes no SQLite.
+- [ ] O arquivo experiments/decks/deck_supreme_60.json está formatado com metadados de arquétipo, curva de energia e probabilidades calculadas.
+
+### Rigor Matemático & Documentação
+- [ ] O documento experiments/decks/DECK_SUPREME_60.md detalha a justificativa de cada um dos 60 slots, a prova formal hipergeométrica (P(Setup) >= 92%), e a matriz de matchup contra os 6 oponentes do painel.
+
+### Protocolo & Zero Contenção
+- [ ] O protocolo em read-this-agent/08_DECK_SWARM_PROTOCOL.md está sincronizado com a localização e hashes do deck gerado.
+- [ ] Nenhuma GPU/MPS foi alocada e nenhum processo concorrente de treino foi executado, preservando 100% do hardware para o Codex.
