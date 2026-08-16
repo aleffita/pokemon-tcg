@@ -86,6 +86,7 @@ logical decisions. The frozen root remains the fallback pending tournament.
 | --- | ---: |
 | Groups / fibers | {manifest['group_count']} / {manifest['group_size']} |
 | Effective K per base | `{manifest['effective_group_sizes']}` |
+| Branch policy/uniform mixture | `{manifest['config']['branch_selection']}` / {manifest['config']['branch_uniform_mix']} |
 | Logical decisions / substeps | {manifest['logical_decisions']} / {manifest['substeps']} |
 | Collection seconds / decisions/s | {manifest['collection_seconds']} / {manifest['collection_decisions_per_second']} |
 | One grouped optimizer step | {metrics['optimizer_steps']} |
@@ -183,6 +184,7 @@ def run_ar021(
     opponent_agent_paths: list[Path] | None = None,
     groups_per_matchup: int = 2,
     k_max: int = 4,
+    branch_uniform_mix: float = 0.0,
     seed: int = 21021,
     experiment: str = EXPERIMENT,
 ) -> dict[str, Any]:
@@ -190,6 +192,8 @@ def run_ar021(
         raise ValueError("--groups-per-matchup must be at least one")
     if k_max < 2:
         raise ValueError("--k-max must be at least two")
+    if not 0.0 <= branch_uniform_mix <= 1.0:
+        raise ValueError("--branch-uniform-mix must be between zero and one")
     validate_meta_date(meta_date)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logs").mkdir(parents=True, exist_ok=True)
@@ -244,6 +248,7 @@ def run_ar021(
                     str(opponent_agent_path) if opponent_agent_path is not None else None
                 ),
                 opponent_mode=opponent_mode,
+                branch_uniform_mix=branch_uniform_mix,
             )
             collection.update(
                 {
@@ -288,6 +293,8 @@ def run_ar021(
     config = {
         "algorithm": "sibling_fiber_grpo_grouped",
         "group_size_cap": k_max,
+        "branch_uniform_mix": branch_uniform_mix,
+        "branch_selection": "policy_uniform_mixture",
         "groups_per_matchup": groups_per_matchup,
         "matchup_count": len(opponent_paths),
         "opponent_agent_paths": [
@@ -403,6 +410,7 @@ def run_ar021(
                 "opponent_deck_content_sha256": collection.get("opponent_deck_content_sha256"),
                 "opponent_deck_source_file_sha256": collection.get("opponent_deck_source_file_sha256"),
                 "effective_group_size": collection["games"],
+                "branch_uniform_mix": collection.get("branch_uniform_mix", branch_uniform_mix),
                 "branch_actions": collection["branch_actions"],
                 "returns": collection["returns"],
                 "collection_seconds": collection["collection_seconds"],
@@ -432,6 +440,7 @@ def run_ar021(
             "candidate_preflight_passed": True,
             "stage4_root_preserved": True,
             "requested_group_size_was_four": k_max == 4,
+            "branch_uniform_mix_finite": 0.0 <= branch_uniform_mix <= 1.0,
             "effective_group_uses_distinct_legal_actions": all(
                 collection["games"] >= 2 for collection in collections
             ),
@@ -485,6 +494,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--groups-per-matchup", type=int, default=2)
     parser.add_argument("--k-max", type=int, default=4)
+    parser.add_argument(
+        "--branch-uniform-mix",
+        type=float,
+        default=0.0,
+        help="Mix uniform legal-action mass into sibling branch sampling.",
+    )
     parser.add_argument("--seed", type=int, default=21021)
     parser.add_argument("--experiment", type=str, default=EXPERIMENT)
     return parser
@@ -501,6 +516,7 @@ def main() -> None:
         opponent_agent_paths=args.opponent_agent,
         groups_per_matchup=args.groups_per_matchup,
         k_max=args.k_max,
+        branch_uniform_mix=args.branch_uniform_mix,
         seed=args.seed,
         experiment=args.experiment,
     ), indent=2, sort_keys=True))

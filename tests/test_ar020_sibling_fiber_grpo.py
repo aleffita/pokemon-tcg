@@ -77,6 +77,20 @@ def test_dynamic_k_is_capped_by_the_real_legal_fiber() -> None:
     assert len(set(two)) == 2
 
 
+def test_dynamic_k_uniform_mixture_preserves_legal_distinct_fibers() -> None:
+    generator = torch.Generator(device="cpu").manual_seed(21)
+    fibers = _branch_candidates(
+        torch.tensor([[5.0, -5.0, 0.0, -1.0]]),
+        torch.tensor([[1.0, 1.0, 1.0, 0.0]]),
+        requested_k=4,
+        generator=generator,
+        uniform_mix=1.0,
+    )
+    assert len(fibers) == 3
+    assert len(set(fibers)) == 3
+    assert set(fibers) <= {0, 1, 2}
+
+
 def test_equal_snapshots_have_identity_logprob_ratio() -> None:
     behavior = _ToyPolicy()
     learner = copy.deepcopy(behavior)

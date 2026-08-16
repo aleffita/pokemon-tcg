@@ -78,6 +78,7 @@ def _branch_candidates(
     action_mask: torch.Tensor,
     requested_k: int,
     generator: torch.Generator,
+    uniform_mix: float = 0.0,
 ) -> list[int]:
     """Choose a dynamic sibling set from one real decision mask.
 
@@ -88,6 +89,8 @@ def _branch_candidates(
     """
     if requested_k < 2:
         raise ValueError("requested sibling K must be at least two")
+    if not 0.0 <= uniform_mix <= 1.0 or not math.isfinite(uniform_mix):
+        raise ValueError("uniform sibling mix must be finite and in [0, 1]")
     flat_mask = action_mask.detach().to(device="cpu", dtype=torch.float32).reshape(-1)
     flat_logits = logits.detach().to(device="cpu", dtype=torch.float32).reshape(-1)
     legal = [int(index) for index, value in enumerate(flat_mask.tolist()) if value >= 0.5]
@@ -104,6 +107,10 @@ def _branch_candidates(
     pool_mask[pool] = True
     pool_probs = distribution.probs.reshape(-1).masked_fill(~pool_mask, 0.0)
     pool_probs = pool_probs / pool_probs.sum()
+    if uniform_mix:
+        uniform_probs = pool_mask.to(dtype=torch.float32)
+        uniform_probs = uniform_probs / uniform_probs.sum()
+        pool_probs = (1.0 - uniform_mix) * pool_probs + uniform_mix * uniform_probs
     actions = torch.multinomial(
         pool_probs,
         num_samples=effective_k,
@@ -192,6 +199,7 @@ def _probe_branch_fibers(
     seed: int,
     games: int,
     opponent_factory: Callable[[], Any] | None = None,
+    branch_uniform_mix: float = 0.0,
 ) -> tuple[list[int], dict[str, Any], CabtEnv, dict[str, np.ndarray], dict[str, Any]]:
     """Find a real in-game branch and keep its live env as an exact snapshot."""
     for seed_offset in range(32):
@@ -229,7 +237,13 @@ def _probe_branch_fibers(
                         model_input, memory_in=decision_memory
                     )
                 mask = torch.as_tensor(encoded["action_mask"], dtype=torch.float32).reshape(1, -1)
-                candidates = _branch_candidates(logits, mask, games, sibling_generator)
+                candidates = _branch_candidates(
+                    logits,
+                    mask,
+                    games,
+                    sibling_generator,
+                    uniform_mix=branch_uniform_mix,
+                )
                 if substep == 0 and len(candidates) >= 2:
                     legal = [
                         int(index)
@@ -253,6 +267,7 @@ def _probe_branch_fibers(
                             "requested_group_size": games,
                             "effective_group_size": len(candidates),
                             "branch_candidates": candidates,
+                            "branch_uniform_mix": branch_uniform_mix,
                         }
                     )
                     keep_env = True
@@ -386,10 +401,13 @@ def collect_sibling_fiber_group(
     opponent_factory: Callable[[], Any] | None = None,
     opponent_agent_path: str | None = None,
     opponent_mode: str | None = None,
+    branch_uniform_mix: float = 0.0,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collect K same-base forced-fiber continuations with common randomness."""
     if games < 2:
         raise ValueError("AR-020 requested K cap must be at least two")
+    if not 0.0 <= branch_uniform_mix <= 1.0 or not math.isfinite(branch_uniform_mix):
+        raise ValueError("branch uniform mix must be finite and in [0, 1]")
     actions, base, base_env, base_observation, base_reset_info = _probe_branch_fibers(
         model=model,
         encoder=encoder,
@@ -398,6 +416,7 @@ def collect_sibling_fiber_group(
         seed=seed,
         games=games,
         opponent_factory=opponent_factory,
+        branch_uniform_mix=branch_uniform_mix,
     )
     collection_seed = int(base["probe_seed"])
     resolved_opponent_mode = opponent_mode or (
@@ -473,6 +492,7 @@ def collect_sibling_fiber_group(
         "decisions_per_second": decisions / elapsed if elapsed else None,
         "substeps_per_second": substeps / elapsed if elapsed else None,
         "returns": returns,
+        "branch_uniform_mix": branch_uniform_mix,
         "branch_actions": actions,
         "effective_group_size": effective_games,
         "branch_base": base,
