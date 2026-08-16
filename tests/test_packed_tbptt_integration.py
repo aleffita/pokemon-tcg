@@ -10,7 +10,11 @@ from rl.packed_data import (
     _digest_columns,
     sha256_file,
 )
-from scripts.bc.bc_train_mlx import _build_tbptt_decision_groups, _build_tbptt_plan
+from scripts.bc.bc_train_mlx import (
+    _apply_dedup_relabel,
+    _build_tbptt_decision_groups,
+    _build_tbptt_plan,
+)
 
 
 def _write_store(root):
@@ -21,7 +25,11 @@ def _write_store(root):
         "decision_id": np.array([100, 100, 110, 111, 111, 120], dtype=np.int32),
         "substep": np.array([0, 1, 0, 0, 1, 0], dtype=np.int32),
         "action_mask": np.arange(6 * 3, dtype=np.float32).reshape(6, 3),
-        "y": np.arange(6, dtype=np.int32),
+        "y": np.array([1, 0, 2, 1, 0, 1], dtype=np.int32),
+        "opt_group": np.array(
+            [[1, 0, 2], [0, 1, 2], [2, 0, 1], [1, 2, 0], [0, 2, 1], [2, 1, 0]],
+            dtype=np.int32,
+        ),
         "is_attack": np.array([True, False, True, False, True, False]),
         "aux_ko": np.array([0, 1, 0, 1, 0, 1], dtype=np.float32),
         "aux_prize_delta": np.arange(6, dtype=np.float32),
@@ -74,13 +82,17 @@ def test_packed_store_feeds_tbptt_plan_with_masks_and_aux_targets(tmp_path):
     plan = _build_tbptt_plan(groups, chunk_size=2, row_budget=4)
     assert len(plan) == 2
 
-    seen = []
+    seen_rows = []
+    seen_labels = []
     for temporal_batch in plan:
         for chunk in temporal_batch:
             rows = np.concatenate(chunk.decisions)
             fetched = store.read_rows(rows)
-            seen.extend(fetched["episode_id"].tolist())
+            _apply_dedup_relabel(fetched)
+            seen_rows.extend(rows.tolist())
+            seen_labels.extend(fetched["y"].tolist())
             assert fetched["action_mask"].shape[0] == len(rows)
             assert fetched["aux_valid"].shape == fetched["aux_return"].shape
-            np.testing.assert_array_equal(fetched["y"], arrays["y"][rows])
-    assert seen == arrays["episode_id"].tolist()
+            np.testing.assert_array_equal(fetched["y"], np.array([0, 0, 1, 2, 0, 1])[rows])
+    assert seen_rows == list(range(len(arrays["episode_id"])))
+    assert seen_labels == [0, 0, 1, 2, 0, 1]

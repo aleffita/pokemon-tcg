@@ -1,4 +1,4 @@
-# AR-004 report
+# AR-004 report (amended by AR-005)
 
 ## Decision
 
@@ -44,18 +44,24 @@ Resume compares this object exactly. Explicit source, selection, split, packed,
 backend, seed, dedup, or TBPTT mismatches fail before training starts. A
 checkpoint with a missing or partial identity is rejected.
 
-The preserved Stage 4 root is the only compatibility exception: a file named
-`stage4_root.pkl` may be used as an explicitly recorded model warm-start when
-optimizer and scheduler state are both reset. This policy is tested and logged
-as `legacy-stage4-warmstart-no-data-identity`; it is not accepted as a packed
-optimizer/scheduler continuation.
+The preserved Stage 4 root is the only compatibility exception. AR-004's
+basename wording was incomplete: AR-005 binds the exception to the exact
+project-relative path `experiments/autoresearch/root/stage4_root.pkl` and the
+approved SHA-256
+`b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+Same-content copies, non-root files, packed resumes, and optimizer/scheduler
+continuations are rejected. The allowed warm-start resets both phases and is
+tested through the production trainer setup as
+`legacy-stage4-warmstart-no-data-identity`.
 
 ## Adversarial coverage
 
 The focused tests cover tampered boundary, tampered row order, inverted source
 order, missing required order column, missing dedup metadata, missing TBPTT
-metadata, resume identity mismatch, legacy warm-start policy, seed variants
-with `max_rows=0`, and packed data without TBPTT.
+metadata, partial and source/split/seed/dedup/TBPTT/backend resume identity
+mismatches, exact-root legacy warm-start policy, seed variants with
+`max_rows=0`, packed `opt_group` relabeling during sequential TBPTT row
+consumption, and packed data without TBPTT.
 
 ## Verification
 
@@ -73,4 +79,5 @@ trainer. That unrelated symbol was not changed by AR-004.
 
 No files under `pyproject.toml`, `uv.lock`, the Stage 4 root, model/loss/
 inference/SQLite/deck paths, or prior autoresearch artifacts were changed by
-AR-004.
+AR-005. See `AR-005/report.md` and `AR-005/logs/tests.log` for the rework
+evidence and the separate pre-existing semantic-suite failures.

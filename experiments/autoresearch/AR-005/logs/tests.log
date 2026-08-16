@@ -1,0 +1,23 @@
+AR-005 focused locked test command
+==================================
+$ uv run --locked pytest -q tests/test_packed_data.py tests/test_packed_tbptt_integration.py tests/test_trainer_resume_integration.py scripts/validate/test_checkpoint.py
+.........................................                                [100%]
+41 passed in 0.62s
+
+Relevant existing semantic-suite check
+=======================================
+$ uv run --locked pytest -q scripts/validate/test_bc_train_semantics.py
+..FF..                                                                   [100%]
+4 passed, 2 failed in 0.40s
+
+Pre-existing failures outside AR-005:
+- BCTrainingSemanticTests.test_optimizer_keeps_parameters_fp32_and_moments_fp32:
+  the test namespace lacks structured_weight_decay, which the preserved
+  _build_optimizer contract reads.
+- BCTrainingSemanticTests.test_real_policy_forward_is_fp32_with_sixteen_registers:
+  the required real smoke corpus is absent.
+
+Static check
+============
+$ git diff --check
+passed

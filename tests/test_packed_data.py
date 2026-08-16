@@ -1,15 +1,19 @@
+import copy
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from rl.packed_data import (
+    APPROVED_STAGE4_ROOT_SHA256,
     PACKED_BACKEND_NAME,
     PACKED_DEDUP_CONTRACT,
     PACKED_FORMAT_VERSION,
     PACKED_TBPTT_CONTRACT,
     PackedArrayStore,
     TRAINER_ORDER_COLUMNS,
+    approved_stage4_root_matches,
     build_resume_identity,
     _digest_array,
     _digest_columns,
@@ -303,8 +307,19 @@ def test_inverted_source_order_is_rejected(tmp_path):
     source_b = tmp_path / "b.parquet"
     source_a.write_bytes(b"source-a")
     source_b.write_bytes(b"source-b")
-    _write_strict_store(tmp_path / "store")
-    store = PackedArrayStore(tmp_path / "store", columns=["action_mask"])
+    store_root = tmp_path / "store"
+    _write_strict_store(store_root)
+    manifest_path = store_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["source_sha256"] = source_digest([source_a, source_b])
+    manifest_path.write_text(json.dumps(manifest))
+    store = PackedArrayStore(store_root, columns=["action_mask"])
+    validate_selection(
+        store,
+        source_sha256=source_digest([source_a, source_b]),
+        max_rows=0,
+        val_frac=0.25,
+    )
     with pytest.raises(ValueError, match="contract mismatch"):
         validate_selection(
             store,
@@ -321,32 +336,89 @@ def test_seed_variants_do_not_change_zero_cap_membership():
     assert [part.tolist() for part in first] == [part.tolist() for part in second]
 
 
-def test_resume_identity_rejects_mismatch_and_handles_legacy_policy():
-    identity = build_resume_identity(
+def _resume_identity(seed=7):
+    return build_resume_identity(
         source_sha256="source",
-        selection={"max_rows": 0},
-        split={"val_rows": 2, "train_rows": 4},
+        selection={"max_rows": 0, "selected_episode_ids": [1, 2]},
+        split={"val_rows": 2, "train_rows": 4, "val_episode_ids": [1], "train_episode_ids": [2]},
         backend={"name": PACKED_BACKEND_NAME, "data_digest": "packed"},
-        seed=7,
+        seed=seed,
         dedup=True,
         tbptt_chunk=16,
     )
+
+
+@pytest.mark.parametrize("field", ["source", "selection", "split", "seed", "dedup", "tbptt", "backend"])
+def test_resume_identity_rejects_each_identity_mismatch(field):
+    identity = _resume_identity()
+    changed = copy.deepcopy(identity)
+    if field == "source":
+        changed["source"]["sha256"] = "other-source"
+    elif field == "selection":
+        changed["selection"]["max_rows"] = 1
+    elif field == "split":
+        changed["split"]["val_rows"] = 3
+    elif field == "seed":
+        changed["trainer"]["seed"] = 8
+    elif field == "dedup":
+        changed["trainer"]["dedup"] = False
+    elif field == "tbptt":
+        changed["trainer"]["tbptt_chunk"] = 8
+    elif field == "backend":
+        changed["backend"]["data_digest"] = "other-packed"
+    with pytest.raises(ValueError, match="identity mismatch"):
+        validate_resume_identity(identity, changed, packed=True)
+
+
+def test_resume_identity_rejects_partial_identity():
+    identity = _resume_identity()
+    with pytest.raises(ValueError, match="identity mismatch"):
+        validate_resume_identity({"version": 1, "source": identity["source"]}, identity, packed=False)
+
+
+def test_resume_identity_rejects_legacy_without_production_artifact_policy(tmp_path):
+    identity = _resume_identity()
+    non_root = tmp_path / "stage4_root.pkl"
+    non_root.write_bytes(b"not-the-approved-root")
+    with pytest.raises(ValueError, match="explicit Stage 4 warm-start"):
+        validate_resume_identity(
+            None,
+            identity,
+            packed=False,
+            resume_path=non_root,
+            optimizer_state="reset",
+            scheduler_state="reset",
+        )
+
+
+def test_approved_stage4_root_requires_exact_path_and_sha256(tmp_path):
+    root = Path(__file__).resolve().parents[1] / "experiments/autoresearch/root/stage4_root.pkl"
+    assert root.is_file(), "the frozen Stage 4 root must be present for this policy test"
+    assert approved_stage4_root_matches(root)
+    copied_basename = tmp_path / "stage4_root.pkl"
+    copied_basename.hardlink_to(root)
+    assert not approved_stage4_root_matches(copied_basename)
+    assert APPROVED_STAGE4_ROOT_SHA256 == "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b"
+
+
+def test_resume_identity_rejects_mismatch_and_handles_legacy_policy():
+    identity = _resume_identity()
     assert validate_resume_identity(identity, identity, packed=True) == "validated"
-    changed = dict(identity)
+    changed = copy.deepcopy(identity)
     changed["backend"] = {"name": PACKED_BACKEND_NAME, "data_digest": "other"}
     with pytest.raises(ValueError, match="identity mismatch"):
         validate_resume_identity(identity, changed, packed=True)
     with pytest.raises(ValueError, match="legacy checkpoint"):
         validate_resume_identity(None, identity, packed=True)
-    assert (
+    with pytest.raises(ValueError, match="legacy checkpoint"):
         validate_resume_identity(
             None,
             identity,
             packed=True,
-            allow_legacy_stage4_warmstart=True,
+            resume_path=Path("experiments/autoresearch/root/stage4_root.pkl"),
+            optimizer_state="reset",
+            scheduler_state="reset",
         )
-        == "legacy-stage4-warmstart-no-data-identity"
-    )
     with pytest.raises(ValueError, match="only an explicit Stage 4 warm-start"):
         validate_resume_identity(None, identity, packed=False)
 
@@ -356,3 +428,4 @@ def test_packed_without_tbptt_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="no Parquet fallback"):
         validate_packed_tbptt_compatibility(store, 0)
     validate_packed_tbptt_compatibility(store, 16)
+    approved_stage4_root_matches,

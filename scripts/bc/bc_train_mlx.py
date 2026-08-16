@@ -245,6 +245,132 @@ def _scheduler_contract(cfg, total_steps: int, warmup_steps: int) -> dict:
     }
 
 
+@dataclass(frozen=True)
+class _ResumeSetup:
+    state: dict
+    start_epoch: int
+    best: float
+    gstep: int
+    compatibility: str
+
+
+def _load_resume_setup(
+    resume_path: str | os.PathLike[str] | None,
+    *,
+    model,
+    data_identity: dict,
+    packed: bool,
+    optimizer_state: str,
+    scheduler_state: str,
+    repo_root: str | os.PathLike[str] | None = None,
+) -> _ResumeSetup:
+    """Load and validate the checkpoint used by the production trainer path."""
+    if not resume_path:
+        return _ResumeSetup({}, 0, 0.0, 0, "fresh-run")
+
+    import pickle
+
+    with open(resume_path, "rb") as handle:
+        state = pickle.load(handle)
+    compatibility = validate_resume_identity(
+        state.get("data_identity"),
+        data_identity,
+        packed=packed,
+        resume_path=resume_path,
+        optimizer_state=optimizer_state,
+        scheduler_state=scheduler_state,
+        repo_root=repo_root,
+    )
+    model_params = state["model"]
+    if isinstance(model_params, dict):
+        model.update(model_params)
+    saved_cfg = state.get("arch_config")
+    if saved_cfg is not None:
+        current_cfg = model.get_config()
+        mismatches = [
+            f"{key}: saved={value} current={current_cfg[key]}"
+            for key, value in saved_cfg.items()
+            if key != "dtype" and key in current_cfg and current_cfg[key] != value
+        ]
+        if mismatches:
+            raise ValueError("checkpoint architecture mismatch: " + ", ".join(mismatches))
+
+    start_epoch = int(state.get("epoch", -1)) + 1
+    best = (
+        0.0
+        if optimizer_state == "reset"
+        else float(state.get("best_val_acc", state.get("val_acc", 0.0)))
+    )
+    return _ResumeSetup(
+        state=state,
+        start_epoch=start_epoch,
+        best=best,
+        gstep=int(state.get("gstep", 0)),
+        compatibility=compatibility,
+    )
+
+
+def _prepare_optimizer_state(
+    optimizer,
+    model,
+    *,
+    state: dict,
+    resume_path: str | os.PathLike[str] | None,
+    optimizer_state: str,
+    optimizer_contract: dict,
+) -> bool:
+    """Apply the production optimizer resume/reset policy and report loading."""
+    if resume_path and optimizer_state == "resume":
+        saved_contract = state.get("optimizer_contract")
+        if saved_contract != optimizer_contract:
+            raise ValueError(
+                "cannot resume optimizer state with a different contract: "
+                f"saved={saved_contract!r}, current={optimizer_contract!r}"
+            )
+        saved_opt_state = state.get("optimizer")
+        if saved_opt_state is None:
+            raise ValueError("checkpoint has no optimizer state to resume")
+        optimizer.state = saved_opt_state
+        print("[bc-train-mlx] optimizer phase resumed from checkpoint")
+        return True
+    optimizer.init(model.trainable_parameters())
+    print("[bc-train-mlx] optimizer phase initialized from zero")
+    return False
+
+
+def _prepare_scheduler_phase(
+    *,
+    state: dict,
+    resume_path: str | os.PathLike[str] | None,
+    scheduler_state: str,
+    configured_total_steps: int,
+    run_optimizer_steps: int,
+) -> tuple[int, int]:
+    """Resolve the production scheduler phase, resetting it for warm-starts."""
+    if resume_path and scheduler_state == "resume":
+        if "scheduler_phase_step" not in state or "scheduler_total_steps" not in state:
+            raise ValueError("checkpoint has no scheduler phase to resume")
+        phase_step = int(state["scheduler_phase_step"])
+        total_steps = int(state["scheduler_total_steps"])
+        if configured_total_steps > 0 and configured_total_steps != total_steps:
+            raise ValueError(
+                "scheduler_total_steps cannot change while resuming a phase: "
+                f"saved={total_steps}, configured={configured_total_steps}"
+            )
+        if phase_step + run_optimizer_steps > total_steps:
+            raise ValueError(
+                "resumed scheduler phase does not have enough remaining steps: "
+                f"position={phase_step}, requested={run_optimizer_steps}, "
+                f"total={total_steps}. Reset the scheduler or choose the "
+                "full phase horizon before the original run."
+            )
+        return phase_step, total_steps
+    total_steps = configured_total_steps if configured_total_steps > 0 else run_optimizer_steps
+    if total_steps <= 0:
+        raise ValueError("scheduler_total_steps must be positive")
+    return 0, total_steps
+
+
 def _build_optimizer(cfg) -> optim.MultiOptimizer:
     """Build the configured Muon/AdamW optimizer topology."""
     if cfg.optimizer != "muon_adamw":
@@ -2394,63 +2520,26 @@ def main() -> None:
     model = build_token_net_mlx(ct, net_cfg)
 
     # Resume from checkpoint
-    state: dict = {}
-    start_epoch = 0
-    best = 0.0
-    gstep = 0
-    resume_compatibility = "fresh-run"
+    resume_setup = _load_resume_setup(
+        a.resume,
+        model=model,
+        data_identity=data_identity,
+        packed=bool(a.packed_data),
+        optimizer_state=a.optimizer_state,
+        scheduler_state=a.scheduler_state,
+    )
+    state = resume_setup.state
+    start_epoch = resume_setup.start_epoch
+    best = resume_setup.best
+    gstep = resume_setup.gstep
+    resume_compatibility = resume_setup.compatibility
     if a.resume:
-        import pickle
-
-        with open(a.resume, "rb") as f:
-            state = pickle.load(f)
-        legacy_stage4_warmstart = (
-            Path(a.resume).name == "stage4_root.pkl"
-            and a.optimizer_state == "reset"
-            and a.scheduler_state == "reset"
-        )
-        resume_compatibility = validate_resume_identity(
-            state.get("data_identity"),
-            data_identity,
-            packed=bool(a.packed_data),
-            allow_legacy_stage4_warmstart=legacy_stage4_warmstart,
-        )
         if resume_compatibility != "validated":
             print(
                 "[bc-train-mlx] resume compatibility: "
                 f"{resume_compatibility}; data identity was absent from the legacy checkpoint",
                 flush=True,
             )
-        model_params = state["model"]
-        if isinstance(model_params, dict):
-            model.update(model_params)
-        start_epoch = int(state.get("epoch", -1)) + 1
-        if a.optimizer_state == "reset":
-            best = 0.0
-        else:
-            best = float(state.get("best_val_acc", state.get("val_acc", 0.0)))
-        # Global model-update history is provenance, not scheduler position.
-        gstep = int(state.get("gstep", 0))
-        # Validate arch_config if present (backward compat with old checkpoints)
-        saved_cfg = state.get("arch_config")
-        if saved_cfg is not None:
-            cur_cfg = model.get_config()
-            mismatches = []
-            for k, v in saved_cfg.items():
-                if k != "dtype" and k in cur_cfg and cur_cfg[k] != v:
-                    mismatches.append(f"{k}: saved={v} current={cur_cfg[k]}")
-            if mismatches:
-                raise ValueError(
-                    "checkpoint architecture mismatch: " + ", ".join(mismatches)
-                )
-            else:
-                print("[bc-train-mlx] arch_config validated OK")
-        else:
-            print(
-                "[bc-train-mlx] WARNING: no arch_config in checkpoint (old format) — "
-                "proceeding without validation"
-            )
-        
         loaded_val_acc = float(state.get("val_acc", state.get("best_val_acc", 0.0)))
         print(
             f"[bc-train-mlx] resumed from {a.resume} (epoch {start_epoch}, "
@@ -2495,21 +2584,14 @@ def main() -> None:
         for path, parameter in trainable_leaves
         if not _use_muon_parameter(path, parameter)
     )
-    if a.resume and a.optimizer_state == "resume":
-        saved_contract = state.get("optimizer_contract")
-        if saved_contract != optimizer_contract:
-            raise ValueError(
-                "cannot resume optimizer state with a different contract: "
-                f"saved={saved_contract!r}, current={optimizer_contract!r}"
-            )
-        saved_opt_state = state.get("optimizer")
-        if saved_opt_state is None:
-            raise ValueError("checkpoint has no optimizer state to resume")
-        optimizer.state = saved_opt_state
-        print("[bc-train-mlx] optimizer phase resumed from checkpoint")
-    else:
-        optimizer.init(model.trainable_parameters())
-        print("[bc-train-mlx] optimizer phase initialized from zero")
+    _prepare_optimizer_state(
+        optimizer,
+        model,
+        state=state,
+        resume_path=a.resume,
+        optimizer_state=a.optimizer_state,
+        optimizer_contract=optimizer_contract,
+    )
     optimizer.learning_rate = a.lr
     mx.eval(optimizer.state)
     _validate_optimizer_state_dtypes(optimizer.state)
@@ -2712,39 +2794,13 @@ def main() -> None:
         if a.resume and a.optimizer_state == "resume"
         else 0
     )
-    if a.resume and a.scheduler_state == "resume":
-        if "scheduler_phase_step" not in state or "scheduler_total_steps" not in state:
-            raise ValueError("checkpoint has no scheduler phase to resume")
-        scheduler_phase_step = int(state["scheduler_phase_step"])
-        scheduler_total_steps = int(state["scheduler_total_steps"])
-        if (
-            a.scheduler_total_steps > 0
-            and a.scheduler_total_steps != scheduler_total_steps
-        ):
-            raise ValueError(
-                "scheduler_total_steps cannot change while resuming a phase: "
-                f"saved={scheduler_total_steps}, configured={a.scheduler_total_steps}"
-            )
-    else:
-        scheduler_phase_step = 0
-        scheduler_total_steps = (
-            int(a.scheduler_total_steps)
-            if a.scheduler_total_steps > 0
-            else run_optimizer_steps
-        )
-    if scheduler_total_steps <= 0:
-        raise ValueError("scheduler_total_steps must be positive")
-    if (
-        a.resume
-        and a.scheduler_state == "resume"
-        and scheduler_phase_step + run_optimizer_steps > scheduler_total_steps
-    ):
-        raise ValueError(
-            "resumed scheduler phase does not have enough remaining steps: "
-            f"position={scheduler_phase_step}, requested={run_optimizer_steps}, "
-            f"total={scheduler_total_steps}. Reset the scheduler or choose the "
-            "full phase horizon before the original run."
-        )
+    scheduler_phase_step, scheduler_total_steps = _prepare_scheduler_phase(
+        state=state,
+        resume_path=a.resume,
+        scheduler_state=a.scheduler_state,
+        configured_total_steps=int(a.scheduler_total_steps),
+        run_optimizer_steps=run_optimizer_steps,
+    )
     warmup_steps = min(a.warmup_steps, max(1, scheduler_total_steps // 5))
     scheduler_contract = _scheduler_contract(a, scheduler_total_steps, warmup_steps)
     if a.resume and a.scheduler_state == "resume":

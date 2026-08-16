@@ -26,6 +26,16 @@ import numpy as np
 PACKED_FORMAT_VERSION = 2
 PACKED_BACKEND_NAME = "fixed-width-npy-mmap"
 
+# The legacy checkpoint is a compatibility exception, not a filename-based
+# format.  Keep the path project-relative so the policy remains portable while
+# binding it to the frozen artifact bytes.
+APPROVED_STAGE4_ROOT_RELATIVE_PATH = Path(
+    "experiments/autoresearch/root/stage4_root.pkl"
+)
+APPROVED_STAGE4_ROOT_SHA256 = (
+    "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b"
+)
+
 # These are deliberately independent of the Parquet sidecar manifest.  The
 # trainer's runtime contract must not shrink when a producer forgets to update
 # a manifest field.  The input portion is supplied by TokenEncoder.shapes;
@@ -112,6 +122,30 @@ def sha256_file(path: str | os.PathLike[str]) -> str:
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def approved_stage4_root_matches(
+    path: str | os.PathLike[str],
+    *,
+    repo_root: str | os.PathLike[str] | None = None,
+) -> bool:
+    """Return whether ``path`` is exactly the approved frozen root artifact."""
+    project_root = (
+        Path(repo_root).resolve()
+        if repo_root is not None
+        else Path(__file__).resolve().parents[1]
+    )
+    expected = project_root / APPROVED_STAGE4_ROOT_RELATIVE_PATH
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    candidate = candidate.absolute()
+    return (
+        candidate == expected
+        and not candidate.is_symlink()
+        and candidate.is_file()
+        and sha256_file(candidate) == APPROVED_STAGE4_ROOT_SHA256
+    )
 
 
 def _digest_array(array: np.ndarray) -> str:
@@ -515,11 +549,20 @@ def validate_resume_identity(
     current: dict,
     *,
     packed: bool,
-    allow_legacy_stage4_warmstart: bool = False,
+    resume_path: str | os.PathLike[str] | None = None,
+    optimizer_state: str = "reset",
+    scheduler_state: str = "reset",
+    repo_root: str | os.PathLike[str] | None = None,
 ) -> str:
     """Validate checkpoint data identity with an explicit legacy policy."""
     if saved is None:
-        if allow_legacy_stage4_warmstart:
+        if (
+            not packed
+            and optimizer_state == "reset"
+            and scheduler_state == "reset"
+            and resume_path is not None
+            and approved_stage4_root_matches(resume_path, repo_root=repo_root)
+        ):
             return "legacy-stage4-warmstart-no-data-identity"
         if packed:
             raise ValueError(
@@ -545,6 +588,8 @@ __all__ = [
     "PACKED_FORMAT_VERSION",
     "PACKED_DEDUP_CONTRACT",
     "PACKED_TBPTT_CONTRACT",
+    "APPROVED_STAGE4_ROOT_RELATIVE_PATH",
+    "APPROVED_STAGE4_ROOT_SHA256",
     "PackedArrayStore",
     "TRAINER_METADATA_COLUMNS",
     "TRAINER_ORDER_COLUMNS",
@@ -553,6 +598,7 @@ __all__ = [
     "_digest_columns",
     "_digest_array",
     "sha256_file",
+    "approved_stage4_root_matches",
     "split_episode_ids",
     "validate_selection",
     "validate_packed_tbptt_compatibility",
