@@ -85,9 +85,10 @@ Captured on {manifest['captured_at']} from frozen Stage 4 root `{manifest['root_
 
 The collector created multiple exact recurrent sibling bases per matchup.
 Each base selected its own effective K from the legal action set, each matchup
-was normalized independently, and all groups were combined in one FP32
-policy-only optimizer step with terminal credit through discounted future
-logical decisions. The frozen root remains the fallback pending tournament.
+was normalized independently, and groups were combined in one FP32 policy-only
+optimizer step when relative signal existed. If every group was homogeneous,
+the update emitted a root-equivalent no-op candidate and preserved the
+zero-variance evidence. The frozen root remains the fallback pending tournament.
 
 | Metric | Result |
 | --- | ---: |
@@ -96,7 +97,7 @@ logical decisions. The frozen root remains the fallback pending tournament.
 | Branch policy/uniform mixture | `{manifest['config']['branch_selection']}` / {manifest['config']['branch_uniform_mix']} |
 | Logical decisions / substeps | {manifest['logical_decisions']} / {manifest['substeps']} |
 | Collection seconds / decisions/s | {manifest['collection_seconds']} / {manifest['collection_decisions_per_second']} |
-| One grouped optimizer step | {metrics['optimizer_steps']} |
+| Grouped optimizer steps | {metrics['optimizer_steps']} |
 | Update seconds | {metrics['update_seconds']} |
 | Loss / gradient norm | {metrics['loss']} / {metrics['gradient_norm']} |
 | Candidate parameter L2 delta | {metrics['parameter_l2']} |
@@ -108,8 +109,9 @@ logical decisions. The frozen root remains the fallback pending tournament.
 - Effective K is dynamic per base: `min(K_max, legal branch actions)`.
 - Deck and matchup strata normalize returns independently; no group is centered
   against another matchup's terminal distribution.
-- The candidate uses one optimizer step over all groups, while each group's
-  sibling-relative credit remains separate.
+- The candidate uses one optimizer step over all signal-bearing groups, while
+  each group's sibling-relative credit remains separate; an all-zero-variance
+  matrix is explicitly fail-closed as a no-op.
 - All rollouts run to terminal completion and continuation credit uses discount
   `{metrics['continuation_discount']}` without duplicating conditional substeps.
 - Candidate preflight passed: `{manifest['candidate_preflight']['passed']}`.
@@ -148,9 +150,10 @@ Captured {manifest['captured_at']}.
 - AR-021 collected `{manifest['group_count']}` exact recurrent sibling groups
   and `{manifest['group_size']}` fibers with effective K
   `{manifest['effective_group_sizes']}`.
-- One grouped FP32 policy-only update applied independent group-relative
-  terminal credit through future continuation with discount
-  `{metrics['continuation_discount']}`.
+- The grouped FP32 policy-only path applied independent group-relative terminal
+  credit through future continuation with discount
+  `{metrics['continuation_discount']}`, or emitted a no-op when all groups were
+  zero-variance.
 - Candidate: `{manifest['candidate_sha256']}`; preflight passed.
 - Tournament is pending; no promotion, RoPE-ND, MoE, or historical
   ETL/Parquet/packed-data path was run.
@@ -348,7 +351,7 @@ def run_ar021(
         "credit_scope": "branch_and_continuation",
         "continuation_discount": 0.97,
         "matchup_normalization": "independent_group_relative_returns",
-        "optimizer_aggregation": "one_step_over_independent_groups",
+        "optimizer_aggregation": "one_step_over_independent_groups_or_fail_closed_noop",
         "rollout_storage": "compact bounded provenance bundle persisted adjacent to candidate",
     }
     if any(path is not None for path in agent_paths):
@@ -486,6 +489,8 @@ def run_ar021(
             "learner_deck_stratification": len(learner_decks) > 1,
             "independent_group_normalization": True,
             "single_grouped_optimizer_step": metrics["optimizer_steps"] == 1,
+            "all_groups_zero_variance": metrics["zero_variance_groups"] == len(grouped_trajectories),
+            "no_signal_fail_closed": metrics.get("no_update_reason") == "all_groups_zero_variance",
             "candidate_preflight_passed": True,
             "stage4_root_preserved": True,
             "requested_group_size_was_four": k_max == 4,

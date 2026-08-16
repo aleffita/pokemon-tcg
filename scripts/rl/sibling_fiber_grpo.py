@@ -738,7 +738,60 @@ def sibling_fiber_grpo_update_groups(
         prepared_groups.append((trajectories, expected_mapping, branch_mask, credit, group_stats))
 
     if total_active == 0:
-        raise ValueError("sibling update has no credited logical decisions")
+        # A round-robin stratum can be completely outcome-homogeneous even
+        # when every fiber and provenance invariant is valid. Treat that as
+        # an observed no-signal update, matching the single-group fail-closed
+        # behavior, so a multi-deck run still emits a truthful root-equivalent
+        # candidate and records the zero-variance coverage instead of losing
+        # the whole matrix at the update boundary.
+        zero_variance_groups = sum(bool(item["zero_variance"]) for item in group_stats_list)
+        logical_decisions = sum(
+            len(trajectory["decisions"])
+            for trajectories in trajectory_groups
+            for trajectory in trajectories
+        )
+        branch_logical_decisions = sum(
+            1
+            for trajectories in trajectory_groups
+            for trajectory in trajectories
+            if trajectory["decisions"]
+        )
+        continuation_logical_decisions = logical_decisions - branch_logical_decisions
+        return {
+            "algorithm": "sibling_fiber_grpo_grouped",
+            "precision": "FP32",
+            "policy_only": True,
+            "branch_only_credit": credit_scope == "branch_only",
+            "continuation_credit": credit_scope == "branch_and_continuation",
+            "value_loss": 0.0,
+            "optimizer_steps": 0,
+            "update_seconds": 0.0,
+            "group_count": len(trajectory_groups),
+            "group_sizes": [len(group) for group in trajectory_groups],
+            "zero_variance_groups": zero_variance_groups,
+            "zero_variance_group": zero_variance_groups == len(group_stats_list),
+            "return_means": [item["return_mean"] for item in group_stats_list],
+            "return_stds": [item["return_std"] for item in group_stats_list],
+            "return_mean": float(np.mean([item["return_mean"] for item in group_stats_list])),
+            "return_std": float(np.mean([item["return_std"] for item in group_stats_list])),
+            "credit_scope": credit_scope,
+            "continuation_discount": continuation_discount,
+            "logical_decisions": logical_decisions,
+            "branch_logical_decisions": branch_logical_decisions,
+            "continuation_logical_decisions": continuation_logical_decisions,
+            "credited_logical_actions": 0,
+            "continuation_credit_sum": 0.0,
+            "loss": 0.0,
+            "policy_loss": 0.0,
+            "gradient_norm": 0.0,
+            "ratio_mean": None,
+            "ratio_min": None,
+            "ratio_max": None,
+            "clip_fraction": 0.0,
+            "approx_kl_behavior": 0.0,
+            "no_update_reason": "all_groups_zero_variance",
+            **_parameter_delta(model, root_reference),
+        }
 
     started = time.perf_counter()
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)

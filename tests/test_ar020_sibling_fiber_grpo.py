@@ -153,3 +153,21 @@ def test_grouped_update_normalizes_each_dynamic_base_once() -> None:
     assert metrics["credited_logical_actions"] == 8
     assert metrics["continuation_credit"] is True
     assert all(torch.isfinite(value).all() for value in model.parameters())
+
+
+def test_grouped_all_zero_variance_emits_root_equivalent_noop() -> None:
+    model = _ToyPolicy()
+    root = copy.deepcopy(model)
+    before = [value.detach().clone() for value in model.parameters()]
+    groups = [
+        [_trajectory(model, 0, 1.0), _trajectory(model, 1, 1.0)],
+        [_trajectory(model, 2, -1.0), _trajectory(model, 0, -1.0)],
+    ]
+    metrics = sibling_fiber_grpo_update_groups(model, root, groups)
+    assert metrics["optimizer_steps"] == 0
+    assert metrics["zero_variance_groups"] == 2
+    assert metrics["no_update_reason"] == "all_groups_zero_variance"
+    assert all(
+        torch.equal(before_value, after_value)
+        for before_value, after_value in zip(before, model.parameters())
+    )
