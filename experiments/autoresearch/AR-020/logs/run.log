@@ -1,0 +1,10 @@
+AR-020 sibling-fiber GRPO micro-update
+effective_group_sizes=[4, 3]
+returns=[[-1.0, -1.0, -1.0, 1.0], [-1.0, 1.0, -1.0]]
+logical_decisions=569
+substeps=658
+collection_seconds=8.839274
+update_seconds=4.025555834174156
+candidate_sha256=89a70d4eddb3c856d7c4a4e1ad520e2d23bc7230c76b4c10904c45970eeb8637
+candidate_preflight=passed
+tournament=pending

@@ -1,0 +1,28 @@
+{
+  "our_agent": "public_agents/submissions/latest-submission-300elo/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 10,
+  "note": "AR-020_candidate_vs_frozen_stage4_root",
+  "rows": [
+    {
+      "opponent_label": "stage4_root_fp32.tar.gz",
+      "opponent_path": "experiments/autoresearch/root/stage4_root_fp32.tar.gz",
+      "deck_id": 1,
+      "opp_deck_id": 284,
+      "wins": 2,
+      "losses": 8,
+      "draws": 0,
+      "wr_pct": 20.0,
+      "elapsed_s": 5.475468873977661,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 2,
+    "losses": 8,
+    "draws": 0,
+    "wr_pct": 20.0,
+    "elapsed_s": 5.566021919250488
+  }
+}

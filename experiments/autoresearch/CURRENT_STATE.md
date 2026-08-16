@@ -4,7 +4,7 @@ Captured: 2026-08-16
 
 - Current best and fallback: frozen Stage 4 root
 - Stage 4 root SHA-256: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`
-- Active experiment: AR-019 provenance-repaired trajectory-group GRPO micro-update
+- Active experiment: AR-020 dynamic prospective sibling-fiber GRPO micro-update
 - AR-018 code commits: `434d3f6`, repaired by `28c2b96` and `4cfe5e8`
 - AR-018 status: corrected gate passed review; keep foundation
 - AR-019 implementation commit: `5dd6cfc`
@@ -28,10 +28,23 @@ Captured: 2026-08-16
   (60%, n=10). Candidate panel: `9-21-0` (30%, n=30); frozen root panel:
   `9-21-0` (30%). Candidate remains experimental; root remains fallback.
 - No RoPE-ND, package, submission, MoE, Parquet, or packed-data path was run.
-- Next action: start sibling-fiber GRPO, then run the same tournament surface.
+- AR-020 implementation commit: `a171dc8`
+- AR-020 candidate SHA-256: `89a70d4eddb3c856d7c4a4e1ad520e2d23bc7230c76b4c10904c45970eeb8637`
+- AR-020 dynamic effective K: `[4, 3]` across two deck-stratified bases;
+  569 logical decisions, 658 substeps; 64.372 decisions/s; 4.026 s update
+- AR-020 tournament: candidate-vs-root `2-8-0`; candidate panel `8-22-0`;
+  frozen-root panel `3-27-0`. Direct gate rejected promotion; root remains
+  fallback. Candidate/root packaged decks differed, so panel delta is
+  directional rather than a controlled same-deck estimate.
+- No RoPE-ND, package, submission, MoE, Parquet, or packed-data path was run.
+- Next action: start the next bounded research hypothesis with dynamic-K and
+  multi-deck tournament evidence; preserve root fallback.
 
-Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`,
+Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-019/manifest.json`, `AR-019/metrics.json`, `AR-019/logs/tests.log`,
 `AR-019/logs/run.log`, `AR-019/sample.manifest.json`,
 `AR-019/trajectory_bundle.pt.gz`, `AR-019/candidate.pt`,
-`STATE_CAPSULE_019.md`.
+`STATE_CAPSULE_019.md`, `AR-020/manifest.json`, `AR-020/metrics.json`,
+`AR-020/tournament_candidate_vs_root_10.json`,
+`AR-020/tournament_candidate_panel_10.json`,
+`AR-020/tournament_root_panel_10.json`, `STATE_CAPSULE_020.md`.
