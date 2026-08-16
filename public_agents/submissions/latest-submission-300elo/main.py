@@ -46,6 +46,15 @@ else:
     _PROJECT_ROOT = os.path.dirname(_AGENT_DIR)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+# An opt-in local candidate may be produced by the repository's strict FP32
+# loader while this submission directory still carries the older FP16 mirror.
+# Preload the repository package only for that explicit path, leaving the
+# default submission import path and behavior unchanged.
+_OPT_IN_MODEL_PATH = os.environ.get("PTCG_MODEL_PATH")
+if _OPT_IN_MODEL_PATH:
+    _REPOSITORY_ROOT = os.path.abspath(os.path.join(_PROJECT_ROOT, "../../.."))
+    sys.path = [entry for entry in sys.path if os.path.abspath(entry or os.getcwd()) != _PROJECT_ROOT]
+    sys.path.insert(0, _REPOSITORY_ROOT)
 
 import numpy as np
 import torch
@@ -60,17 +69,22 @@ _DECK_PATH = os.path.join(_AGENT_DIR, "deck.csv")
 # Prefer the pre-converted FP16 artifact in submissions. Local development can
 # still load the MLX trainer checkpoint through the strict converter.
 _MODEL_PATH = None
-for candidate in [
-    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_torch_fp16.pt"),
-    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_torch_fp16.pt"),
-    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_mlx_final.pkl"),
-    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_mlx.pkl"),
-    os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_final.pkl"),
-    os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best.pkl"),
-]:
-    if os.path.exists(candidate):
-        _MODEL_PATH = candidate
-        break
+if _OPT_IN_MODEL_PATH:
+    if not os.path.isfile(_OPT_IN_MODEL_PATH):
+        raise FileNotFoundError(f"PTCG_MODEL_PATH does not exist: {_OPT_IN_MODEL_PATH}")
+    _MODEL_PATH = _OPT_IN_MODEL_PATH
+else:
+    for candidate in [
+        os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_torch_fp16.pt"),
+        os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_torch_fp16.pt"),
+        os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_mlx_final.pkl"),
+        os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_mlx.pkl"),
+        os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_final.pkl"),
+        os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best.pkl"),
+    ]:
+        if os.path.exists(candidate):
+            _MODEL_PATH = candidate
+            break
 
 # ---- load once at import ----
 if _MODEL_PATH is None:
@@ -101,10 +115,11 @@ def _load_model():
         }
     net, metadata = load_inference_checkpoint(_MODEL_PATH, _CARD_TABLE)
     runtime_cfg = metadata["inference_config"]
-    prospective_cfg = runtime_cfg["prospective_planner"]
-    print(f"[bc-agent] loaded PyTorch FP16 model {_MODEL_PATH} "
+    prospective_cfg = runtime_cfg.get("prospective_planner", {"enabled": False})
+    print(f"[bc-agent] loaded PyTorch model {_MODEL_PATH} "
           f"(nlayers={metadata['nlayers']}, "
           f"scratch={metadata['scratch_registers']}, "
+          f"dtype={next(net.parameters()).dtype}, "
           f"would_ko={runtime_cfg['bc_would_ko']}, "
           f"prospective={prospective_cfg['enabled']})")
     return net, metadata, runtime_cfg
@@ -113,6 +128,11 @@ def _load_model():
 _LOADED_MODEL, _MODEL_METADATA, _RUNTIME_DATA = _load_model()
 _RUNTIME_CFG = SimpleNamespace(**_RUNTIME_DATA)
 _PROSPECTIVE_MODEL = _MODEL_METADATA.get("prospective_planner_model")
+_MODEL_DTYPE = (
+    next(_LOADED_MODEL.parameters()).dtype
+    if _LOADED_MODEL is not None
+    else torch.float32
+)
 
 # ---- deck ----
 def load_deck(path: str = _DECK_PATH) -> list[int]:
@@ -161,14 +181,14 @@ def _get_tracker(side: int):
 
 
 def _build_tensors(encoded: dict, int_keys: set) -> dict:
-    """Convert encoded arrays to PyTorch tensors with FP16 numeric features."""
+    """Convert encoded arrays to tensors matching the selected checkpoint."""
     ob = {}
     for k, v in encoded.items():
         arr = np.asarray(v)
         if k in int_keys:
             ob[k] = torch.as_tensor(arr.astype(np.int64)).reshape(1, *arr.shape)
         else:
-            ob[k] = torch.as_tensor(arr.astype(np.float16)).reshape(1, *arr.shape)
+            ob[k] = torch.as_tensor(arr.astype(np.float32)).to(_MODEL_DTYPE).reshape(1, *arr.shape)
     return ob
 
 

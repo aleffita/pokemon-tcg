@@ -7,6 +7,7 @@ encoded directly from ``CabtEnv``.
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -25,11 +26,19 @@ from rl.encoder.encoding import SUBMIT_ACTION, TokenEncoder, build_mask
 from rl.encoder.meta_lookup import get_meta_lookup
 from rl.env.env import CabtEnv, random_opponent
 from rl.policy_infer_torch import load_inference_checkpoint
+from scripts.rl.ppo_micro_update import (
+    build_sample_manifest,
+    ppo_micro_update,
+    save_candidate_checkpoint,
+    save_compressed_bundle,
+    validate_bundle,
+)
 
 
 DEFAULT_CHECKPOINT = Path("experiments/autoresearch/root/stage4_root.pkl")
 DEFAULT_DECK = Path("agent/deck.csv")
-DEFAULT_OUTPUT = Path("experiments/autoresearch/AR-008/logs")
+DEFAULT_OUTPUT = Path("experiments/autoresearch/AR-009/logs")
+APPROVED_STAGE4_ROOT_SHA256 = "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b"
 
 
 def sha256_file(path: Path) -> str:
@@ -57,6 +66,11 @@ def load_deck(path: Path) -> list[int]:
     if len(cards) != 60:
         raise ValueError(f"agent deck must contain exactly 60 cards, got {len(cards)} from {path}")
     return cards
+
+
+def deck_content_sha256(cards: list[int]) -> str:
+    """Hash the normalized parsed 60-card content, not the source file bytes."""
+    return sha256_bytes(json.dumps(cards, separators=(",", ":")).encode("ascii"))
 
 
 def validate_meta_date(meta_date: str) -> str:
@@ -104,12 +118,26 @@ class DateBoundEncoder:
         current = obs.get("current")
         if not isinstance(current, dict):
             raise ValueError("engine observation has no complete current metadata object")
-        observed = current.get("date") or current.get("archive_date")
-        if observed is not None and observed != self.meta_date:
+        observed_dates = {
+            field: current.get(field)
+            for field in ("date", "archive_date")
+            if current.get(field) is not None
+        }
+        conflicting = {
+            field: value
+            for field, value in observed_dates.items()
+            if value != self.meta_date
+        }
+        if conflicting:
             raise ValueError(
-                f"engine metadata date {observed!r} conflicts with explicit --meta-date {self.meta_date!r}"
+                f"engine metadata date fields {conflicting!r} conflicts with explicit "
+                f"--meta-date {self.meta_date!r}"
             )
-        if observed is None:
+        if len(set(observed_dates.values())) > 1:
+            raise ValueError(
+                f"engine current.date and current.archive_date disagree: {observed_dates!r}"
+            )
+        if not observed_dates:
             current = dict(current)
             current["date"] = self.meta_date
             current["archive_date"] = self.meta_date
@@ -144,6 +172,12 @@ def load_stage4(checkpoint: Path, card_table: CardTable):
     """Load the root through the one approved strict inference entry point."""
     if not checkpoint.is_file():
         raise FileNotFoundError(f"Stage4 checkpoint not found: {checkpoint}")
+    observed_hash = sha256_file(checkpoint)
+    if observed_hash != APPROVED_STAGE4_ROOT_SHA256:
+        raise ValueError(
+            "Stage4 checkpoint hash is not the approved frozen root: "
+            f"{observed_hash} != {APPROVED_STAGE4_ROOT_SHA256}"
+        )
     # Do not catch this call: load_inference_checkpoint is strict and must fail loudly.
     return load_inference_checkpoint(checkpoint, card_table)
 
@@ -232,9 +266,11 @@ def collect_episode(
     episode_id: str,
     opponent_mode: str,
     reset_seed: int,
-    deck_hash: str,
+    deck_content_hash: str,
+    deck_file_hash: str,
     model_hash: str,
     action_generator: torch.Generator,
+    bundle: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     observation, reset_info = env.reset(seed=reset_seed)
     side = int(reset_info["agent_index"])
@@ -274,8 +310,10 @@ def collect_episode(
         next_observation, reward, terminated, truncated, _info = env.step(action)
         done = bool(terminated or truncated)
         decision_complete = action == SUBMIT_ACTION or len(picked) >= max_count or done
+        sample_index = len(bundle)
         rows.append(
             {
+                "sample_index": sample_index,
                 "episode_id": episode_id,
                 "env_step": env_step,
                 "decision_index": decision_index,
@@ -293,9 +331,30 @@ def collect_episode(
                 "memory_input_digest": digest_tensor(memory_input),
                 "memory_output_digest": digest_tensor(memory_out),
                 "opponent_mode": opponent_mode,
-                "deck_hash": deck_hash,
+                "deck_content_sha256": deck_content_hash,
+                "deck_file_sha256": deck_file_hash,
                 "model_hash": model_hash,
                 "metadata_date": encoder.meta_date,
+            }
+        )
+        bundle.append(
+            {
+                "sample_index": sample_index,
+                "episode_id": episode_id,
+                "env_step": env_step,
+                "decision_index": decision_index,
+                "substep": decision_substep,
+                "model_input": {
+                    key: value.detach().to(device="cpu").clone()
+                    for key, value in model_input.items()
+                },
+                "action_mask": torch.as_tensor(action_mask, dtype=torch.float32).clone(),
+                "memory_input": memory_input.detach().to(device="cpu", dtype=torch.float32).clone(),
+                "action": action,
+                "behavior_logprob": logprob,
+                "value": float(value.detach().reshape(-1)[0].item()),
+                "reward": float(reward),
+                "done": bool(done),
             }
         )
         env_step += 1
@@ -366,12 +425,15 @@ def write_outputs(
     (output_dir / "trajectory.jsonl").write_text(jsonl)
     (output_dir / "trajectory.manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     lines = [
-        "AR-008 Stage4 trajectory probe",
+        "AR-009 Stage4 PPO micro-update probe",
         f"metadata_date={manifest['metadata_date']}",
         f"model_sha256={manifest['model_sha256']}",
-        f"deck_sha256={manifest['deck_sha256']}",
+        f"deck_content_sha256={manifest.get('deck_content_sha256', manifest.get('deck_sha256', ''))}",
+        f"deck_file_sha256={manifest.get('deck_file_sha256', '')}",
         f"rows={manifest['row_count']}",
         f"trajectory_sha256={manifest['trajectory_sha256']}",
+        f"sample_manifest_sha256={manifest.get('sample_manifest_sha256', '')}",
+        f"candidate_sha256={manifest.get('candidate_sha256', '')}",
     ]
     for mode, counts in manifest["counts_by_mode"].items():
         lines.append(f"mode={mode} episodes={counts['episodes']} rows={counts['rows']} terminals={counts['terminals']}")
@@ -397,11 +459,13 @@ def run_probe(
     model, model_metadata = load_stage4(checkpoint, card_table)
     encoder = DateBoundEncoder(TokenEncoder(card_table), meta_date)
     model_hash = sha256_file(checkpoint)
-    deck_hash = sha256_bytes(json.dumps(deck, separators=(",", ":")).encode("ascii"))
+    deck_content_hash = deck_content_sha256(deck)
+    deck_file_hash = sha256_file(deck_path)
 
     np.random.seed(seed)
     random.seed(seed)
     rows: list[dict[str, Any]] = []
+    bundle: list[dict[str, Any]] = []
     counts_by_mode: dict[str, dict[str, int]] = {}
     started = time.perf_counter()
     for mode_index, mode in enumerate(("random", "mirror_no_memory")):
@@ -428,9 +492,11 @@ def run_probe(
                     f"{mode}-{game_index:03d}",
                     mode,
                     seed + mode_index * 100 + game_index,
-                    deck_hash,
+                    deck_content_hash,
+                    deck_file_hash,
                     model_hash,
                     action_generator,
+                    bundle,
                 )
             finally:
                 env.close()
@@ -442,14 +508,62 @@ def run_probe(
             "terminals": sum(bool(row["terminal"]) for row in mode_rows),
         }
     validate_rows(rows)
+    validate_bundle(bundle, rows)
     elapsed = time.perf_counter() - started
+    sample_manifest = build_sample_manifest(
+        bundle,
+        root_sha256=model_hash,
+        metadata_date=meta_date,
+        deck_content_sha256=deck_content_hash,
+        deck_file_sha256=deck_file_hash,
+    )
+    experiment_dir = output_dir.parent
+    sample_manifest_path = experiment_dir / "sample.manifest.json"
+    sample_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    sample_manifest_path.write_text(json.dumps(sample_manifest, indent=2, sort_keys=True) + "\n")
+    bundle_path = experiment_dir / "trajectory_bundle.pt.gz"
+    bundle_hash = save_compressed_bundle(bundle_path, bundle, sample_manifest)
+    root_reference = copy.deepcopy(model).eval()
+    ppo_config: dict[str, Any] = {
+        "algorithm": "PPO",
+        "epochs": 1,
+        "gamma": 1.0,
+        "clip_epsilon": 0.2,
+        "learning_rate": 1e-5,
+        "value_coefficient": 0.5,
+        "entropy_coefficient": 0.0,
+        "precision": "FP32",
+        "sample_modes": ["random", "mirror_no_memory"],
+        "truncated_bptt_boundary": "memory input detached per environment substep",
+    }
+    ppo_metrics = ppo_micro_update(
+        model,
+        root_reference,
+        bundle,
+        gamma=float(ppo_config["gamma"]),
+        clip_epsilon=float(ppo_config["clip_epsilon"]),
+        learning_rate=float(ppo_config["learning_rate"]),
+        value_coefficient=float(ppo_config["value_coefficient"]),
+        entropy_coefficient=float(ppo_config["entropy_coefficient"]),
+    )
+    candidate_path = experiment_dir / "candidate.pt"
+    candidate_hash = save_candidate_checkpoint(
+        candidate_path,
+        model,
+        model_metadata,
+        root_sha256=model_hash,
+        sample_manifest_sha256=str(sample_manifest["sha256"]),
+        config=ppo_config,
+        diagnostics=ppo_metrics,
+    )
     manifest = {
-        "format": "ptcg-stage4-trajectory-jsonl-v1",
+        "format": "ptcg-stage4-ppo-micro-update-v1",
         "metadata_date": meta_date,
         "checkpoint": str(checkpoint),
         "model_sha256": model_hash,
         "deck": str(deck_path),
-        "deck_sha256": deck_hash,
+        "deck_content_sha256": deck_content_hash,
+        "deck_file_sha256": deck_file_hash,
         "opponent_modes": ["random", "mirror_no_memory"],
         "counts_by_mode": counts_by_mode,
         "episodes": games_per_mode * 2,
@@ -457,6 +571,14 @@ def run_probe(
         "rows_per_second": round(len(rows) / elapsed, 3) if elapsed else None,
         "parquet_provenance": parquet_provenance,
         "packed_used": False,
+        "sample_manifest_sha256": sample_manifest["sha256"],
+        "sample_manifest": str(sample_manifest_path),
+        "bundle": str(bundle_path),
+        "bundle_sha256": bundle_hash,
+        "candidate": str(candidate_path),
+        "candidate_sha256": candidate_hash,
+        "ppo_config": ppo_config,
+        "ppo_metrics": ppo_metrics,
         "model_metadata": {
             "arch_version": model_metadata.get("arch_version"),
             "token_schema_version": model_metadata.get("token_schema_version"),
@@ -469,6 +591,14 @@ def run_probe(
             "memory_reset_at_episode_boundary": True,
             "terminal_reward_present": True,
             "policy_action_rng_isolated": True,
+            "bundle_has_model_inputs": True,
+            "bundle_has_real_action_masks": True,
+            "bundle_has_detached_memory_inputs": True,
+            "ppo_terminal_return_propagation": True,
+            "ppo_finite_normalized_advantages": True,
+            "ppo_clipped_ratio_objective": True,
+            "ppo_one_epoch_only": True,
+            "candidate_strict_inference_checkpoint": True,
             "fixed_seed_reproducibility_scope": "conditional_on_identical_engine_observations",
         },
         "determinism": {
