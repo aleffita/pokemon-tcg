@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import math
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -373,6 +374,7 @@ def save_candidate_checkpoint(
     diagnostics: dict[str, Any],
     sample_manifest_content_sha256: str | None = None,
     artifact_paths: dict[str, str] | None = None,
+    experiment: str = "AR-009",
 ) -> str:
     """Save a strict portable inference checkpoint with experiment provenance."""
     arch_config = {
@@ -398,7 +400,7 @@ def save_candidate_checkpoint(
         "static_feature_contract": model_metadata.get("static_feature_contract"),
         "state_dict": model_state,
         "autoresearch": {
-            "experiment": "AR-009",
+            "experiment": experiment,
             "root_sha256": root_sha256,
             # These are file-byte hashes. The manifest's own ``sha256`` is a
             # separate canonical-content digest recorded below.
@@ -422,12 +424,38 @@ def _resolve_artifact_path(candidate_path: Path, value: Any, label: str) -> Path
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"candidate provenance is missing {label} path")
     path = Path(value)
-    return path if path.is_absolute() else candidate_path.parent / path
+    canonical_names = {
+        "sample-manifest": "sample.manifest.json",
+        "trajectory-bundle": "trajectory_bundle.pt.gz",
+    }
+    expected = canonical_names[label]
+    if path.is_absolute():
+        raise ValueError(f"candidate provenance {label} path must be relative")
+    if ".." in path.parts:
+        raise ValueError(f"candidate provenance {label} path contains traversal")
+    if path != Path(expected):
+        raise ValueError(
+            f"candidate provenance {label} path must be the canonical adjacent {expected}"
+        )
+    resolved = candidate_path.parent / path
+    if resolved.resolve(strict=False).parent != candidate_path.parent.resolve(strict=False):
+        raise ValueError(f"candidate provenance {label} path resolves outside candidate directory")
+    return resolved
+
+
+def _require_regular_file(path: Path, label: str) -> None:
+    if path.is_symlink():
+        raise ValueError(f"candidate provenance {label} must not be a symlink: {path}")
+    try:
+        mode = path.stat().st_mode
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"candidate provenance {label} is missing: {path}") from exc
+    if not stat.S_ISREG(mode):
+        raise ValueError(f"candidate provenance {label} must be a regular file: {path}")
 
 
 def _load_bundle_payload(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        raise FileNotFoundError(f"candidate provenance artifact is missing: {path}")
+    _require_regular_file(path, "trajectory bundle")
     try:
         raw = gzip.decompress(path.read_bytes())
         payload = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=True)
@@ -445,8 +473,7 @@ def validate_candidate_provenance(
 ) -> dict[str, Path]:
     """Fail closed before model loading if AR candidate evidence is detached."""
     candidate_path = Path(candidate_path)
-    if not candidate_path.is_file():
-        raise FileNotFoundError(f"candidate checkpoint does not exist: {candidate_path}")
+    _require_regular_file(candidate_path, "candidate checkpoint")
     try:
         payload = torch.load(candidate_path, map_location="cpu", weights_only=True)
     except Exception as exc:
@@ -482,10 +509,8 @@ def validate_candidate_provenance(
         artifacts.get("trajectory_bundle", "trajectory_bundle.pt.gz"),
         "trajectory-bundle",
     )
-    if not sample_manifest_path.is_file():
-        raise FileNotFoundError(f"candidate provenance sample manifest is missing: {sample_manifest_path}")
-    if not bundle_path.is_file():
-        raise FileNotFoundError(f"candidate provenance trajectory bundle is missing: {bundle_path}")
+    _require_regular_file(sample_manifest_path, "sample manifest")
+    _require_regular_file(bundle_path, "trajectory bundle")
     if sha256_file(sample_manifest_path) != sample_manifest_hash:
         raise ValueError("candidate sample-manifest file hash mismatch")
     if sha256_file(bundle_path) != bundle_hash:

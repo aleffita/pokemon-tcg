@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
+import io
 import json
 import runpy
 from pathlib import Path
@@ -118,6 +120,80 @@ def test_candidate_provenance_rejects_root_tamper(tmp_path):
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("sample_manifest", "/tmp/sample.manifest.json", "relative"),
+        ("trajectory_bundle", "../trajectory_bundle.pt.gz", "traversal"),
+    ],
+)
+def test_candidate_provenance_rejects_absolute_and_traversal_paths(
+    tmp_path, field, value, message
+):
+    candidate = _provenance_fixture(tmp_path)
+    payload = torch.load(candidate, map_location="cpu", weights_only=True)
+    payload["autoresearch"]["artifacts"][field] = value
+    torch.save(payload, candidate)
+    with pytest.raises(ValueError, match=message):
+        validate_candidate_provenance(
+            candidate,
+            approved_root_sha256=APPROVED_STAGE4_ROOT_SHA256,
+        )
+
+
+def test_candidate_provenance_rejects_symlink_artifact(tmp_path):
+    candidate = _provenance_fixture(tmp_path)
+    manifest_path = tmp_path / "sample.manifest.json"
+    real_manifest = tmp_path / "real.manifest.json"
+    real_manifest.write_bytes(manifest_path.read_bytes())
+    manifest_path.unlink()
+    manifest_path.symlink_to(real_manifest)
+    with pytest.raises(ValueError, match="sample manifest.*symlink"):
+        validate_candidate_provenance(
+            candidate,
+            approved_root_sha256=APPROVED_STAGE4_ROOT_SHA256,
+        )
+
+
+def test_candidate_provenance_rejects_manifest_content_tamper(tmp_path):
+    candidate = _provenance_fixture(tmp_path)
+    manifest_path = tmp_path / "sample.manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["deck_content_sha256"] = "f" * 64
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    payload = torch.load(candidate, map_location="cpu", weights_only=True)
+    payload["autoresearch"]["sample_manifest_sha256"] = sha256_file(manifest_path)
+    torch.save(payload, candidate)
+    with pytest.raises(ValueError, match="content hash"):
+        validate_candidate_provenance(
+            candidate,
+            approved_root_sha256=APPROVED_STAGE4_ROOT_SHA256,
+        )
+
+
+def test_candidate_provenance_rejects_bundle_manifest_mismatch(tmp_path):
+    candidate = _provenance_fixture(tmp_path)
+    bundle_path = tmp_path / "trajectory_bundle.pt.gz"
+    manifest = json.loads((tmp_path / "sample.manifest.json").read_text())
+    with gzip.GzipFile(fileobj=io.BytesIO(bundle_path.read_bytes())) as handle:
+        bundle_payload = torch.load(io.BytesIO(handle.read()), map_location="cpu", weights_only=True)
+    detached_manifest = dict(manifest)
+    detached_manifest["metadata_date"] = "2026-08-13"
+    bundle_hash = save_compressed_bundle(
+        bundle_path,
+        bundle_payload["samples"],
+        detached_manifest,
+    )
+    payload = torch.load(candidate, map_location="cpu", weights_only=True)
+    payload["autoresearch"]["bundle_sha256"] = bundle_hash
+    torch.save(payload, candidate)
+    with pytest.raises(ValueError, match="not linked"):
+        validate_candidate_provenance(
+            candidate,
+            approved_root_sha256=APPROVED_STAGE4_ROOT_SHA256,
+        )
+
+
 def test_candidate_provenance_rejects_missing_or_tampered_artifacts(tmp_path):
     candidate = _provenance_fixture(tmp_path)
     (tmp_path / "trajectory_bundle.pt.gz").unlink()
@@ -171,3 +247,34 @@ def test_opt_in_candidate_executes_first_choose_decision(tmp_path, monkeypatch):
     )
     assert calls, "choose() returned without a model forward"
     assert result == [0]
+
+
+def test_default_public_agent_behavior_does_not_enter_candidate_gate(monkeypatch):
+    monkeypatch.delenv("PTCG_MODEL_PATH", raising=False)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("default public behavior invoked candidate provenance")
+
+    monkeypatch.setattr(
+        "scripts.rl.ppo_micro_update.validate_candidate_provenance",
+        fail_if_called,
+    )
+    class _DefaultModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.parameter = torch.nn.Parameter(torch.zeros(1))
+
+    def default_loader(*args, **kwargs):
+        return _DefaultModel(), {
+            "nlayers": 0,
+            "scratch_registers": 0,
+            "inference_config": {
+                "bc_would_ko": False,
+                "prospective_planner": {"enabled": False},
+            },
+        }
+
+    monkeypatch.setattr("rl.policy_infer_torch.load_inference_checkpoint", default_loader)
+    namespace = runpy.run_path(str(PUBLIC_AGENT), run_name="ptcg_ar010_default_smoke")
+    assert namespace["_OPT_IN_MODEL_PATH"] is None
+    assert "_OPT_IN_PROVENANCE" not in namespace

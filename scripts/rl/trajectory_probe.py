@@ -429,7 +429,7 @@ def write_outputs(
     (output_dir / "trajectory.jsonl").write_text(jsonl)
     (output_dir / "trajectory.manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     lines = [
-        "AR-009 Stage4 PPO micro-update probe",
+        f"{manifest.get('experiment', 'AR-009')} Stage4 PPO micro-update probe",
         f"metadata_date={manifest['metadata_date']}",
         f"model_sha256={manifest['model_sha256']}",
         f"deck_content_sha256={manifest.get('deck_content_sha256', manifest.get('deck_sha256', ''))}",
@@ -437,6 +437,8 @@ def write_outputs(
         f"rows={manifest['row_count']}",
         f"trajectory_sha256={manifest['trajectory_sha256']}",
         f"sample_manifest_sha256={manifest.get('sample_manifest_sha256', '')}",
+        f"sample_manifest_content_sha256={manifest.get('sample_manifest_content_sha256', '')}",
+        f"bundle_sha256={manifest.get('bundle_sha256', '')}",
         f"candidate_sha256={manifest.get('candidate_sha256', '')}",
     ]
     for mode, counts in manifest["counts_by_mode"].items():
@@ -452,6 +454,7 @@ def run_probe(
     output_dir: Path = DEFAULT_OUTPUT,
     games_per_mode: int = 1,
     seed: int = 8008,
+    experiment: str = "AR-009",
 ) -> dict[str, Any]:
     if games_per_mode < 1 or games_per_mode > 2:
         raise ValueError("games_per_mode must be 1 or 2 for this bounded probe")
@@ -562,9 +565,11 @@ def run_probe(
         config=ppo_config,
         diagnostics=ppo_metrics,
         sample_manifest_content_sha256=str(sample_manifest["sha256"]),
+        experiment=experiment,
     )
     manifest = {
         "format": "ptcg-stage4-ppo-micro-update-v1",
+        "experiment": experiment,
         "metadata_date": meta_date,
         "checkpoint": str(checkpoint),
         "model_sha256": model_hash,
@@ -626,6 +631,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--games-per-mode", type=int, default=1, choices=(1, 2))
     parser.add_argument("--seed", type=int, default=8008)
+    parser.add_argument("--experiment", default="AR-009")
     return parser
 
 
@@ -638,6 +644,7 @@ def main() -> None:
         output_dir=args.output_dir,
         games_per_mode=args.games_per_mode,
         seed=args.seed,
+        experiment=args.experiment,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
 

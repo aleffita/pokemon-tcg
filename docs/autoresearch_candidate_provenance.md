@@ -12,11 +12,15 @@ An AR candidate payload must contain an `autoresearch` object with:
 - `sample_manifest_sha256`, the SHA-256 of the sample-manifest file bytes;
 - `sample_manifest_content_sha256`, the manifest's canonical-content digest;
 - `bundle_sha256`, the SHA-256 of the compressed trajectory-bundle file; and
-- `artifacts.sample_manifest` and `artifacts.trajectory_bundle`, relative to
-  the candidate directory unless an explicit absolute path is supplied.
+- `artifacts.sample_manifest` and `artifacts.trajectory_bundle`, set to the
+  canonical adjacent filenames `sample.manifest.json` and
+  `trajectory_bundle.pt.gz`.
 
-The manifest and compressed bundle must exist, match their recorded file
-hashes, carry the approved root hash, and contain identical manifest data.
+The candidate, manifest, and compressed bundle must be regular files rather
+than symlinks. The manifest and compressed bundle must be adjacent to the
+candidate, match their recorded file hashes, carry the approved root hash, and
+contain identical manifest data. Absolute paths, traversal components, and
+other artifact filenames are rejected before any artifact is opened.
 The bundle is checked in collection order, including the action and recurrent
 state digests plus an ordered digest entry for every model-input tensor. A
 changed, missing, stale, or detached artifact is rejected loudly before the
