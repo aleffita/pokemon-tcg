@@ -284,6 +284,25 @@ def test_opt_in_candidate_requires_matching_expected_sha(
         runpy.run_path(str(PUBLIC_AGENT), run_name="ptcg_ar012_expected_sha")
 
 
+def test_opt_in_candidate_rejects_relative_model_path_before_load_or_provenance(
+    tmp_path, monkeypatch
+):
+    candidate = _provenance_fixture(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PTCG_MODEL_PATH", candidate.name)
+    monkeypatch.setenv("PTCG_EXPECTED_MODEL_SHA256", sha256_file(candidate))
+    with pytest.raises(ValueError, match="absolute path"):
+        runpy.run_path(str(PUBLIC_AGENT), run_name="ptcg_ar013_relative_path")
+
+
+def test_opt_in_candidate_rejects_malformed_expected_sha(tmp_path, monkeypatch):
+    candidate = _provenance_fixture(tmp_path)
+    monkeypatch.setenv("PTCG_MODEL_PATH", str(candidate))
+    monkeypatch.setenv("PTCG_EXPECTED_MODEL_SHA256", "not-a-sha256")
+    with pytest.raises(ValueError, match="64-character hexadecimal"):
+        runpy.run_path(str(PUBLIC_AGENT), run_name="ptcg_ar013_malformed_sha")
+
+
 def test_default_public_agent_behavior_does_not_enter_candidate_gate(monkeypatch):
     monkeypatch.delenv("PTCG_MODEL_PATH", raising=False)
     monkeypatch.setenv("PTCG_EXPECTED_MODEL_SHA256", "not-used-by-default-path")

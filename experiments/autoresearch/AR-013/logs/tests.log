@@ -1,0 +1,20 @@
+AR-013 validation log
+
+$ uv run --locked pytest -q tests/test_ar010_candidate_path.py tests/test_trajectory_probe.py
+..........................                                               [100%]
+26 passed in 1.95s
+
+$ uv run --locked python -m py_compile public_agents/submissions/latest-submission-300elo/main.py scripts/rl/ppo_micro_update.py tests/test_ar010_candidate_path.py tests/test_trajectory_probe.py
+exit=0
+
+$ git diff --check
+exit=0
+
+Receipt hash verification before staging:
+candidate.pt=e6efe207d4b08dd458b40be14297b142ca2987b2238f97d807b6bf85320c7773
+sample.manifest.json=b5c273f75c8bee147a16fbde49b8ca5fed0c017fa656b5f29cf1d480db051256
+trajectory_bundle.pt.gz=f2f6ca653d752d91fc17b61298c3dfa09aac1ad5741f0d4c6b71ba065aedbbbf
+stage4_root.pkl=b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b
+stage4_root_fp32.tar.gz=32add97ad0848cc097a983a45a75a935532a807645b9e36d972bd6fee1c49751
+
+No tournament, packaging, or submission was run.

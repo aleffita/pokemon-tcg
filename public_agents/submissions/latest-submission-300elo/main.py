@@ -51,6 +51,10 @@ if _PROJECT_ROOT not in sys.path:
 # Preload the repository package only for that explicit path, leaving the
 # default submission import path and behavior unchanged.
 _OPT_IN_MODEL_PATH = os.environ.get("PTCG_MODEL_PATH")
+if _OPT_IN_MODEL_PATH and not os.path.isabs(_OPT_IN_MODEL_PATH):
+    raise ValueError(
+        "PTCG_MODEL_PATH must be an absolute path when opt-in is enabled"
+    )
 if _OPT_IN_MODEL_PATH:
     _REPOSITORY_ROOT = os.path.abspath(os.path.join(_PROJECT_ROOT, "../../.."))
     sys.path = [entry for entry in sys.path if os.path.abspath(entry or os.getcwd()) != _PROJECT_ROOT]

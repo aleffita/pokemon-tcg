@@ -4,6 +4,7 @@ AR-012 candidate preflight receipt
 receipt_version=AR-012-v1
 repository_root=/Users/alefita/workdir/pokemon-tcg
 repository_scope=repository-local only; do not package or submit this candidate
+artifact_tracking=the five receipt-referenced binary artifacts are tracked in Git by the AR-013 commit; bytes were not modified
 
 candidate_path=/Users/alefita/workdir/pokemon-tcg/experiments/autoresearch/AR-010/candidate.pt
 candidate_sha256=e6efe207d4b08dd458b40be14297b142ca2987b2238f97d807b6bf85320c7773
@@ -32,7 +33,7 @@ tournament_constraints=
   absolute model path required: use the candidate_path above, not a relative path.
   no-sweep required: pass the repository tournament's explicit --no-sweep option.
   no packaging, no submission, and no remote or external tournament side effect.
-  candidate, manifest, and bundle remain local binary artifacts and are not committed.
+  candidate, manifest, bundle, and frozen Stage 4 root artifacts are tracked repository-local binary artifacts; no package or submission is authorized.
 
 tournament_status=not_run
 tournament_command_approval=conditional preflight contract only; separate operator authorization required
