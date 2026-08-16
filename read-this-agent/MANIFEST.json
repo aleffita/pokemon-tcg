@@ -1,0 +1,17 @@
+{
+  "title": "Pokemon TCG Final Research Compendium",
+  "generated_at": "2026-08-16",
+  "files": [
+    "00_READ_FIRST.md",
+    "PROGRAM.md",
+    "01_MATHEMATICAL_THESIS.md",
+    "02_AUTORESEARCH_STATE_REVIEW.md",
+    "03_SELFPLAY_GRPO_SPEC.md",
+    "04_ROPEND_SPEC.md",
+    "05_TOURNAMENT_OPTIMIZATION.md",
+    "06_GITFLOW_AND_ORCHESTRATION.md",
+    "07_GOAL_BOOTSTRAP_PROMPT.md"
+  ],
+  "central_axis": "Stage4 -> RoPE-ND -> true recurrent self-play -> trajectory/sibling GRPO -> tournament -> autoresearch",
+  "explicit_exclusion": "No HOPE/Nested Learning; historical BC ETL is not the critical path."
+}
