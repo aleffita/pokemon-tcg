@@ -63,8 +63,13 @@ def _manifest_rows(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _write_report(output_dir: Path, manifest: dict[str, Any], metrics: dict[str, Any]) -> None:
-    report = f"""# {EXPERIMENT} - grouped dynamic-K sibling-fiber GRPO
+def _write_report(
+    output_dir: Path,
+    manifest: dict[str, Any],
+    metrics: dict[str, Any],
+    experiment: str,
+) -> None:
+    report = f"""# {experiment} - grouped dynamic-K sibling-fiber GRPO
 
 Captured on {manifest['captured_at']} from frozen Stage 4 root `{manifest['root_sha256']}`.
 
@@ -118,8 +123,13 @@ before interpreting or promoting the candidate.
     (output_dir / "report.md").write_text(report)
 
 
-def _write_capsule(root: Path, manifest: dict[str, Any], metrics: dict[str, Any]) -> None:
-    capsule = f"""# State Capsule 021 - grouped dynamic-K sibling-fiber GRPO
+def _write_capsule(
+    root: Path,
+    manifest: dict[str, Any],
+    metrics: dict[str, Any],
+    experiment: str,
+) -> None:
+    capsule = f"""# State Capsule {experiment[-3:]} - grouped dynamic-K sibling-fiber GRPO
 
 Captured {manifest['captured_at']}.
 
@@ -138,12 +148,12 @@ Captured {manifest['captured_at']}.
 
 ## Evidence
 
-- `experiments/autoresearch/{EXPERIMENT}/report.md`
-- `experiments/autoresearch/{EXPERIMENT}/manifest.json`
-- `experiments/autoresearch/{EXPERIMENT}/metrics.json`
-- `experiments/autoresearch/{EXPERIMENT}/sample.manifest.json`
-- `experiments/autoresearch/{EXPERIMENT}/trajectory_bundle.pt.gz`
-- `experiments/autoresearch/{EXPERIMENT}/candidate.pt`
+- `experiments/autoresearch/{experiment}/report.md`
+- `experiments/autoresearch/{experiment}/manifest.json`
+- `experiments/autoresearch/{experiment}/metrics.json`
+- `experiments/autoresearch/{experiment}/sample.manifest.json`
+- `experiments/autoresearch/{experiment}/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/{experiment}/candidate.pt`
 
 ## Metrics
 
@@ -159,7 +169,7 @@ Captured {manifest['captured_at']}.
 Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
 Keep the root fallback unless grouped sibling-fiber evidence wins that gate.
 """
-    (root / f"STATE_CAPSULE_{EXPERIMENT[-3:]}.md").write_text(capsule)
+    (root / f"STATE_CAPSULE_{experiment[-3:]}.md").write_text(capsule)
 
 
 def run_ar021(
@@ -172,6 +182,7 @@ def run_ar021(
     groups_per_matchup: int = 2,
     k_max: int = 4,
     seed: int = 21021,
+    experiment: str = EXPERIMENT,
 ) -> dict[str, Any]:
     if groups_per_matchup < 1:
         raise ValueError("--groups-per-matchup must be at least one")
@@ -281,7 +292,7 @@ def run_ar021(
         sample_manifest_content_sha256=sample_manifest["sha256"],
         config=config,
         diagnostics=metrics,
-        experiment=EXPERIMENT,
+        experiment=experiment,
     )
     preflight_artifacts = validate_candidate_provenance(
         candidate_path,
@@ -305,7 +316,7 @@ def run_ar021(
     all_substeps = sum(int(item["substeps"]) for item in collections)
     manifest: dict[str, Any] = {
         "format": SIBLING_FORMAT,
-        "experiment": EXPERIMENT,
+        "experiment": experiment,
         "captured_at": captured_at,
         "code_commit": _git_commit(),
         "root_checkpoint": str(checkpoint),
@@ -397,12 +408,12 @@ def run_ar021(
     }
     _write_json(output_dir / "manifest.json", manifest)
     _write_json(output_dir / "metrics.json", metrics)
-    _write_report(output_dir, manifest, metrics)
-    _write_capsule(Path("experiments/autoresearch"), manifest, metrics)
+    _write_report(output_dir, manifest, metrics, experiment)
+    _write_capsule(Path("experiments/autoresearch"), manifest, metrics, experiment)
     (output_dir / "logs" / "run.log").write_text(
         "\n".join(
             [
-                f"{EXPERIMENT} grouped dynamic-K sibling-fiber GRPO",
+                f"{experiment} grouped dynamic-K sibling-fiber GRPO",
                 f"group_count={manifest['group_count']}",
                 f"effective_group_sizes={manifest['effective_group_sizes']}",
                 f"returns={manifest['group_returns']}",
@@ -436,6 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--groups-per-matchup", type=int, default=2)
     parser.add_argument("--k-max", type=int, default=4)
     parser.add_argument("--seed", type=int, default=21021)
+    parser.add_argument("--experiment", type=str, default=EXPERIMENT)
     return parser
 
 
@@ -450,6 +462,7 @@ def main() -> None:
         groups_per_matchup=args.groups_per_matchup,
         k_max=args.k_max,
         seed=args.seed,
+        experiment=args.experiment,
     ), indent=2, sort_keys=True))
 
 
