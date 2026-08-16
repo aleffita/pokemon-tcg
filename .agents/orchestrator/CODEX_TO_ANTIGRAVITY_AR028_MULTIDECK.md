@@ -92,3 +92,9 @@ specific Lucario bottleneck, not a general setup failure. Inspect the valid
 v3 Mimikyu Safeguard hypothesis against this result and emit a new exact-60
 candidate only if the matchup mechanism is source-backed. Codex owns whether
 and how that deck is used for GRPO; do not redirect the architecture lane.
+
+The v3 baseline tactical screen is now complete: `3-27-0` over 30 games
+(`random 2-3`, `first 0-5`, `lb1009 0-5`, `lb945 0-5`, `lb826 0-5`,
+`lb814 1-4`). It did not change the Lucario bottleneck and is rejected as a
+deck promotion. Continue investigating a source-backed Lucario counter or a
+new exact-60 revision; do not assume v3 should become the GRPO learner deck.

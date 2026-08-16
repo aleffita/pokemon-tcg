@@ -23,8 +23,14 @@ Captured: 2026-08-16
   policies; deck v3 is now a valid exact-60 hypothesis and is next for a
   tactical screen. Candidate loading now resolves relative `PTCG_MODEL_PATH`
   from project root (`14c0689`).
-- Next action: screen v3, then use the strongest valid deck hypothesis in a
-  fresh multi-deck GRPO panel; preserve root fallback until absolute panel
+- AR-028 v3 deck screen: exact-60 Mimikyu Safeguard candidate under baseline
+  FP32 policy scored `3-27-0` (10%) over 30 games; random `2-3`, first `0-5`,
+  lb1009 `0-5`, lb945 `0-5`, lb826 `0-5`, lb814 `1-4`. It did not change the
+  Lucario bottleneck and is rejected as a deck promotion.
+- Next action: benchmark the existing adaptive-compute inference modes (b1
+  latent refinement and b2 latent perturbation ensemble) on the Lucario/
+  Alakazam surface, then use the strongest valid mode/deck pair for the next
+  multi-deck GRPO collection. Preserve root fallback until absolute panel
   strength improves.
 - AR-018 code commits: `434d3f6`, repaired by `28c2b96` and `4cfe5e8`
 - AR-018 status: corrected gate passed review; keep foundation
