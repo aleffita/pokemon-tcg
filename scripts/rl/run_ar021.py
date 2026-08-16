@@ -8,6 +8,7 @@ import datetime as dt
 import hashlib
 import json
 from pathlib import Path
+import shutil
 from typing import Any
 
 import numpy as np
@@ -134,6 +135,15 @@ def deck_relative_group_advantages(
             }
         )
     return advantages, summaries
+
+
+def _pool_deck_paths(pool_dir: Path | None, limit: int) -> list[Path]:
+    if pool_dir is None or not pool_dir.exists():
+        return []
+    if limit < 0:
+        raise ValueError("--deck-pool-limit must be non-negative")
+    paths = sorted(path for path in pool_dir.glob("*.json") if path.is_file())
+    return paths[:limit]
 
 
 def _write_report(
@@ -271,6 +281,12 @@ def run_ar021(
     learning_rate: float = 5e-6,
     ropend: bool = False,
     ropend_init_scale: float = 0.0,
+    prospective_aux_weight: float = 0.2,
+    deck_aux_weight: float = 0.1,
+    aux_batch_size: int = 256,
+    deck_pool_dir: Path | None = Path("experiments/decks/swarm/inbox"),
+    deck_pool_limit: int = 8,
+    swarm_results_dir: Path = Path("experiments/decks/swarm/results"),
     seed: int = 21021,
     experiment: str = EXPERIMENT,
 ) -> dict[str, Any]:
@@ -286,18 +302,36 @@ def run_ar021(
         raise ValueError("--deck-relative-weight must be finite and non-negative")
     if not np.isfinite(learning_rate) or learning_rate <= 0.0:
         raise ValueError("--learning-rate must be finite and positive")
+    if not np.isfinite(prospective_aux_weight) or prospective_aux_weight < 0.0:
+        raise ValueError("--prospective-aux-weight must be finite and non-negative")
+    if not np.isfinite(deck_aux_weight) or deck_aux_weight < 0.0:
+        raise ValueError("--deck-aux-weight must be finite and non-negative")
+    if aux_batch_size < 1:
+        raise ValueError("--aux-batch-size must be at least one")
     validate_meta_date(meta_date)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logs").mkdir(parents=True, exist_ok=True)
-    learner_paths = learner_deck_paths or [deck_path]
+    learner_paths = list(learner_deck_paths or [deck_path])
+    learner_paths.extend(_pool_deck_paths(deck_pool_dir, deck_pool_limit))
     if not learner_paths:
         raise ValueError("at least one learner deck is required")
     learner_decks = []
+    seen_deck_content: set[str] = set()
     for path in learner_paths:
         deck = load_deck(path)
-        learner_decks.append(
-            (path, deck, deck_content_sha256(deck), sha256_file(path))
-        )
+        content_hash = deck_content_sha256(deck)
+        if content_hash in seen_deck_content:
+            continue
+        seen_deck_content.add(content_hash)
+        learner_decks.append((path, deck, content_hash, sha256_file(path)))
+    learner_paths = [item[0] for item in learner_decks]
+    deck_snapshot_dir = output_dir / "decks"
+    deck_snapshot_dir.mkdir(parents=True, exist_ok=True)
+    deck_snapshots: list[str] = []
+    for index, (path, _deck, content_hash, _source_hash) in enumerate(learner_decks):
+        snapshot = deck_snapshot_dir / f"{index:03d}_{content_hash[:12]}.json"
+        shutil.copy2(path, snapshot)
+        deck_snapshots.append(str(snapshot))
     learner_content_hashes = [item[2] for item in learner_decks]
     learner_source_hashes = [item[3] for item in learner_decks]
     aggregate_content_hash = _aggregate_hash(learner_content_hashes)
@@ -420,6 +454,9 @@ def run_ar021(
         update_epochs=update_epochs,
         deck_group_advantages=deck_group_advantages,
         deck_relative_weight=deck_relative_weight,
+        prospective_aux_weight=prospective_aux_weight,
+        deck_aux_weight=deck_aux_weight,
+        aux_batch_size=aux_batch_size,
     )
     config = {
         "algorithm": "sibling_fiber_grpo_grouped",
@@ -430,6 +467,9 @@ def run_ar021(
         "matchup_count": len(opponent_paths),
         "learner_deck_count": len(learner_decks),
         "learner_deck_paths": [str(path) for path, _deck, _hash, _source_hash in learner_decks],
+        "learner_deck_snapshots": deck_snapshots,
+        "deck_pool_dir": str(deck_pool_dir) if deck_pool_dir is not None else None,
+        "deck_pool_limit": deck_pool_limit,
         "learner_deck_content_sha256": learner_content_hashes,
         "learner_deck_source_file_sha256": learner_source_hashes,
         "logical_matchup_count": len(learner_decks) * len(opponent_paths),
@@ -442,6 +482,11 @@ def run_ar021(
         "learning_rate": learning_rate,
         "update_epochs": update_epochs,
         "deck_relative_weight": deck_relative_weight,
+        "prospective_aux_weight": prospective_aux_weight,
+        "deck_aux_weight": deck_aux_weight,
+        "aux_batch_size": aux_batch_size,
+        "prospective_targets": "same-turn KO/prize plus future prize margin and terminal outcome",
+        "deck_target": "first recurrent state masked deck-card distribution with tied card embeddings",
         "deck_relative_cohorts": deck_cohorts,
         "advantage_epsilon": 1e-8,
         "precision": "FP32",
@@ -526,10 +571,11 @@ def run_ar021(
         "learner_decks": [
             {
                 "path": str(path),
+                "snapshot": deck_snapshots[index],
                 "content_sha256": content_hash,
                 "source_file_sha256": source_hash,
             }
-            for path, _deck, content_hash, source_hash in learner_decks
+            for index, (path, _deck, content_hash, source_hash) in enumerate(learner_decks)
         ],
         "group_count": len(grouped_trajectories),
         "groups_per_matchup": groups_per_matchup,
@@ -621,6 +667,36 @@ def run_ar021(
     }
     _write_json(output_dir / "manifest.json", manifest)
     _write_json(output_dir / "metrics.json", metrics)
+    swarm_result = {
+        "format": "ptcg-deck-swarm-result-v1",
+        "experiment": experiment,
+        "captured_at": captured_at,
+        "candidate": str(candidate_path),
+        "candidate_sha256": candidate_hash,
+        "parent_sha256": parent_hash,
+        "learner_decks": manifest["learner_decks"],
+        "groups": manifest["groups"],
+        "deck_relative_cohorts": deck_cohorts,
+        "throughput": {
+            "games": all_fibers,
+            "logical_decisions": all_decisions,
+            "collection_seconds": manifest["collection_seconds"],
+            "games_per_second": manifest["collection_games_per_second"],
+            "decisions_per_second": manifest["collection_decisions_per_second"],
+            "update_seconds": metrics["update_seconds"],
+        },
+        "training": {
+            "optimizer_steps": metrics["optimizer_steps"],
+            "zero_variance_groups": metrics["zero_variance_groups"],
+            "credited_logical_actions": metrics["credited_logical_actions"],
+            "prospective_auxiliary": metrics.get("prospective_auxiliary"),
+            "deck_reconstruction": metrics.get("deck_reconstruction"),
+        },
+        "tournament": manifest["tournament"],
+    }
+    swarm_results_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(swarm_results_dir / f"{experiment}.json", swarm_result)
+    _write_json(swarm_results_dir / "latest.json", swarm_result)
     _write_report(output_dir, manifest, metrics, experiment)
     _write_capsule(Path("experiments/autoresearch"), manifest, metrics, experiment)
     (output_dir / "logs" / "run.log").write_text(
@@ -683,6 +759,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--ropend", action="store_true")
     parser.add_argument("--ropend-init-scale", type=float, default=0.0)
+    parser.add_argument("--prospective-aux-weight", type=float, default=0.2)
+    parser.add_argument("--deck-aux-weight", type=float, default=0.1)
+    parser.add_argument("--aux-batch-size", type=int, default=256)
+    parser.add_argument(
+        "--deck-pool-dir",
+        type=Path,
+        default=Path("experiments/decks/swarm/inbox"),
+    )
+    parser.add_argument("--deck-pool-limit", type=int, default=8)
+    parser.add_argument(
+        "--swarm-results-dir",
+        type=Path,
+        default=Path("experiments/decks/swarm/results"),
+    )
     parser.add_argument("--seed", type=int, default=21021)
     parser.add_argument("--experiment", type=str, default=EXPERIMENT)
     return parser
@@ -707,6 +797,12 @@ def main() -> None:
         learning_rate=args.learning_rate,
         ropend=args.ropend,
         ropend_init_scale=args.ropend_init_scale,
+        prospective_aux_weight=args.prospective_aux_weight,
+        deck_aux_weight=args.deck_aux_weight,
+        aux_batch_size=args.aux_batch_size,
+        deck_pool_dir=args.deck_pool_dir,
+        deck_pool_limit=args.deck_pool_limit,
+        swarm_results_dir=args.swarm_results_dir,
         seed=args.seed,
         experiment=args.experiment,
     ), indent=2, sort_keys=True))

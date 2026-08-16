@@ -57,6 +57,150 @@ def _finite(value: torch.Tensor | float) -> bool:
     return math.isfinite(float(value))
 
 
+def _prospective_auxiliary_examples(
+    trajectory_groups: list[list[dict[str, Any]]],
+) -> tuple[list[tuple[dict[str, Any], dict[str, float]]], list[dict[str, Any]]]:
+    """Derive dense future targets and one first-state deck target per fiber group."""
+    prospective: list[tuple[dict[str, Any], dict[str, float]]] = []
+    deck_examples: list[dict[str, Any]] = []
+    for group in trajectory_groups:
+        if group and group[0]["decisions"]:
+            deck_examples.append(group[0]["decisions"][0][0])
+        for trajectory in group:
+            decisions = trajectory["decisions"]
+            samples = [decision[0] for decision in decisions]
+            if not samples:
+                continue
+            scalars = [sample["model_input"]["cls_scalars"][0].to(torch.float32) for sample in samples]
+            turns = [int(round(float(value[0].item()) * 50.0)) for value in scalars]
+            own_prizes = [float(value[9].item()) * 6.0 for value in scalars]
+            opp_prizes = [float(value[10].item()) * 6.0 for value in scalars]
+            terminal_return = float(trajectory["terminal_return"])
+            for decision_index, sample in enumerate(samples):
+                end = decision_index
+                while end + 1 < len(samples) and turns[end + 1] == turns[decision_index]:
+                    end += 1
+                own_taken_turn = own_prizes[decision_index] - own_prizes[end]
+                opp_taken_turn = opp_prizes[decision_index] - opp_prizes[end]
+                future_prize_margin = (
+                    own_prizes[decision_index]
+                    - own_prizes[-1]
+                    - opp_prizes[decision_index]
+                    + opp_prizes[-1]
+                ) / 6.0
+                prospective.append(
+                    (
+                        sample,
+                        {
+                            "ko": float(abs(own_taken_turn) + abs(opp_taken_turn) > 0.5),
+                            "prize": float(own_taken_turn - opp_taken_turn),
+                            "terminal": float(decision_index == len(samples) - 1),
+                            "return": float(terminal_return + future_prize_margin),
+                        },
+                    )
+                )
+    return prospective, deck_examples
+
+
+def _batch_aux_samples(samples: list[dict[str, Any]]) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+    keys = tuple(samples[0]["model_input"])
+    model_input = {
+        key: torch.cat([sample["model_input"][key].detach().to("cpu") for sample in samples], dim=0)
+        for key in keys
+    }
+    memories = torch.cat(
+        [sample["memory_input"].detach().to(device="cpu", dtype=torch.float32) for sample in samples],
+        dim=0,
+    )
+    return model_input, memories
+
+
+def _backward_prospective_auxiliary(
+    model: torch.nn.Module,
+    examples: list[tuple[dict[str, Any], dict[str, float]]],
+    *,
+    weight: float,
+    batch_size: int,
+) -> dict[str, float]:
+    if weight <= 0.0 or not examples:
+        return {"loss": 0.0, "batches": 0, "examples": len(examples)}
+    batch_count = math.ceil(len(examples) / batch_size)
+    component_sums = {"ko": 0.0, "prize": 0.0, "terminal": 0.0, "return": 0.0}
+    total_loss = 0.0
+    for start in range(0, len(examples), batch_size):
+        batch = examples[start : start + batch_size]
+        model_input, memories = _batch_aux_samples([item[0] for item in batch])
+        predictions = model.aux_predictions(model_input, memory_in=memories)
+        targets = {
+            name: torch.as_tensor([item[1][name] for item in batch], dtype=torch.float32)
+            for name in component_sums
+        }
+        losses = {
+            "ko": torch.nn.functional.binary_cross_entropy_with_logits(
+                predictions["ko_logit"], targets["ko"]
+            ),
+            "prize": torch.nn.functional.smooth_l1_loss(
+                predictions["prize_pred"], targets["prize"]
+            ),
+            "terminal": torch.nn.functional.binary_cross_entropy_with_logits(
+                predictions["terminal_logit"], targets["terminal"]
+            ),
+            "return": torch.nn.functional.smooth_l1_loss(
+                predictions["return_pred"], targets["return"]
+            ),
+        }
+        combined = 0.5 * losses["ko"] + 0.5 * losses["prize"] + 0.25 * losses["terminal"] + losses["return"]
+        ((weight / batch_count) * combined).backward()
+        total_loss += float(combined.detach().item())
+        for name, value in losses.items():
+            component_sums[name] += float(value.detach().item())
+    return {
+        "loss": total_loss / batch_count,
+        "batches": batch_count,
+        "examples": len(examples),
+        **{f"{name}_loss": value / batch_count for name, value in component_sums.items()},
+    }
+
+
+def _backward_deck_reconstruction(
+    model: torch.nn.Module,
+    samples: list[dict[str, Any]],
+    *,
+    weight: float,
+    batch_size: int,
+    epoch: int,
+) -> dict[str, float]:
+    if weight <= 0.0 or not samples:
+        return {"loss": 0.0, "batches": 0, "examples": len(samples)}
+    batch_count = math.ceil(len(samples) / batch_size)
+    total_loss = 0.0
+    for start in range(0, len(samples), batch_size):
+        batch = samples[start : start + batch_size]
+        model_input, memories = _batch_aux_samples(batch)
+        deck_ids = model_input["self_deck_id"].clone()
+        valid = deck_ids > 0
+        columns = torch.arange(deck_ids.shape[1]).unsqueeze(0)
+        masked = valid & ((columns + epoch) % 5 == 0)
+        model_input["self_deck_id"] = deck_ids.masked_fill(masked, 0)
+        if "self_deck_meta_bucket" in model_input:
+            model_input["self_deck_meta_bucket"] = model_input[
+                "self_deck_meta_bucket"
+            ].masked_fill(masked, 0)
+        logits = model.deck_card_logits(model_input, memory_in=memories)
+        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+        token_loss = -log_probs.gather(1, deck_ids.clamp_min(0))
+        per_example = (token_loss * valid).sum(1) / valid.sum(1).clamp_min(1)
+        loss = per_example.mean()
+        ((weight / batch_count) * loss).backward()
+        total_loss += float(loss.detach().item())
+    return {
+        "loss": total_loss / batch_count,
+        "batches": batch_count,
+        "examples": len(samples),
+        "masked_fraction": 0.2,
+    }
+
+
 def _input_digests(model_input: dict[str, torch.Tensor]) -> list[dict[str, str]]:
     return [
         {"name": name, "sha256": digest_tensor(value)}
@@ -736,6 +880,9 @@ def sibling_fiber_grpo_update_groups(
     update_epochs: int = 1,
     deck_group_advantages: list[float] | None = None,
     deck_relative_weight: float = 0.0,
+    prospective_aux_weight: float = 0.0,
+    deck_aux_weight: float = 0.0,
+    aux_batch_size: int = 256,
 ) -> dict[str, Any]:
     """Apply repeated clipped updates over sibling and inter-deck credit.
 
@@ -760,6 +907,16 @@ def sibling_fiber_grpo_update_groups(
         raise ValueError("update_epochs must be at least one")
     if not math.isfinite(deck_relative_weight) or deck_relative_weight < 0.0:
         raise ValueError("deck_relative_weight must be finite and non-negative")
+    if not math.isfinite(prospective_aux_weight) or prospective_aux_weight < 0.0:
+        raise ValueError("prospective_aux_weight must be finite and non-negative")
+    if not math.isfinite(deck_aux_weight) or deck_aux_weight < 0.0:
+        raise ValueError("deck_aux_weight must be finite and non-negative")
+    if aux_batch_size < 1:
+        raise ValueError("aux_batch_size must be at least one")
+    if prospective_aux_weight > 0.0 and not hasattr(model, "aux_predictions"):
+        raise ValueError("prospective auxiliary training requires model.aux_predictions")
+    if deck_aux_weight > 0.0 and not hasattr(model, "deck_card_logits"):
+        raise ValueError("deck reconstruction requires model.deck_card_logits")
     if deck_group_advantages is None:
         deck_group_advantages = [0.0] * len(trajectory_groups)
     if len(deck_group_advantages) != len(trajectory_groups):
@@ -817,7 +974,14 @@ def sibling_fiber_grpo_update_groups(
         )
         prepared_groups.append((trajectories, expected_mapping, branch_mask, credit, group_stats))
 
-    if total_active == 0:
+    if prospective_aux_weight > 0.0 or deck_aux_weight > 0.0:
+        prospective_examples, deck_examples = _prospective_auxiliary_examples(trajectory_groups)
+    else:
+        prospective_examples, deck_examples = [], []
+    auxiliary_signal = (
+        prospective_aux_weight > 0.0 and bool(prospective_examples)
+    ) or (deck_aux_weight > 0.0 and bool(deck_examples))
+    if total_active == 0 and not auxiliary_signal:
         # A round-robin stratum can be completely outcome-homogeneous even
         # when every fiber and provenance invariant is valid. Treat that as
         # an observed no-signal update, matching the single-group fail-closed
@@ -866,6 +1030,10 @@ def sibling_fiber_grpo_update_groups(
             "deck_relative_credit": deck_relative_weight > 0.0,
             "deck_relative_weight": deck_relative_weight,
             "deck_group_advantages": [float(value) for value in deck_group_advantages],
+            "prospective_aux_weight": prospective_aux_weight,
+            "deck_aux_weight": deck_aux_weight,
+            "prospective_aux_examples": len(prospective_examples),
+            "deck_aux_examples": len(deck_examples),
             "loss": 0.0,
             "policy_loss": 0.0,
             "gradient_norm": 0.0,
@@ -884,19 +1052,20 @@ def sibling_fiber_grpo_update_groups(
     credit = torch.cat(credit_parts)
     branch_mask = torch.cat(branch_mask_parts)
     active = credit != 0.0
-    if not bool(active.any().item()):
-        raise ValueError("sibling update has no credited logical decisions")
     zero_variance_groups = sum(bool(item["zero_variance"]) for item in group_stats_list)
     epoch_metrics: list[dict[str, Any]] = []
     last_learner = last_behavior = last_ratio = None
     last_policy_loss = 0.0
     last_gradient_norm = torch.tensor(0.0)
+    last_aux_metrics: dict[str, Any] = {}
+    last_deck_metrics: dict[str, Any] = {}
     for epoch in range(update_epochs):
         optimizer.zero_grad(set_to_none=True)
         learner_parts: list[torch.Tensor] = []
         behavior_parts: list[torch.Tensor] = []
         surrogate_sums: list[torch.Tensor] = []
-        for trajectories, expected_mapping, _branch_mask, group_credit, _group_stats in prepared_groups:
+        policy_groups = prepared_groups if total_active > 0 else []
+        for trajectories, expected_mapping, _branch_mask, group_credit, _group_stats in policy_groups:
             # Recompute one group at a time so multi-epoch training never
             # retains the full rollout graph. The stored behavior logprobs are
             # immutable; only learner logprobs change across epochs.
@@ -925,17 +1094,32 @@ def sibling_fiber_grpo_update_groups(
             behavior_parts.append(behavior.detach())
             del learner, behavior, decision_mapping, _substep_mapping, ratio, clipped, surrogate
 
-        learner_epoch = torch.cat(learner_parts)
-        behavior_epoch = torch.cat(behavior_parts)
+        learner_epoch = torch.cat(learner_parts) if learner_parts else torch.empty(0)
+        behavior_epoch = torch.cat(behavior_parts) if behavior_parts else torch.empty(0)
         ratio_epoch = torch.exp(learner_epoch - behavior_epoch)
-        if epoch == 0:
+        if epoch == 0 and total_active > 0:
             identity_error = float((ratio_epoch[active] - 1.0).abs().max().item())
             if identity_error > 5e-5:
                 raise ValueError(
                     f"initial learner/behavior ratio is not identity: max_error={identity_error}"
                 )
-        surrogate_total = torch.stack(surrogate_sums).sum()
-        policy_loss_value = -float(surrogate_total.item()) / float(total_active)
+        surrogate_total = torch.stack(surrogate_sums).sum() if surrogate_sums else torch.tensor(0.0)
+        policy_loss_value = (
+            -float(surrogate_total.item()) / float(total_active) if total_active > 0 else 0.0
+        )
+        last_aux_metrics = _backward_prospective_auxiliary(
+            model,
+            prospective_examples,
+            weight=prospective_aux_weight,
+            batch_size=aux_batch_size,
+        )
+        last_deck_metrics = _backward_deck_reconstruction(
+            model,
+            deck_examples,
+            weight=deck_aux_weight,
+            batch_size=aux_batch_size,
+            epoch=epoch,
+        )
         gradient_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         if not _finite(gradient_norm):
             raise ValueError("sibling-fiber gradient norm is non-finite")
@@ -944,18 +1128,28 @@ def sibling_fiber_grpo_update_groups(
             {
                 "epoch": epoch + 1,
                 "policy_loss": policy_loss_value,
+                "prospective_aux_loss": last_aux_metrics["loss"],
+                "deck_aux_loss": last_deck_metrics["loss"],
                 "gradient_norm": float(gradient_norm.detach().item()),
-                "ratio_mean_pre_step": float(ratio_epoch[active].mean().item()),
-                "ratio_min_pre_step": float(ratio_epoch[active].min().item()),
-                "ratio_max_pre_step": float(ratio_epoch[active].max().item()),
+                "ratio_mean_pre_step": (
+                    float(ratio_epoch[active].mean().item()) if total_active > 0 else None
+                ),
+                "ratio_min_pre_step": (
+                    float(ratio_epoch[active].min().item()) if total_active > 0 else None
+                ),
+                "ratio_max_pre_step": (
+                    float(ratio_epoch[active].max().item()) if total_active > 0 else None
+                ),
                 "clip_fraction_pre_step": float(
                     (
                         (ratio_epoch[active] < 1.0 - clip_epsilon)
                         | (ratio_epoch[active] > 1.0 + clip_epsilon)
                     ).to(torch.float32).mean().item()
-                ),
-                "approx_kl_behavior_pre_step": float(
-                    (behavior_epoch[active] - learner_epoch[active]).mean().item()
+                ) if total_active > 0 else 0.0,
+                "approx_kl_behavior_pre_step": (
+                    float((behavior_epoch[active] - learner_epoch[active]).mean().item())
+                    if total_active > 0
+                    else 0.0
                 ),
                 **_parameter_delta(model, root_reference),
             }
@@ -968,11 +1162,21 @@ def sibling_fiber_grpo_update_groups(
     optimizer_steps = update_epochs
     update_seconds = time.perf_counter() - started
     assert last_learner is not None and last_behavior is not None and last_ratio is not None
-    loss_value = last_policy_loss
+    loss_value = (
+        last_policy_loss
+        + prospective_aux_weight * float(last_aux_metrics.get("loss", 0.0))
+        + deck_aux_weight * float(last_deck_metrics.get("loss", 0.0))
+    )
+    logical_decisions = sum(
+        len(trajectory["decisions"])
+        for trajectories in trajectory_groups
+        for trajectory in trajectories
+    )
     metrics: dict[str, Any] = {
         "algorithm": "sibling_fiber_grpo_grouped",
         "precision": "FP32",
-        "policy_only": True,
+        "policy_only": prospective_aux_weight == 0.0 and deck_aux_weight == 0.0,
+        "auxiliary_training": prospective_aux_weight > 0.0 or deck_aux_weight > 0.0,
         "branch_only_credit": credit_scope == "branch_only",
         "continuation_credit": credit_scope == "branch_and_continuation",
         "value_loss": 0.0,
@@ -990,7 +1194,7 @@ def sibling_fiber_grpo_update_groups(
         "return_std": float(np.mean([item["return_std"] for item in group_stats_list])),
         "credit_scope": credit_scope,
         "continuation_discount": continuation_discount,
-        "logical_decisions": int(last_learner.numel()),
+        "logical_decisions": logical_decisions,
         "branch_logical_decisions": int(branch_mask.sum().item()),
         "continuation_logical_decisions": int((~branch_mask).sum().item()),
         "credited_logical_actions": int(active.sum().item()),
@@ -998,26 +1202,36 @@ def sibling_fiber_grpo_update_groups(
         "deck_relative_credit": deck_relative_weight > 0.0,
         "deck_relative_weight": deck_relative_weight,
         "deck_group_advantages": [float(value) for value in deck_group_advantages],
+        "prospective_aux_weight": prospective_aux_weight,
+        "deck_aux_weight": deck_aux_weight,
+        "prospective_auxiliary": last_aux_metrics,
+        "deck_reconstruction": last_deck_metrics,
         "loss": loss_value,
         "policy_loss": last_policy_loss,
         "gradient_norm": float(last_gradient_norm.item()),
-        "ratio_mean": float(last_ratio[active].mean().item()),
-        "ratio_min": float(last_ratio[active].min().item()),
-        "ratio_max": float(last_ratio[active].max().item()),
+        "ratio_mean": float(last_ratio[active].mean().item()) if total_active > 0 else None,
+        "ratio_min": float(last_ratio[active].min().item()) if total_active > 0 else None,
+        "ratio_max": float(last_ratio[active].max().item()) if total_active > 0 else None,
         "clip_fraction": float(
             ((last_ratio[active] < 1.0 - clip_epsilon) | (last_ratio[active] > 1.0 + clip_epsilon))
             .to(torch.float32)
             .mean()
             .item()
+        ) if total_active > 0 else 0.0,
+        "approx_kl_behavior": (
+            float((last_behavior[active] - last_learner[active]).mean().item())
+            if total_active > 0
+            else 0.0
         ),
-        "approx_kl_behavior": float(
-            (last_behavior[active] - last_learner[active]).mean().item()
-        ),
-        "initial_ratio_max_abs_error": float(
-            max(
-                abs(epoch_metrics[0]["ratio_min_pre_step"] - 1.0),
-                abs(epoch_metrics[0]["ratio_max_pre_step"] - 1.0),
+        "initial_ratio_max_abs_error": (
+            float(
+                max(
+                    abs(epoch_metrics[0]["ratio_min_pre_step"] - 1.0),
+                    abs(epoch_metrics[0]["ratio_max_pre_step"] - 1.0),
+                )
             )
+            if total_active > 0
+            else None
         ),
         **_parameter_delta(model, root_reference),
     }

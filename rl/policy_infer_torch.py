@@ -477,6 +477,21 @@ class TokenTransformerTorchInference(TokenTransformer):
             "return_pred": self.return_head_aux(aux_source).squeeze(-1),
         }
 
+    def deck_card_logits(self, o, memory_in=None) -> torch.Tensor:
+        """Predict the learner deck's card distribution from the global state.
+
+        The output is tied to the existing card embedding table, so this adds
+        no inference-only parameters and directly organizes individual card
+        representations. The Kaggle action path never calls this method.
+        """
+        cls_out, _, _, extra, _ = self._encode(o, memory_in=memory_in)
+        source = extra[0] if self.split_heads else cls_out
+        source = torch.nn.functional.normalize(source, dim=-1)
+        cards = torch.nn.functional.normalize(self.card_emb.weight, dim=-1)
+        logits = 10.0 * source @ cards.transpose(0, 1)
+        logits[:, 0] = -65504.0
+        return logits
+
 
 def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.float32):
     """Load an MLX checkpoint into a strict FP32 PyTorch inference model."""
