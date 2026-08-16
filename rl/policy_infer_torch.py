@@ -24,7 +24,13 @@ from rl.ropend import (
     temporal_coordinates,
     validate_ropend_config,
 )
-from rl.token_schema import ARCH_VERSION, TOKEN_SCHEMA_VERSION, T_META_CTX, N_TTYPES
+from rl.token_schema import (
+    ARCH_VERSION,
+    TOKEN_SCHEMA_VERSION,
+    T_META_CTX,
+    T_SELF_DECK,
+    N_TTYPES,
+)
 
 TORCH_INFERENCE_FORMAT = "ptcg-torch-fp32-v1"
 
@@ -491,6 +497,124 @@ class TokenTransformerTorchInference(TokenTransformer):
         logits = 10.0 * source @ cards.transpose(0, 1)
         logits[:, 0] = -65504.0
         return logits
+
+    def deck_prefix(
+        self,
+        deck_ids: torch.Tensor | list[int] | None,
+        memory_in: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run recurrent turn zero and predict the 60-card deck action.
+
+        A provided deck is teacher-forced and primes scratch memory. ``None``
+        represents a missing turn-zero answer and exposes the model's free deck
+        distribution. This path uses the same trunk and tied card embeddings as
+        gameplay but does not require a simulator observation.
+        """
+        device = self.card_emb.weight.device
+        if deck_ids is None:
+            ids = torch.zeros(1, 60, dtype=torch.long, device=device)
+        else:
+            ids = torch.as_tensor(deck_ids, dtype=torch.long, device=device)
+            if ids.ndim == 1:
+                ids = ids.unsqueeze(0)
+            if ids.ndim != 2 or ids.shape[1] != 60:
+                raise ValueError("turn-zero deck must have shape [B, 60]")
+        batch = ids.shape[0]
+        cls = self.cls.expand(batch, 1, self.d) + self._type(batch, 1, 0, device)
+        deck_tokens = (
+            self._card_emb(ids)
+            + self._static(ids)
+            + self._type(batch, ids.shape[1], T_SELF_DECK, device)
+        )
+        if memory_in is None:
+            memory = self.learned_init.unsqueeze(0).expand(batch, -1, -1)
+        else:
+            memory = memory_in.reshape(-1, self.scratch_tokens, self.d).expand(batch, -1, -1)
+        scratch = memory + self._type(batch, self.scratch_tokens, 0, device)
+        sequence = torch.cat((cls, deck_tokens, scratch), dim=1)
+        padding = torch.cat(
+            (
+                torch.zeros(batch, 1, dtype=torch.bool, device=device),
+                ids == 0,
+                torch.zeros(batch, self.scratch_tokens, dtype=torch.bool, device=device),
+            ),
+            dim=1,
+        )
+        if self.ropend_config is None:
+            encoded = self.encoder(sequence, src_key_padding_mask=padding)
+        else:
+            coordinates = sequence.new_zeros(batch, sequence.shape[1], 3)
+            encoded = encoder_forward_ropend(
+                self.encoder,
+                sequence,
+                padding,
+                coordinates,
+                self.ropend_axis_scale,
+                self.ropend_config["pair_counts"],
+                base=float(self.ropend_config["base"]),
+            )
+        source = torch.nn.functional.normalize(encoded[:, 0], dim=-1)
+        cards = torch.nn.functional.normalize(self.card_emb.weight, dim=-1)
+        logits = 10.0 * source @ cards.transpose(0, 1)
+        logits[:, 0] = -65504.0
+        memory_out = encoded[:, -self.scratch_tokens :]
+        return logits, memory_out
+
+    def generate_deck(self) -> list[int]:
+        """Decode a legal 60-card turn-zero answer from the learned distribution."""
+        with torch.inference_mode():
+            logits, _memory = self.deck_prefix(None)
+        ranked = torch.argsort(logits[0], descending=True).detach().cpu().tolist()
+        features = self._card_table.matrix
+        names = self._card_table.names
+        ace_offset = 3 + 9 + 11 + 11 + 1
+        basic_pokemon_offset = 3
+        basic_energy_offset = 3 + 7
+
+        ranked = [cid for cid in ranked if 0 < cid < features.shape[0]]
+        ace_cards = [cid for cid in ranked if features[cid, ace_offset] > 0.5]
+        basic_pokemon = [
+            cid
+            for cid in ranked
+            if features[cid, 0] > 0.5 and features[cid, basic_pokemon_offset] > 0.5
+        ]
+        if not ace_cards or not basic_pokemon:
+            raise ValueError("turn-zero decoder cannot satisfy ACE/basic-Pokemon legality")
+
+        from collections import Counter
+
+        deck = [ace_cards[0]]
+        name_counts = Counter([names[ace_cards[0]]])
+
+        def can_add(card_id: int) -> bool:
+            name = names.get(card_id)
+            if card_id <= 0 or name is None:
+                return False
+            if features[card_id, ace_offset] > 0.5:
+                return False
+            if features[card_id, basic_energy_offset] > 0.5:
+                return True
+            return name_counts[name] < 4
+
+        basic_count = 0
+        for card_id in basic_pokemon:
+            while basic_count < 10 and can_add(card_id):
+                deck.append(card_id)
+                name_counts[names[card_id]] += 1
+                basic_count += 1
+            if basic_count >= 10:
+                break
+        for card_id in ranked:
+            while len(deck) < 60 and can_add(card_id):
+                deck.append(card_id)
+                name_counts[names[card_id]] += 1
+                if features[card_id, basic_energy_offset] <= 0.5 and name_counts[names[card_id]] >= 4:
+                    break
+            if len(deck) == 60:
+                break
+        if len(deck) != 60:
+            raise ValueError(f"turn-zero decoder emitted only {len(deck)} legal cards")
+        return sorted(deck)
 
 
 def load_mlx_checkpoint(path: str | Path, card_table: CardTable, *, dtype=torch.float32):

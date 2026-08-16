@@ -146,6 +146,7 @@ def test_grouped_update_normalizes_each_dynamic_base_once() -> None:
         groups,
         learning_rate=1e-2,
         credit_scope="branch_and_continuation",
+        policy_group_batch_size=2,
     )
     assert metrics["optimizer_steps"] == 1
     assert metrics["group_count"] == 2

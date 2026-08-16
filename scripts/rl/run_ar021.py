@@ -297,7 +297,11 @@ def run_ar021(
     ropend_init_scale: float = 0.0,
     prospective_aux_weight: float = 0.2,
     deck_aux_weight: float = 0.1,
-    aux_batch_size: int = 256,
+    aux_batch_size: int = 512,
+    policy_group_batch_size: int = 2,
+    max_update_seconds: float = 600.0,
+    deck_action_weight: float = 0.25,
+    include_generated_deck: bool = True,
     deck_pool_dir: Path | None = Path("experiments/decks/swarm/inbox"),
     deck_pool_limit: int = 8,
     swarm_results_dir: Path = Path("experiments/decks/swarm/results"),
@@ -323,6 +327,12 @@ def run_ar021(
         raise ValueError("--deck-aux-weight must be finite and non-negative")
     if aux_batch_size < 1:
         raise ValueError("--aux-batch-size must be at least one")
+    if policy_group_batch_size < 1:
+        raise ValueError("--policy-group-batch-size must be at least one")
+    if not np.isfinite(max_update_seconds) or max_update_seconds <= 0.0:
+        raise ValueError("--max-update-seconds must be finite and positive")
+    if not np.isfinite(deck_action_weight) or deck_action_weight < 0.0:
+        raise ValueError("--deck-action-weight must be finite and non-negative")
     validate_meta_date(meta_date)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logs").mkdir(parents=True, exist_ok=True)
@@ -365,6 +375,35 @@ def run_ar021(
     else:
         canonical_ropend = None
     model = model.float()
+    generated_turn_zero: dict[str, Any] | None = None
+    if include_generated_deck and hasattr(model, "generate_deck"):
+        generated_deck = model.generate_deck()
+        generated_content_hash = deck_content_sha256(generated_deck)
+        if generated_content_hash not in seen_deck_content:
+            generated_path = deck_snapshot_dir / "generated_turn0.json"
+            generated_path.write_text(json.dumps(generated_deck, indent=2) + "\n")
+            generated_source_hash = sha256_file(generated_path)
+            learner_decks.append(
+                (
+                    generated_path,
+                    generated_deck,
+                    generated_content_hash,
+                    generated_source_hash,
+                )
+            )
+            learner_paths.append(generated_path)
+            deck_snapshots.append(str(generated_path))
+            seen_deck_content.add(generated_content_hash)
+            generated_turn_zero = {
+                "path": str(generated_path),
+                "content_sha256": generated_content_hash,
+                "source_file_sha256": generated_source_hash,
+                "card_count": len(generated_deck),
+            }
+    learner_content_hashes = [item[2] for item in learner_decks]
+    learner_source_hashes = [item[3] for item in learner_decks]
+    aggregate_content_hash = _aggregate_hash(learner_content_hashes)
+    aggregate_source_hash = _aggregate_hash(learner_source_hashes)
     root_reference = copy.deepcopy(model).eval()
     encoder = DateBoundEncoder(TokenEncoder(card_table), meta_date)
     root_hash = APPROVED_STAGE4_ROOT_SHA256
@@ -475,6 +514,9 @@ def run_ar021(
         prospective_aux_weight=prospective_aux_weight,
         deck_aux_weight=deck_aux_weight,
         aux_batch_size=aux_batch_size,
+        policy_group_batch_size=policy_group_batch_size,
+        max_update_seconds=max_update_seconds,
+        deck_action_weight=deck_action_weight,
     )
     config = {
         "algorithm": "sibling_fiber_grpo_grouped",
@@ -503,6 +545,12 @@ def run_ar021(
         "prospective_aux_weight": prospective_aux_weight,
         "deck_aux_weight": deck_aux_weight,
         "aux_batch_size": aux_batch_size,
+        "policy_group_batch_size": policy_group_batch_size,
+        "max_update_seconds": max_update_seconds,
+        "deck_action_weight": deck_action_weight,
+        "turn_zero_deck_action": "teacher-forced when supplied; free decode when absent",
+        "include_generated_deck": include_generated_deck,
+        "generated_turn_zero": generated_turn_zero,
         "update_device": str(resolved_update_device),
         "collection_device": "cpu_multiprocess",
         "prospective_targets": "same-turn KO/prize plus future prize margin and terminal outcome",
@@ -517,6 +565,7 @@ def run_ar021(
         "parent_sha256": parent_hash,
         "behavior_snapshot_sha256": behavior_hash,
         "ropend": canonical_ropend,
+        "generated_turn_zero": generated_turn_zero,
         "credit_scope": "branch_and_continuation",
         "continuation_discount": 0.97,
         "matchup_normalization": "sibling_relative_plus_paired_inter_deck_cohort",
@@ -668,7 +717,7 @@ def run_ar021(
             "learner_deck_stratification": len(learner_decks) > 1,
             "independent_group_normalization": True,
             "requested_multi_epoch_update": update_epochs > 1,
-            "optimizer_steps_match_requested_epochs": metrics["optimizer_steps"] in {0, update_epochs},
+            "optimizer_steps_within_requested_epochs": 0 <= metrics["optimizer_steps"] <= update_epochs,
             "inter_deck_relative_credit": len(learner_decks) > 1 and deck_relative_weight > 0.0,
             "parallel_sibling_games": all(
                 bool(collection.get("parallel_fibers")) for collection in collections
@@ -781,7 +830,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ropend-init-scale", type=float, default=0.0)
     parser.add_argument("--prospective-aux-weight", type=float, default=0.2)
     parser.add_argument("--deck-aux-weight", type=float, default=0.1)
-    parser.add_argument("--aux-batch-size", type=int, default=256)
+    parser.add_argument("--aux-batch-size", type=int, default=512)
+    parser.add_argument("--policy-group-batch-size", type=int, default=2)
+    parser.add_argument("--max-update-seconds", type=float, default=600.0)
+    parser.add_argument("--deck-action-weight", type=float, default=0.25)
+    parser.add_argument("--no-generated-deck", action="store_true")
     parser.add_argument(
         "--deck-pool-dir",
         type=Path,
@@ -821,6 +874,10 @@ def main() -> None:
         prospective_aux_weight=args.prospective_aux_weight,
         deck_aux_weight=args.deck_aux_weight,
         aux_batch_size=args.aux_batch_size,
+        policy_group_batch_size=args.policy_group_batch_size,
+        max_update_seconds=args.max_update_seconds,
+        deck_action_weight=args.deck_action_weight,
+        include_generated_deck=not args.no_generated_deck,
         deck_pool_dir=args.deck_pool_dir,
         deck_pool_limit=args.deck_pool_limit,
         swarm_results_dir=args.swarm_results_dir,

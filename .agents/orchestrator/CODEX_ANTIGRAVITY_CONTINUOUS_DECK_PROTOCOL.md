@@ -59,6 +59,16 @@ experiments/decks/swarm/results/AR-NNN.json
 - collection/update throughput;
 - tournament metrics when available.
 
+The runner may also emit its own training-time turn-zero deck at
+`experiments/autoresearch/AR-NNN/decks/generated_turn0.json`. This is the same
+model's free deck action, not an Antigravity artifact. It enters the matchup
+matrix like every other learner deck. Antigravity should analyze its results
+but must not overwrite it; improved human/swarm responses still go to `inbox/`.
+
+At competition inference, `deck.csv` is teacher-forced through the model's
+recurrent turn zero before gameplay. If no deck is supplied in a research
+harness, the model emits a legal 60-card deck from that same turn-zero head.
+
 Antigravity's five-minute scheduler reads `latest.json` first. If its run ID or
 content hash has not changed, it performs no write. If it changed, Antigravity
 may additionally inspect the matching `AR-NNN.json`, the referenced AR manifest,

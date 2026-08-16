@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import multiprocessing as mp
 import os
 import sys
 import time
@@ -584,6 +585,69 @@ def run_matchup(env, our_agent, opp_agent, n_games: int):
     return wins, losses, draws, last_html, game_results
 
 
+def _play_isolated_game(task):
+    """Spawn-safe one-game worker with independent agents and simulator."""
+    game_index, n_games, our_path, opp_path, deck_override = task
+    import json as _json
+    import torch
+
+    torch.set_num_threads(1)
+    our_agent, our_module = load_agent(our_path, return_module=True)
+    if deck_override is not None:
+        if not hasattr(our_module, "reload_deck"):
+            raise TypeError("parallel deck override requires reload_deck(path)")
+        our_module.reload_deck(deck_override)
+    opp_agent = resolve(opp_path)
+    env = make_env()
+    if game_index % 2 == 0:
+        result, html = play(env, our_agent, opp_agent)
+        our_side = 0
+    else:
+        result, html = play(env, opp_agent, our_agent)
+        result = -result
+        our_side = 1
+    replay_json = _json.loads(env.render(mode="json"))
+    return {
+        "game_index": game_index,
+        "our_side": our_side,
+        "result": result,
+        "replay_json": replay_json,
+        "last_html": html if game_index == n_games - 1 else "",
+    }
+
+
+def run_matchup_parallel(
+    our_path: str,
+    opp_path: str,
+    n_games: int,
+    *,
+    workers: int,
+    deck_override: str | None = None,
+):
+    """Execute independent games concurrently and preserve deterministic order."""
+    if workers <= 1:
+        our_agent = load_agent(our_path)
+        opp_agent = resolve(opp_path)
+        return run_matchup(make_env(), our_agent, opp_agent, n_games)
+    tasks = [
+        (index, n_games, our_path, opp_path, deck_override)
+        for index in range(n_games)
+    ]
+    context = mp.get_context("spawn")
+    with context.Pool(processes=min(workers, n_games)) as pool:
+        results = pool.map(_play_isolated_game, tasks)
+    results.sort(key=lambda item: item["game_index"])
+    wins = sum(item["result"] == 1 for item in results)
+    losses = sum(item["result"] == -1 for item in results)
+    draws = sum(item["result"] == 0 for item in results)
+    last_html = next((item["last_html"] for item in results if item["last_html"]), "")
+    game_results = [
+        {key: item[key] for key in ("game_index", "our_side", "result", "replay_json")}
+        for item in results
+    ]
+    return wins, losses, draws, last_html, game_results
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--agent", type=str, default=None, action="append",
@@ -591,7 +655,13 @@ def main():
     p.add_argument("--deck-file", type=str, default=None, action="append",
                    help="Alternate 60-card deck JSON/CSV for our agent; repeat for an explicit deck list. Reloads in memory and never overwrites agent/deck.csv")
     p.add_argument("--games", "-n", type=int, default=20, help="Games per opponent")
-    p.add_argument("--workers", "-w", type=int, default=4, help="Parallel worker processes for games execution (default: 4)")
+    p.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=min(8, os.cpu_count() or 4),
+        help="Isolated parallel game processes (default: min(8, CPU count))",
+    )
     p.add_argument("--opponent", type=str, default=None, action="append",
                    help="Opponent path (submission tarball or agent main.py). "
                         "May be repeated to select a custom opponent subset "
@@ -881,8 +951,13 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                             opp_deck_disp = f"Deck #{opp_d_id}"
 
                         t0 = time.time()
-                        w, l, d, replay_html, game_results = run_matchup(
-                            env, our_agent, opp_agent, args.games)
+                        w, l, d, replay_html, game_results = run_matchup_parallel(
+                            our_path,
+                            opp_path,
+                            args.games,
+                            workers=args.workers,
+                            deck_override=custom_deck_path,
+                        )
                         elapsed = time.time() - t0
 
                         wr = w / max(w + l, 1) * 100
@@ -930,8 +1005,13 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
         for label, opp_path in opponents:
             opp_agent = resolve(opp_path)
             t0 = time.time()
-            w, l, d, replay_html, game_results = run_matchup(
-                env, our_agent, opp_agent, args.games)
+            w, l, d, replay_html, game_results = run_matchup_parallel(
+                our_path,
+                opp_path,
+                args.games,
+                workers=args.workers,
+                deck_override=(custom_deck_paths[0] if custom_deck_paths else None),
+            )
             elapsed = time.time() - t0
             wr = w / max(w + l, 1) * 100
             total_w += w; total_l += l; total_d += d

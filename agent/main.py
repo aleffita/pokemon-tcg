@@ -139,12 +139,31 @@ def load_deck(path: str = _DECK_PATH) -> list[int]:
     with open(path) as f:
         return [int(line.strip().rstrip(",")) for line in f if line.strip()]
 
-DECK: list[int] = load_deck()
+DECK: list[int] = load_deck() if os.path.exists(_DECK_PATH) else []
+_DECK_PREFIX_MEMORY = None
+
+
+def _prime_or_generate_turn_zero() -> list[int]:
+    """Teacher-force deck.csv at turn zero, or emit a deck when it is absent."""
+    global DECK, _DECK_PREFIX_MEMORY
+    if _LOADED_MODEL is None or not hasattr(_LOADED_MODEL, "deck_prefix"):
+        return list(DECK)
+    if not DECK:
+        if not hasattr(_LOADED_MODEL, "generate_deck"):
+            raise ValueError("no deck.csv and loaded model cannot emit a turn-zero deck")
+        DECK = _LOADED_MODEL.generate_deck()
+    with torch.inference_mode():
+        _deck_logits, memory = _LOADED_MODEL.deck_prefix(DECK)
+    _DECK_PREFIX_MEMORY = memory.detach().to(device="cpu", dtype=torch.float32).clone()
+    return list(DECK)
 
 
 def reload_deck(path: str = _DECK_PATH) -> list[int]:
-    global DECK
+    global DECK, _DECK_PREFIX_MEMORY
     DECK = load_deck(path)
+    _DECK_PREFIX_MEMORY = None
+    for state in _TRACKERS.values():
+        state["stale"] = True
     return DECK
 
 # ---- per-side state ----
@@ -167,7 +186,11 @@ def _get_tracker(side: int):
         st["tracker"].reset()
         st["ability"].reset()
         st["deck"] = list(DECK)
-        st["memory"] = None
+        st["memory"] = (
+            _DECK_PREFIX_MEMORY.detach().clone()
+            if _DECK_PREFIX_MEMORY is not None
+            else None
+        )
         st["would_ko_rng"] = random.Random(int(_RUNTIME_CFG.seed) + int(side))
         st["decision_index"] = 0
         st["stale"] = False
@@ -387,9 +410,10 @@ def _agent_impl(obs: dict[str, Any]) -> list[int]:
     select = obs.get("select")
     current = obs.get("current")
     if select is None:
+        deck = _prime_or_generate_turn_zero()
         for st in _TRACKERS.values():
             st["stale"] = True
-        return list(DECK)
+        return deck
     logs = obs.get("logs", [])
     return choose(select, current, logs=logs)
 
