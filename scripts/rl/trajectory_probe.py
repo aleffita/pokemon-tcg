@@ -39,6 +39,7 @@ DEFAULT_CHECKPOINT = Path("experiments/autoresearch/root/stage4_root.pkl")
 DEFAULT_DECK = Path("agent/deck.csv")
 DEFAULT_OUTPUT = Path("experiments/autoresearch/AR-009/logs")
 APPROVED_STAGE4_ROOT_SHA256 = "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b"
+MAX_GAMES_PER_MODE = 4
 
 
 def sha256_file(path: Path) -> str:
@@ -456,8 +457,8 @@ def run_probe(
     seed: int = 8008,
     experiment: str = "AR-009",
 ) -> dict[str, Any]:
-    if games_per_mode < 1 or games_per_mode > 2:
-        raise ValueError("games_per_mode must be 1 or 2 for this bounded probe")
+    if games_per_mode < 1 or games_per_mode > MAX_GAMES_PER_MODE:
+        raise ValueError(f"games_per_mode must be between 1 and {MAX_GAMES_PER_MODE} for this bounded probe")
     validate_meta_date(meta_date)
     deck = load_deck(deck_path)
     parquet_path = Path("data/bc_data") / f"{meta_date}.parquet"
@@ -629,7 +630,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-deck", type=Path, default=DEFAULT_DECK)
     parser.add_argument("--meta-date", required=True, help="complete YYYY-MM-DD metadata date")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--games-per-mode", type=int, default=1, choices=(1, 2))
+    parser.add_argument(
+        "--games-per-mode",
+        type=int,
+        default=1,
+        choices=range(1, MAX_GAMES_PER_MODE + 1),
+        help="episodes per opponent mode (1-4; modes and opponent semantics are unchanged)",
+    )
     parser.add_argument("--seed", type=int, default=8008)
     parser.add_argument("--experiment", default="AR-009")
     return parser

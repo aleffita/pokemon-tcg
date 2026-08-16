@@ -1,0 +1,11 @@
+$ uv run --locked pytest -q tests/test_trajectory_probe.py tests/test_ar010_candidate_path.py
+............................                                             [100%]
+28 passed in 2.03s
+
+$ uv run --locked python -m py_compile scripts/rl/trajectory_probe.py tests/test_trajectory_probe.py tests/test_ar010_candidate_path.py
+exit=0
+
+$ git diff --check
+exit=0
+
+No tournament, package, submission, or AR-015 binary regeneration was run.

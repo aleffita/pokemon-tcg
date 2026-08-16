@@ -36,3 +36,12 @@ one another.
 The root inference contract supplies a disabled `prospective_planner` object
 when an older checkpoint omits that field. This preserves the old model path
 while allowing the public agent's first `choose()` decision to execute safely.
+
+## Bounded trajectory collection
+
+`scripts/rl/trajectory_probe.py --games-per-mode` accepts values 1 through 4.
+The default remains 1, and the existing value 2 keeps its prior behavior. A
+larger value only repeats the same two modes, `random` and
+`mirror_no_memory`, with the same per-episode seed structure; it does not
+change architecture, opponent semantics, recurrence handling, or the frozen
+Stage 4 root. Values above 4 fail before loading data or model state.

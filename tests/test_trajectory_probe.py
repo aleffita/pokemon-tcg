@@ -25,6 +25,8 @@ from scripts.rl.trajectory_probe import (
     initial_memory,
     inspect_parquet_provenance,
     load_stage4,
+    build_parser,
+    run_probe,
     validate_meta_date,
     validate_rows,
     write_outputs,
@@ -112,6 +114,22 @@ def test_stage4_root_hash_is_rejected_before_loader(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="approved frozen root"):
         load_stage4(checkpoint, object())
     assert calls == []
+
+
+def test_games_per_mode_preserves_two_and_accepts_four():
+    parser = build_parser()
+    assert parser.parse_args(["--meta-date", "2026-08-12", "--games-per-mode", "2"]).games_per_mode == 2
+    assert parser.parse_args(["--meta-date", "2026-08-12", "--games-per-mode", "4"]).games_per_mode == 4
+    assert "1-4" in parser.format_help()
+
+
+def test_games_per_mode_rejects_five_before_probe_work():
+    with pytest.raises(ValueError, match="between 1 and 4"):
+        run_probe(meta_date="2026-08-12", games_per_mode=5)
+
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--meta-date", "2026-08-12", "--games-per-mode", "5"])
 
 
 def test_rows_require_ordered_multiselect_substeps_and_terminal_reward():
