@@ -1,0 +1,28 @@
+{
+  "our_agent": "agent/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 30,
+  "note": "AR-026_candidate_same_deck_vs_frozen_root_30",
+  "rows": [
+    {
+      "opponent_label": "stage4_root_fp32.tar.gz",
+      "opponent_path": "experiments/autoresearch/root/stage4_root_fp32.tar.gz",
+      "deck_id": 1,
+      "opp_deck_id": 284,
+      "wins": 21,
+      "losses": 9,
+      "draws": 0,
+      "wr_pct": 70.0,
+      "elapsed_s": 22.330745935440063,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 21,
+    "losses": 9,
+    "draws": 0,
+    "wr_pct": 70.0,
+    "elapsed_s": 22.418205976486206
+  }
+}

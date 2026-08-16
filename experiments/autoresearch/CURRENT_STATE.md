@@ -2,10 +2,10 @@
 
 Captured: 2026-08-16
 
-- Last assimilated code commit: `c051b8cd234a7791c366cf58e55e107d90a51745`
+- Last assimilated code commit: `d27dda708c52c0c631dfed52727441f34dcbf80f`
 - Current best and fallback: frozen Stage 4 root
 - Stage 4 root SHA-256: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`
-- Active experiment: AR-026 targeted credit/branch-selection hypothesis after AR-025 scale rejection
+- Active experiment: AR-027 scale of AR-026 branch-diversity hypothesis
 - AR-018 code commits: `434d3f6`, repaired by `28c2b96` and `4cfe5e8`
 - AR-018 status: corrected gate passed review; keep foundation
 - AR-019 implementation commit: `5dd6cfc`
@@ -84,8 +84,16 @@ Captured: 2026-08-16
   `[2,2,2,2,2,2,2,3]`, 17 fibers, 1,200 logical decisions, 435 credited
   decisions. Direct root gate `16-14-0`, panel `7-53-0`; rejected for
   promotion and retained as diagnostic only.
-- Next action: test a targeted credit or branch-selection change rather than
-  scaling this configuration further; keep the six-opponent panel as gate.
+- AR-026 implementation commit: `d27dda7`
+- AR-026 branch-diversity run: policy/uniform legal-action mixture `0.5`,
+  8 exact bases, effective K `[2,4,2,2,4,2,2,2]`, 20 fibers, 1,434 logical
+  decisions, 601 credited decisions, 105.069 decisions/s, 8.570 s update;
+  5 of 8 groups were zero variance.
+- AR-026 tournament: same-deck candidate-vs-root `21-9-0` in 30; candidate
+  panel `15-45-0`; frozen-root panel `12-48-0`. Keep experimental: direct gate
+  won and panel improved by three wins, but absolute field strength is low.
+- Next action: scale AR-026 with the same `uniform_mix=0.5` to 16 groups,
+  then require a stronger panel before promotion.
 
 Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-019/manifest.json`, `AR-019/metrics.json`, `AR-019/logs/tests.log`,
@@ -128,3 +136,8 @@ Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-025-retry/tournament_candidate_vs_root_same_deck_30.json`,
 `AR-025-retry/tournament_candidate_panel_10.json`,
 `STATE_CAPSULE_025_RETRY.md`.
+`AR-026/report.md`, `AR-026/manifest.json`, `AR-026/metrics.json`,
+`AR-026/sample.manifest.json`, `AR-026/trajectory_bundle.pt.gz`,
+`AR-026/candidate.pt`, `AR-026/tournament_candidate_vs_root_same_deck_30.json`,
+`AR-026/tournament_candidate_panel_10.json`,
+`AR-026/tournament_root_panel_10.json`, `STATE_CAPSULE_026.md`.
