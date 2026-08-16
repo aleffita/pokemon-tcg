@@ -2,10 +2,10 @@
 
 Captured: 2026-08-16
 
-- Last assimilated code commit: `eed78b6fc41ced26877f4121e7385db28709cfe9`
+- Last assimilated code commit: `0e16b76455e48c82762a9ed981c2e3b29d956f01`
 - Current best and fallback: frozen Stage 4 root
 - Stage 4 root SHA-256: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`
-- Active experiment: AR-023 external-policy grouped dynamic prospective sibling-fiber GRPO
+- Active experiment: AR-024 scaled external-policy grouped dynamic prospective sibling-fiber GRPO
 - AR-018 code commits: `434d3f6`, repaired by `28c2b96` and `4cfe5e8`
 - AR-018 status: corrected gate passed review; keep foundation
 - AR-019 implementation commit: `5dd6cfc`
@@ -63,8 +63,17 @@ Captured: 2026-08-16
 - AR-023 tournament: same-deck candidate-vs-root `20-10-0` in 30; candidate
   panel `7-23-0`; frozen-root panel `8-22-0`. Candidate rejected for promotion;
   root remains fallback because absolute external-panel strength is lower.
-- Next action: target branch diversity or external-policy signal with a bounded
-  hypothesis; keep the full multi-opponent panel as the promotion gate.
+- AR-024 implementation/execution commit: `0e16b76`
+- AR-024 candidate SHA-256: `abade9c813286b0480e7fb265cfa659412492dd95bb1aafa21337a839816dcd3`
+- AR-024 used four real external policy/deck strata (`lb1009`, `lb945`,
+  `lb826`, `lb814`), one exact base each, effective K `[2,2,2,2]`, 8 fibers,
+  591 logical decisions, 344 credited decisions, 111.594 decisions/s, one
+  grouped update; two groups were zero variance.
+- AR-024 tournament: same-deck candidate-vs-root `19-11-0` in 30; candidate
+  six-opponent panel `8-52-0`; frozen-root panel `7-53-0`. Candidate rejected
+  for promotion despite a marginal one-win panel gain; root remains fallback.
+- Next action: scale the same four-policy strata to more independent sibling
+  groups, then retain the six-opponent panel as the gate.
 
 Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-019/manifest.json`, `AR-019/metrics.json`, `AR-019/logs/tests.log`,
@@ -90,3 +99,8 @@ Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-023/candidate.pt`, `AR-023/tournament_candidate_vs_root_same_deck_30.json`,
 `AR-023/tournament_candidate_panel_10.json`,
 `AR-023/tournament_root_panel_10.json`, `STATE_CAPSULE_023.md`.
+`AR-024/report.md`, `AR-024/manifest.json`, `AR-024/metrics.json`,
+`AR-024/sample.manifest.json`, `AR-024/trajectory_bundle.pt.gz`,
+`AR-024/candidate.pt`, `AR-024/tournament_candidate_vs_root_same_deck_30.json`,
+`AR-024/tournament_candidate_panel_10.json`,
+`AR-024/tournament_root_panel_10.json`, `STATE_CAPSULE_024.md`.
