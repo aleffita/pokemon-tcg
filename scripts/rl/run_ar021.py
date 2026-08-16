@@ -221,6 +221,11 @@ def run_ar021(
                 if opponent_agent_path is None
                 else lambda path=opponent_agent_path: load_external_opponent(path)
             )
+            opponent_mode = (
+                "current_vs_external_policy_true_recurrent"
+                if opponent_agent_path is not None
+                else "current_vs_current_true_recurrent"
+            )
             trajectories, collection = collect_sibling_fiber_group(
                 model=model,
                 encoder=encoder,
@@ -238,6 +243,7 @@ def run_ar021(
                 opponent_agent_path=(
                     str(opponent_agent_path) if opponent_agent_path is not None else None
                 ),
+                opponent_mode=opponent_mode,
             )
             collection.update(
                 {
@@ -302,6 +308,8 @@ def run_ar021(
         "optimizer_aggregation": "one_step_over_independent_groups",
         "rollout_storage": "compact bounded provenance bundle persisted adjacent to candidate",
     }
+    if any(path is not None for path in agent_paths):
+        config["selfplay_mode"] = "current_vs_external_policy_true_recurrent_shared_base"
     candidate_path = output_dir / "candidate.pt"
     candidate_hash = save_grpo_candidate_checkpoint(
         candidate_path,
@@ -391,6 +399,7 @@ def run_ar021(
                 "group_index": collection["group_index"],
                 "opponent_deck": collection["opponent_deck"],
                 "opponent_agent_path": collection.get("opponent_agent_path"),
+                "opponent_mode": collection.get("opponent_mode"),
                 "opponent_deck_content_sha256": collection.get("opponent_deck_content_sha256"),
                 "opponent_deck_source_file_sha256": collection.get("opponent_deck_source_file_sha256"),
                 "effective_group_size": collection["games"],

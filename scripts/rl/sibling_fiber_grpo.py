@@ -308,6 +308,7 @@ def _collect_forked_fiber(
     model_hash: str,
     base_observation: dict[str, np.ndarray],
     base_reset_info: dict[str, Any],
+    opponent_mode: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Continue one exact engine snapshot in a fork and return its trajectory."""
     if not hasattr(os, "fork"):
@@ -326,7 +327,7 @@ def _collect_forked_fiber(
                 model,
                 encoder,
                 episode_id,
-                "sibling_fiber_current_vs_current_true_recurrent",
+                opponent_mode,
                 reset_seed,
                 deck_content_hash,
                 deck_source_file_hash,
@@ -384,6 +385,7 @@ def collect_sibling_fiber_group(
     episode_prefix: str | None = None,
     opponent_factory: Callable[[], Any] | None = None,
     opponent_agent_path: str | None = None,
+    opponent_mode: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collect K same-base forced-fiber continuations with common randomness."""
     if games < 2:
@@ -398,6 +400,11 @@ def collect_sibling_fiber_group(
         opponent_factory=opponent_factory,
     )
     collection_seed = int(base["probe_seed"])
+    resolved_opponent_mode = opponent_mode or (
+        "current_vs_external_policy_true_recurrent"
+        if opponent_factory is not None
+        else "current_vs_current_true_recurrent"
+    )
     trajectories: list[dict[str, Any]] = []
     started = time.perf_counter()
     try:
@@ -419,6 +426,7 @@ def collect_sibling_fiber_group(
                 model_hash=model_hash,
                 base_observation=base_observation,
                 base_reset_info=base_reset_info,
+                opponent_mode=resolved_opponent_mode,
             )
             trajectory = trajectory_from_bundle(rows, bundle)
             observed_base = {
@@ -473,6 +481,7 @@ def collect_sibling_fiber_group(
         "opponent_deck_content_sha256": opponent_deck_content_hash,
         "opponent_deck_source_file_sha256": opponent_deck_source_file_hash,
         "opponent_agent_path": opponent_agent_path,
+        "opponent_mode": resolved_opponent_mode,
         "trajectory_summaries": [
             {
                 "episode_id": item["episode_id"],
