@@ -7,6 +7,7 @@ import torch
 
 from scripts.rl.sibling_fiber_grpo import (
     _branch_candidates,
+    prospective_trajectory_score,
     sibling_fiber_grpo_update,
     sibling_fiber_grpo_update_groups,
 )
@@ -63,6 +64,17 @@ def _trajectory(model: _ToyPolicy, branch_action: int, terminal_return: float) -
         "logical_decisions": 2,
         "substeps": 2,
     }
+
+
+def _with_prize_progress(trajectory: dict, *, own_taken: float, opponent_taken: float) -> dict:
+    first = trajectory["decisions"][0][0]
+    last = trajectory["decisions"][-1][0]
+    first["model_input"]["cls_scalars"] = torch.zeros(1, 18)
+    last["model_input"]["cls_scalars"] = torch.zeros(1, 18)
+    first["model_input"]["cls_scalars"][0, 9:11] = 1.0
+    last["model_input"]["cls_scalars"][0, 9] = 1.0 - own_taken
+    last["model_input"]["cls_scalars"][0, 10] = 1.0 - opponent_taken
+    return trajectory
 
 
 def test_dynamic_k_is_capped_by_the_real_legal_fiber() -> None:
@@ -212,3 +224,20 @@ def test_grouped_all_zero_variance_emits_root_equivalent_noop() -> None:
         torch.equal(before_value, after_value)
         for before_value, after_value in zip(before, model.parameters())
     )
+
+
+def test_dense_prize_progress_resolves_equal_terminal_losses() -> None:
+    model = _ToyPolicy()
+    root = copy.deepcopy(model)
+    better = _with_prize_progress(
+        _trajectory(model, 0, -1.0), own_taken=0.5, opponent_taken=0.0
+    )
+    worse = _with_prize_progress(
+        _trajectory(model, 1, -1.0), own_taken=0.0, opponent_taken=0.5
+    )
+    assert prospective_trajectory_score(better) > prospective_trajectory_score(worse)
+    assert prospective_trajectory_score(better) < 0.0
+    metrics = sibling_fiber_grpo_update_groups(model, root, [[better, worse]])
+    assert metrics["optimizer_steps"] == 1
+    assert metrics["zero_variance_groups"] == 0
+    assert metrics["credited_logical_actions"] == 4

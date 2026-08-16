@@ -57,6 +57,61 @@ def _finite(value: torch.Tensor | float) -> bool:
     return math.isfinite(float(value))
 
 
+def prospective_trajectory_score(
+    trajectory: dict[str, Any],
+    *,
+    dense_reward_weight: float = 0.49,
+) -> float:
+    """Return a win-dominant score with bounded prize-progress resolution.
+
+    Terminal outcome remains the primary objective.  The dense component only
+    orders trajectories inside the same broad outcome class, so a loss can
+    never outrank a draw and a draw can never outrank a win.
+    """
+    terminal_return = float(trajectory["terminal_return"])
+    if not 0.0 <= dense_reward_weight < 0.5:
+        raise ValueError("dense_reward_weight must be in [0, 0.5)")
+    decisions = trajectory.get("decisions") or ()
+    if not decisions:
+        return terminal_return
+    first_sample = decisions[0][0]
+    last_sample = decisions[-1][0]
+    first_scalars = first_sample.get("model_input", {}).get("cls_scalars")
+    last_scalars = last_sample.get("model_input", {}).get("cls_scalars")
+    if first_scalars is None or last_scalars is None:
+        return terminal_return
+    first = first_scalars[0].detach().to(device="cpu", dtype=torch.float32)
+    last = last_scalars[0].detach().to(device="cpu", dtype=torch.float32)
+    if first.numel() < 11 or last.numel() < 11:
+        return terminal_return
+    own_prizes_taken = float((first[9] - last[9]).item())
+    opponent_prizes_taken = float((first[10] - last[10]).item())
+    prize_margin = max(-1.0, min(1.0, own_prizes_taken - opponent_prizes_taken))
+    return terminal_return + dense_reward_weight * prize_margin
+
+
+def normalize_relative_scores(
+    scores: list[float],
+    *,
+    epsilon: float = 1e-8,
+) -> tuple[torch.Tensor, dict[str, float | bool]]:
+    """Normalize finite dense scores without weakening terminal-return checks."""
+    values = torch.as_tensor([float(value) for value in scores], dtype=torch.float32)
+    if values.ndim != 1 or values.numel() < 2:
+        raise ValueError("relative score group must contain at least two values")
+    if not _finite(values):
+        raise ValueError("relative scores must be finite")
+    mean = values.mean()
+    std = values.std(unbiased=False)
+    zero_variance = bool(std.item() <= epsilon)
+    advantages = torch.zeros_like(values) if zero_variance else (values - mean) / std
+    return advantages, {
+        "return_mean": float(mean.item()),
+        "return_std": float(std.item()),
+        "zero_variance": zero_variance,
+    }
+
+
 def _prospective_auxiliary_examples(
     trajectory_groups: list[list[dict[str, Any]]],
 ) -> tuple[list[tuple[dict[str, Any], dict[str, float]]], list[dict[str, Any]]]:
@@ -910,6 +965,8 @@ def sibling_fiber_grpo_update_groups(
     policy_group_batch_size: int = 1,
     max_update_seconds: float | None = None,
     deck_action_weight: float = 0.0,
+    dense_reward_weight: float = 0.49,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Apply repeated clipped updates over sibling and inter-deck credit.
 
@@ -948,6 +1005,8 @@ def sibling_fiber_grpo_update_groups(
         raise ValueError("max_update_seconds must be finite and positive")
     if not math.isfinite(deck_action_weight) or deck_action_weight < 0.0:
         raise ValueError("deck_action_weight must be finite and non-negative")
+    if not math.isfinite(dense_reward_weight) or not 0.0 <= dense_reward_weight < 0.5:
+        raise ValueError("dense_reward_weight must be finite and in [0, 0.5)")
     if prospective_aux_weight > 0.0 and not hasattr(model, "aux_predictions"):
         raise ValueError("prospective auxiliary training requires model.aux_predictions")
     if deck_aux_weight > 0.0 and not hasattr(model, "deck_card_logits"):
@@ -969,7 +1028,11 @@ def sibling_fiber_grpo_update_groups(
     for group_index, trajectories in enumerate(trajectory_groups):
         _validate_group(trajectories)
         returns = [float(item["terminal_return"]) for item in trajectories]
-        advantages, group_stats = normalize_group_returns(returns, epsilon=advantage_epsilon)
+        policy_scores = [
+            prospective_trajectory_score(item, dense_reward_weight=dense_reward_weight)
+            for item in trajectories
+        ]
+        advantages, group_stats = normalize_relative_scores(policy_scores, epsilon=advantage_epsilon)
         deck_advantage = float(deck_group_advantages[group_index])
         combined_advantages = advantages + deck_relative_weight * deck_advantage
         expected_mapping = torch.cat(
@@ -1005,6 +1068,9 @@ def sibling_fiber_grpo_update_groups(
                 "deck_group_advantage": deck_advantage,
                 "deck_relative_weight": deck_relative_weight,
                 "combined_advantages": combined_advantages.tolist(),
+                "terminal_returns": returns,
+                "policy_scores": policy_scores,
+                "dense_reward_weight": dense_reward_weight,
             }
         )
         prepared_groups.append((trajectories, expected_mapping, branch_mask, credit, group_stats))
@@ -1020,6 +1086,10 @@ def sibling_fiber_grpo_update_groups(
     auxiliary_signal = (
         prospective_aux_weight > 0.0 and bool(prospective_examples)
     ) or (deck_aux_weight > 0.0 and bool(deck_examples)) or deck_action_signal
+    terminal_zero_variance_groups = sum(
+        float(np.std(np.asarray(item["terminal_returns"], dtype=np.float64))) <= advantage_epsilon
+        for item in group_stats_list
+    )
     if total_active == 0 and not auxiliary_signal:
         # A round-robin stratum can be completely outcome-homogeneous even
         # when every fiber and provenance invariant is valid. Treat that as
@@ -1049,12 +1119,17 @@ def sibling_fiber_grpo_update_groups(
             "value_loss": 0.0,
             "optimizer_steps": 0,
             "requested_update_epochs": update_epochs,
+            "completed_update_epochs": 0,
+            "max_update_seconds": max_update_seconds,
+            "stopped_for_update_budget": False,
             "epoch_metrics": [],
             "update_seconds": 0.0,
             "group_count": len(trajectory_groups),
             "group_sizes": [len(group) for group in trajectory_groups],
             "zero_variance_groups": zero_variance_groups,
             "zero_variance_group": zero_variance_groups == len(group_stats_list),
+            "terminal_zero_variance_groups": terminal_zero_variance_groups,
+            "dense_signal_groups": len(group_stats_list) - zero_variance_groups,
             "return_means": [item["return_mean"] for item in group_stats_list],
             "return_stds": [item["return_std"] for item in group_stats_list],
             "return_mean": float(np.mean([item["return_mean"] for item in group_stats_list])),
@@ -1074,6 +1149,10 @@ def sibling_fiber_grpo_update_groups(
             "prospective_aux_examples": len(prospective_examples),
             "deck_aux_examples": len(deck_examples),
             "deck_action_weight": deck_action_weight,
+            "dense_reward_weight": dense_reward_weight,
+            "terminal_return_mean": float(
+                np.mean([value for item in group_stats_list for value in item["terminal_returns"]])
+            ),
             "loss": 0.0,
             "policy_loss": 0.0,
             "gradient_norm": 0.0,
@@ -1111,6 +1190,16 @@ def sibling_fiber_grpo_update_groups(
     for epoch in range(update_epochs):
         if epoch > 0 and max_update_seconds is not None:
             if time.perf_counter() - started >= max_update_seconds:
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "event": "update_budget_stop",
+                            "completed_epochs": epoch,
+                            "requested_epochs": update_epochs,
+                            "elapsed_seconds": round(time.perf_counter() - started, 3),
+                            "max_update_seconds": max_update_seconds,
+                        }
+                    )
                 break
         optimizer.zero_grad(set_to_none=True)
         learner_parts: list[torch.Tensor] = []
@@ -1236,6 +1325,21 @@ def sibling_fiber_grpo_update_groups(
                 **_parameter_delta(model, root_reference),
             }
         )
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "update_epoch",
+                    "epoch": epoch + 1,
+                    "requested_epochs": update_epochs,
+                    "elapsed_seconds": round(time.perf_counter() - started, 3),
+                    "policy_loss": policy_loss_value,
+                    "prospective_aux_loss": last_aux_metrics["loss"],
+                    "deck_aux_loss": last_deck_metrics["loss"],
+                    "deck_action_loss": last_deck_action_metrics["loss"],
+                    "gradient_norm": float(gradient_norm.detach().item()),
+                    "credited_logical_actions": total_active,
+                }
+            )
         last_learner, last_behavior, last_ratio = learner_epoch, behavior_epoch, ratio_epoch
         last_policy_loss = policy_loss_value
         last_gradient_norm = gradient_norm.detach()
@@ -1275,6 +1379,8 @@ def sibling_fiber_grpo_update_groups(
         "group_sizes": [len(group) for group in trajectory_groups],
         "zero_variance_groups": zero_variance_groups,
         "zero_variance_group": zero_variance_groups == len(group_stats_list),
+        "terminal_zero_variance_groups": terminal_zero_variance_groups,
+        "dense_signal_groups": len(group_stats_list) - zero_variance_groups,
         "return_means": [item["return_mean"] for item in group_stats_list],
         "return_stds": [item["return_std"] for item in group_stats_list],
         "return_mean": float(np.mean([item["return_mean"] for item in group_stats_list])),
@@ -1295,6 +1401,12 @@ def sibling_fiber_grpo_update_groups(
         "deck_reconstruction": last_deck_metrics,
         "deck_action_weight": deck_action_weight,
         "deck_action_grpo": last_deck_action_metrics,
+        "dense_reward_weight": dense_reward_weight,
+        "policy_score_means": [item["return_mean"] for item in group_stats_list],
+        "policy_score_stds": [item["return_std"] for item in group_stats_list],
+        "terminal_return_mean": float(
+            np.mean([value for item in group_stats_list for value in item["terminal_returns"]])
+        ),
         "loss": loss_value,
         "policy_loss": last_policy_loss,
         "gradient_norm": float(last_gradient_norm.item()),

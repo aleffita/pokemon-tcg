@@ -35,3 +35,13 @@ def test_deck_credit_is_zero_when_decks_tie() -> None:
     advantages, cohorts = deck_relative_group_advantages(collections)
     assert advantages == [0.0, 0.0]
     assert cohorts[0]["zero_variance"] is True
+
+
+def test_deck_credit_prefers_dense_policy_scores_over_tied_terminal_returns() -> None:
+    left = _collection(0, 0, 0, [-1.0, -1.0])
+    right = _collection(1, 0, 0, [-1.0, -1.0])
+    left["policy_scores"] = [-0.6, -0.7]
+    right["policy_scores"] = [-1.2, -1.1]
+    advantages, cohorts = deck_relative_group_advantages([left, right])
+    assert advantages == pytest.approx([1.0, -1.0])
+    assert cohorts[0]["zero_variance"] is False

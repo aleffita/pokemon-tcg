@@ -9,7 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -29,12 +29,13 @@ from scripts.rl.sibling_fiber_grpo import (
     SIBLING_FORMAT,
     collect_sibling_fiber_group,
     load_external_opponent,
+    normalize_relative_scores,
+    prospective_trajectory_score,
     sibling_fiber_grpo_update_groups,
 )
 from scripts.rl.trajectory_group_grpo import (
     _git_commit,
     flatten_provenance_bundle,
-    normalize_group_returns,
     save_grpo_candidate_checkpoint,
 )
 from scripts.rl.trajectory_probe import (
@@ -54,6 +55,24 @@ DEFAULT_OUTPUT = AR020_OUTPUT.parent / EXPERIMENT
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def _event_logger(output_dir: Path) -> Callable[[dict[str, Any]], None]:
+    """Create one compact durable JSONL stream and mirror it to stdout."""
+    event_path = output_dir / "logs" / "events.jsonl"
+    event_path.write_text("")
+
+    def emit(event: dict[str, Any]) -> None:
+        payload = {
+            "captured_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            **event,
+        }
+        line = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        with event_path.open("a") as stream:
+            stream.write(line + "\n")
+        print(f"[ar021] {line}", flush=True)
+
+    return emit
 
 
 def _manifest_rows(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -108,7 +127,8 @@ def deck_relative_group_advantages(
     cohorts: dict[tuple[int, int], list[tuple[int, int, float]]] = {}
     for collection_index, collection in enumerate(collections):
         key = (int(collection["matchup_index"]), int(collection["group_index"]))
-        score = float(np.mean(np.asarray(collection["returns"], dtype=np.float64)))
+        score_values = collection.get("policy_scores", collection["returns"])
+        score = float(np.mean(np.asarray(score_values, dtype=np.float64)))
         cohorts.setdefault(key, []).append(
             (collection_index, int(collection["learner_deck_index"]), score)
         )
@@ -301,6 +321,7 @@ def run_ar021(
     policy_group_batch_size: int = 2,
     max_update_seconds: float = 600.0,
     deck_action_weight: float = 0.25,
+    dense_reward_weight: float = 0.49,
     include_generated_deck: bool = True,
     deck_pool_dir: Path | None = Path("experiments/decks/swarm/inbox"),
     deck_pool_limit: int = 8,
@@ -333,9 +354,22 @@ def run_ar021(
         raise ValueError("--max-update-seconds must be finite and positive")
     if not np.isfinite(deck_action_weight) or deck_action_weight < 0.0:
         raise ValueError("--deck-action-weight must be finite and non-negative")
+    if not np.isfinite(dense_reward_weight) or not 0.0 <= dense_reward_weight < 0.5:
+        raise ValueError("--dense-reward-weight must be finite and in [0, 0.5)")
     validate_meta_date(meta_date)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logs").mkdir(parents=True, exist_ok=True)
+    emit_event = _event_logger(output_dir)
+    emit_event(
+        {
+            "event": "run_start",
+            "experiment": experiment,
+            "checkpoint": str(checkpoint),
+            "requested_epochs": update_epochs,
+            "max_update_seconds": max_update_seconds,
+            "update_device": update_device,
+        }
+    )
     learner_paths = list(learner_deck_paths or [deck_path])
     learner_paths.extend(_pool_deck_paths(deck_pool_dir, deck_pool_limit))
     if not learner_paths:
@@ -476,8 +510,29 @@ def run_ar021(
                         "requested_seed": group_seed,
                     }
                 )
+                collection["policy_scores"] = [
+                    prospective_trajectory_score(
+                        trajectory,
+                        dense_reward_weight=dense_reward_weight,
+                    )
+                    for trajectory in trajectories
+                ]
                 grouped_trajectories.append(trajectories)
                 collections.append(collection)
+                emit_event(
+                    {
+                        "event": "collection_group",
+                        "group": episode_prefix,
+                        "deck_index": learner_index,
+                        "matchup_index": matchup_index,
+                        "group_index": group_index,
+                        "games": collection["games"],
+                        "logical_decisions": collection["logical_decisions"],
+                        "seconds": round(float(collection["collection_seconds"]), 3),
+                        "returns": collection["returns"],
+                        "policy_scores": collection["policy_scores"],
+                    }
+                )
 
     all_trajectories = [item for group in grouped_trajectories for item in group]
     provenance_bundle = flatten_provenance_bundle(all_trajectories)
@@ -499,6 +554,16 @@ def run_ar021(
     resolved_update_device = _resolve_update_device(update_device)
     model = model.to(resolved_update_device)
     root_reference = root_reference.to(resolved_update_device)
+    emit_event(
+        {
+            "event": "update_start",
+            "groups": len(grouped_trajectories),
+            "games": len(all_trajectories),
+            "logical_decisions": sum(item["logical_decisions"] for item in collections),
+            "device": str(resolved_update_device),
+            "nonzero_deck_advantages": sum(value != 0.0 for value in deck_group_advantages),
+        }
+    )
 
     metrics = sibling_fiber_grpo_update_groups(
         model,
@@ -517,6 +582,8 @@ def run_ar021(
         policy_group_batch_size=policy_group_batch_size,
         max_update_seconds=max_update_seconds,
         deck_action_weight=deck_action_weight,
+        dense_reward_weight=dense_reward_weight,
+        progress_callback=emit_event,
     )
     config = {
         "algorithm": "sibling_fiber_grpo_grouped",
@@ -548,6 +615,7 @@ def run_ar021(
         "policy_group_batch_size": policy_group_batch_size,
         "max_update_seconds": max_update_seconds,
         "deck_action_weight": deck_action_weight,
+        "dense_reward_weight": dense_reward_weight,
         "turn_zero_deck_action": "teacher-forced when supplied; free decode when absent",
         "include_generated_deck": include_generated_deck,
         "generated_turn_zero": generated_turn_zero,
@@ -595,11 +663,12 @@ def run_ar021(
     captured_at = dt.datetime.now(dt.timezone.utc).isoformat()
     return_statistics = []
     for collection in collections:
-        advantages, group_stats = normalize_group_returns(collection["returns"])
+        advantages, group_stats = normalize_relative_scores(collection["policy_scores"])
         return_statistics.append(
             {
                 "group_id": collection["group_id"],
                 "returns": collection["returns"],
+                "policy_scores": collection["policy_scores"],
                 "advantages": advantages.tolist(),
                 **group_stats,
             }
@@ -656,6 +725,7 @@ def run_ar021(
         "branch_base": [collection["branch_base"] for collection in collections],
         "agent_sides": [int(item["agent_side"]) for item in all_trajectories],
         "group_returns": [collection["returns"] for collection in collections],
+        "group_policy_scores": [collection["policy_scores"] for collection in collections],
         "return_mean": [item["return_mean"] for item in return_statistics],
         "return_std": [item["return_std"] for item in return_statistics],
         "returns_advantages": [item["advantages"] for item in return_statistics],
@@ -690,6 +760,7 @@ def run_ar021(
                 "branch_uniform_mix": collection.get("branch_uniform_mix", branch_uniform_mix),
                 "branch_actions": collection["branch_actions"],
                 "returns": collection["returns"],
+                "policy_scores": collection["policy_scores"],
                 "collection_seconds": collection["collection_seconds"],
             }
             for collection in collections
@@ -774,7 +845,10 @@ def run_ar021(
                 f"{experiment} grouped dynamic-K sibling-fiber GRPO",
                 f"group_count={manifest['group_count']}",
                 f"effective_group_sizes={manifest['effective_group_sizes']}",
-                f"returns={manifest['group_returns']}",
+                f"terminal_return_mean={metrics['terminal_return_mean']}",
+                f"policy_score_mean={metrics['return_mean']}",
+                f"policy_score_std_mean={metrics['return_std']}",
+                f"dense_signal_groups={metrics['dense_signal_groups']}",
                 f"logical_decisions={manifest['logical_decisions']}",
                 f"substeps={manifest['substeps']}",
                 f"collection_seconds={manifest['collection_seconds']}",
@@ -785,6 +859,17 @@ def run_ar021(
             ]
         )
         + "\n"
+    )
+    emit_event(
+        {
+            "event": "run_complete",
+            "candidate_sha256": candidate_hash,
+            "optimizer_steps": metrics["optimizer_steps"],
+            "credited_logical_actions": metrics["credited_logical_actions"],
+            "zero_variance_groups": metrics["zero_variance_groups"],
+            "collection_seconds": manifest["collection_seconds"],
+            "update_seconds": metrics["update_seconds"],
+        }
     )
     return manifest
 
@@ -834,6 +919,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-group-batch-size", type=int, default=2)
     parser.add_argument("--max-update-seconds", type=float, default=600.0)
     parser.add_argument("--deck-action-weight", type=float, default=0.25)
+    parser.add_argument("--dense-reward-weight", type=float, default=0.49)
     parser.add_argument("--no-generated-deck", action="store_true")
     parser.add_argument(
         "--deck-pool-dir",
@@ -855,7 +941,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     learner_deck_paths = args.agent_deck or [Path("agent/deck.csv")]
-    print(json.dumps(run_ar021(
+    manifest = run_ar021(
         checkpoint=args.checkpoint,
         deck_path=learner_deck_paths[0],
         meta_date=args.meta_date,
@@ -877,6 +963,7 @@ def main() -> None:
         policy_group_batch_size=args.policy_group_batch_size,
         max_update_seconds=args.max_update_seconds,
         deck_action_weight=args.deck_action_weight,
+        dense_reward_weight=args.dense_reward_weight,
         include_generated_deck=not args.no_generated_deck,
         deck_pool_dir=args.deck_pool_dir,
         deck_pool_limit=args.deck_pool_limit,
@@ -884,7 +971,29 @@ def main() -> None:
         update_device=args.update_device,
         seed=args.seed,
         experiment=args.experiment,
-    ), indent=2, sort_keys=True))
+    )
+    print(
+        json.dumps(
+            {
+                "experiment": manifest["experiment"],
+                "candidate": manifest["candidate"],
+                "candidate_sha256": manifest["candidate_sha256"],
+                "parent_sha256": manifest["parent_sha256"],
+                "groups": manifest["group_count"],
+                "games": manifest["group_size"],
+                "logical_decisions": manifest["logical_decisions"],
+                "collection_seconds": manifest["collection_seconds"],
+                "update_seconds": manifest["update_seconds"],
+                "optimizer_steps": manifest["metrics"]["optimizer_steps"],
+                "credited_logical_actions": manifest["metrics"]["credited_logical_actions"],
+                "zero_variance_groups": manifest["metrics"]["zero_variance_groups"],
+                "events": str(args.output_dir / "logs" / "events.jsonl"),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
