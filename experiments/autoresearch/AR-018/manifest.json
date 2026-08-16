@@ -1,18 +1,18 @@
 {
-  "agent_side": 0,
+  "agent_side": null,
   "checkpoint": "experiments/autoresearch/root/stage4_root.pkl",
-  "collection_seconds": 3.198051,
+  "collection_seconds": 6.412162,
   "decision_counts": {
-    "agent": 85,
-    "opponent": 73
+    "agent": 353,
+    "opponent": 319
   },
-  "decisions_per_second": 49.405,
+  "decisions_per_second": 104.801,
   "deck": "agent/deck.csv",
   "deck_content_sha256": "606a775392ffe25e058b19c17801d58a4bf30f7cd8c62782388d3de7e7eb5283",
   "deck_source_file_sha256": "337186f9422f300e50225d6305570f008eb262ac46f519c62aa115df6dcc75d2",
   "experiment": "AR-018",
   "format": "ptcg-stage4-true-recurrent-selfplay-v1",
-  "games": 1,
+  "games": 4,
   "invariants": {
     "composite_behavior_logprob_is_substep_sum": true,
     "finite_substep_and_logical_logprobs": true,
@@ -22,6 +22,7 @@
     "memory_initialized_once_per_episode": true,
     "memory_input_reused_across_logical_substeps": true,
     "mirror_no_memory_legacy_unchanged": true,
+    "mirror_terminal_return_recorded": true,
     "no_grpo": true,
     "no_rope_nd": true,
     "no_tournament": true,
@@ -29,28 +30,96 @@
     "side_specific_tracker_ability_deck_context": true,
     "terminal_return_sign_is_symmetric": true
   },
-  "lane_digests": {
-    "agent": {
-      "committed_output_chain_sha256": "5d47a67edb2073cb500a7220dca593a042777bae0c5cdfd619f341fe6a91ad1f",
-      "continuity": true,
-      "decision_count": 85,
-      "decision_input_chain_sha256": "7badd7447184b22a8e1d17a0fc69a9a2b9ddb432e9fd46f3e2d117ce5b9f190f",
-      "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
-      "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
-      "lane": "agent",
-      "last_committed_memory_output_digest": "c12ba90e8cca631fce158f363be52a1f6e34a591b5a3c110d66f23afc8d6d2d3"
+  "lane_digests": [
+    {
+      "agent": {
+        "committed_output_chain_sha256": "7e9ddb97c95b8d17c24a7c8db5032722d4e9094212d7a6fe97c33b107e992d6e",
+        "continuity": true,
+        "decision_count": 91,
+        "decision_input_chain_sha256": "7d11cc9bcdf85eaeda2fd782116c1845a7bfd32224aaebe4695616ea1406f30c",
+        "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "lane": "agent",
+        "last_committed_memory_output_digest": "260fde7f53fb908324f048a0f2087664cceb4c0d251d31afe1abe67bcefe4ef7"
+      },
+      "opponent": {
+        "committed_output_chain_sha256": "d3c83f1643668b93ce7ed8694858ae751679ecdc934b4ffd1dca468143295522",
+        "continuity": true,
+        "decision_count": 74,
+        "decision_input_chain_sha256": "463548803693315ee13987e84950dc689b823520cc1a384f4e43cc585ab078e5",
+        "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "lane": "mirror",
+        "last_committed_memory_output_digest": "95ca6e0396bf9dfd9059b3943c5ff4ac64ae3b895c79c55b763abc4feca8012c"
+      }
     },
-    "opponent": {
-      "committed_output_chain_sha256": "35a063e46fdd990b6e0c3ecce2aa17dbc80da638a45f588be60bbfb5a3de61e2",
-      "continuity": true,
-      "decision_count": 73,
-      "decision_input_chain_sha256": "d84c108e6dc481b563af4edd722af1d70d667e95fa5a3fa21c757adf17e15f8b",
-      "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
-      "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
-      "lane": "mirror",
-      "last_committed_memory_output_digest": "4affc80ef0a2b50cea0faff4cc972d98f2311acbd2a109e0ec29624f02a327f7"
+    {
+      "agent": {
+        "committed_output_chain_sha256": "15dbded566dc69e866a54fbd7134ed7761d96897e7d4e46d4afd3f9290cbe9cd",
+        "continuity": true,
+        "decision_count": 81,
+        "decision_input_chain_sha256": "4ea9d598744d74231897b01d709af6874ecd789ee45acbce1f9a45bb1bd1da29",
+        "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "lane": "agent",
+        "last_committed_memory_output_digest": "e8b575b338b0da64e986ecb0acafc57d88428646517fc50d303bc24e523f3f69"
+      },
+      "opponent": {
+        "committed_output_chain_sha256": "ea08a5ca2dbd238f734ae4a0ee3820ce82ddcf917297c246e732988fe5d2671c",
+        "continuity": true,
+        "decision_count": 81,
+        "decision_input_chain_sha256": "fa09a2c8dba961e01b9ecf9a17737e3a47ece0dc73a41fb4effa93e66fede7e4",
+        "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "lane": "mirror",
+        "last_committed_memory_output_digest": "aa90f3ef4898a7d1f9ba325afbcfa1b7f70551e7ae4d14c9a57a80da827f0f0c"
+      }
+    },
+    {
+      "agent": {
+        "committed_output_chain_sha256": "ae5b71cc4e6a66ab7d120c7ea7cdf1bed98cf556234b72288e4947013cc61a60",
+        "continuity": true,
+        "decision_count": 84,
+        "decision_input_chain_sha256": "da7229d459956c735357f01ce1ca03d3b3f3a2c754045402f1def8842fcae2cf",
+        "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "lane": "agent",
+        "last_committed_memory_output_digest": "ef98c25413f5985198f4416341b2d31bc33d56bcd2ada64e49dfcfae61433d78"
+      },
+      "opponent": {
+        "committed_output_chain_sha256": "0dc3c2fc81b9b93c61ac064b49d7feabd5b9a715e6b2cfcbf274b7a1e9ed0c9a",
+        "continuity": true,
+        "decision_count": 74,
+        "decision_input_chain_sha256": "a9e729ac624c819670bc9e56ea57693e6ebde4d9c32d834c90f6086e389e7ffa",
+        "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "lane": "mirror",
+        "last_committed_memory_output_digest": "66d52ffbf2df1a3b0281746d2a78dbf926ea8c99cf364de58d110e2dfa14d431"
+      }
+    },
+    {
+      "agent": {
+        "committed_output_chain_sha256": "c01e4a2852dd9f28541a91e82d940461eac528997239459d6ebe1bb476b352db",
+        "continuity": true,
+        "decision_count": 97,
+        "decision_input_chain_sha256": "82de988fa0089cbed1ac716a4528874aea027fca2ed8691c838cf32f5b9f9ebd",
+        "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "lane": "agent",
+        "last_committed_memory_output_digest": "450ffe823dd4500052299fc244ac246474f57c1216315ee53e59c3ac90206a6b"
+      },
+      "opponent": {
+        "committed_output_chain_sha256": "8a31bbbe5f8b1792c1e7aa786d10b0ce574cba385fce7aaf38c23d3d872c3559",
+        "continuity": true,
+        "decision_count": 90,
+        "decision_input_chain_sha256": "3c2fcd97feff0b69ccd1ff2bc93c70fb0141ec26d113c8bc5977bd2771dd53a9",
+        "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+        "lane": "mirror",
+        "last_committed_memory_output_digest": "76357d69cca304e33c711779430f3900bf3b721d52ba827c387b67d59e0965d1"
+      }
     }
-  },
+  ],
   "metadata_date": "2026-08-12",
   "model_metadata": {
     "arch_version": "1.0.0",
@@ -58,51 +127,154 @@
     "token_schema_version": "1.0.0"
   },
   "model_sha256": "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b",
-  "opponent_side": 1,
+  "opponent_side": null,
   "packed_used": false,
   "parquet_used": false,
-  "record_count": 168,
+  "record_count": 759,
   "records_path": "logs/selfplay.jsonl",
-  "rows_per_second": 52.532,
+  "rows_per_second": 118.369,
   "selfplay_mode": "current_vs_current_true_recurrent",
-  "selfplay_records_sha256": "4878a6c2b7af7fa26d907cd63ede14acee39b3e2daf9b139b1a0545cda387ac7",
-  "terminal_return_agent": -1.0,
-  "terminal_return_opponent": 1.0,
+  "selfplay_records_sha256": "468a1ca5cd6958ea32a618c29771aed5699d1e6208d20c4c718d8edaa1772b3c",
+  "terminal_return_agent": null,
+  "terminal_return_opponent": null,
   "terminal_returns": [
     {
-      "agent_side": 0,
+      "agent_side": 1,
       "decision_counts": {
-        "agent": 85,
-        "opponent": 73
+        "agent": 91,
+        "opponent": 74
       },
       "episode_id": "true_recurrent-000",
       "lane_digests": {
         "agent": {
-          "committed_output_chain_sha256": "5d47a67edb2073cb500a7220dca593a042777bae0c5cdfd619f341fe6a91ad1f",
+          "committed_output_chain_sha256": "7e9ddb97c95b8d17c24a7c8db5032722d4e9094212d7a6fe97c33b107e992d6e",
           "continuity": true,
-          "decision_count": 85,
-          "decision_input_chain_sha256": "7badd7447184b22a8e1d17a0fc69a9a2b9ddb432e9fd46f3e2d117ce5b9f190f",
+          "decision_count": 91,
+          "decision_input_chain_sha256": "7d11cc9bcdf85eaeda2fd782116c1845a7bfd32224aaebe4695616ea1406f30c",
           "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
           "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
           "lane": "agent",
-          "last_committed_memory_output_digest": "c12ba90e8cca631fce158f363be52a1f6e34a591b5a3c110d66f23afc8d6d2d3"
+          "last_committed_memory_output_digest": "260fde7f53fb908324f048a0f2087664cceb4c0d251d31afe1abe67bcefe4ef7"
         },
         "opponent": {
-          "committed_output_chain_sha256": "35a063e46fdd990b6e0c3ecce2aa17dbc80da638a45f588be60bbfb5a3de61e2",
+          "committed_output_chain_sha256": "d3c83f1643668b93ce7ed8694858ae751679ecdc934b4ffd1dca468143295522",
           "continuity": true,
-          "decision_count": 73,
-          "decision_input_chain_sha256": "d84c108e6dc481b563af4edd722af1d70d667e95fa5a3fa21c757adf17e15f8b",
+          "decision_count": 74,
+          "decision_input_chain_sha256": "463548803693315ee13987e84950dc689b823520cc1a384f4e43cc585ab078e5",
           "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
           "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
           "lane": "mirror",
-          "last_committed_memory_output_digest": "4affc80ef0a2b50cea0faff4cc972d98f2311acbd2a109e0ec29624f02a327f7"
+          "last_committed_memory_output_digest": "95ca6e0396bf9dfd9059b3943c5ff4ac64ae3b895c79c55b763abc4feca8012c"
         }
       },
+      "mirror_terminal_record_count": 2,
+      "opponent_side": 0,
+      "terminal_return_agent": -1.0,
+      "terminal_return_opponent": 1.0
+    },
+    {
+      "agent_side": 0,
+      "decision_counts": {
+        "agent": 81,
+        "opponent": 81
+      },
+      "episode_id": "true_recurrent-001",
+      "lane_digests": {
+        "agent": {
+          "committed_output_chain_sha256": "15dbded566dc69e866a54fbd7134ed7761d96897e7d4e46d4afd3f9290cbe9cd",
+          "continuity": true,
+          "decision_count": 81,
+          "decision_input_chain_sha256": "4ea9d598744d74231897b01d709af6874ecd789ee45acbce1f9a45bb1bd1da29",
+          "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "lane": "agent",
+          "last_committed_memory_output_digest": "e8b575b338b0da64e986ecb0acafc57d88428646517fc50d303bc24e523f3f69"
+        },
+        "opponent": {
+          "committed_output_chain_sha256": "ea08a5ca2dbd238f734ae4a0ee3820ce82ddcf917297c246e732988fe5d2671c",
+          "continuity": true,
+          "decision_count": 81,
+          "decision_input_chain_sha256": "fa09a2c8dba961e01b9ecf9a17737e3a47ece0dc73a41fb4effa93e66fede7e4",
+          "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "lane": "mirror",
+          "last_committed_memory_output_digest": "aa90f3ef4898a7d1f9ba325afbcfa1b7f70551e7ae4d14c9a57a80da827f0f0c"
+        }
+      },
+      "mirror_terminal_record_count": 1,
+      "opponent_side": 1,
+      "terminal_return_agent": 1.0,
+      "terminal_return_opponent": -1.0
+    },
+    {
+      "agent_side": 0,
+      "decision_counts": {
+        "agent": 84,
+        "opponent": 74
+      },
+      "episode_id": "true_recurrent-002",
+      "lane_digests": {
+        "agent": {
+          "committed_output_chain_sha256": "ae5b71cc4e6a66ab7d120c7ea7cdf1bed98cf556234b72288e4947013cc61a60",
+          "continuity": true,
+          "decision_count": 84,
+          "decision_input_chain_sha256": "da7229d459956c735357f01ce1ca03d3b3f3a2c754045402f1def8842fcae2cf",
+          "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "lane": "agent",
+          "last_committed_memory_output_digest": "ef98c25413f5985198f4416341b2d31bc33d56bcd2ada64e49dfcfae61433d78"
+        },
+        "opponent": {
+          "committed_output_chain_sha256": "0dc3c2fc81b9b93c61ac064b49d7feabd5b9a715e6b2cfcbf274b7a1e9ed0c9a",
+          "continuity": true,
+          "decision_count": 74,
+          "decision_input_chain_sha256": "a9e729ac624c819670bc9e56ea57693e6ebde4d9c32d834c90f6086e389e7ffa",
+          "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "lane": "mirror",
+          "last_committed_memory_output_digest": "66d52ffbf2df1a3b0281746d2a78dbf926ea8c99cf364de58d110e2dfa14d431"
+        }
+      },
+      "mirror_terminal_record_count": 1,
       "opponent_side": 1,
       "terminal_return_agent": -1.0,
       "terminal_return_opponent": 1.0
+    },
+    {
+      "agent_side": 1,
+      "decision_counts": {
+        "agent": 97,
+        "opponent": 90
+      },
+      "episode_id": "true_recurrent-003",
+      "lane_digests": {
+        "agent": {
+          "committed_output_chain_sha256": "c01e4a2852dd9f28541a91e82d940461eac528997239459d6ebe1bb476b352db",
+          "continuity": true,
+          "decision_count": 97,
+          "decision_input_chain_sha256": "82de988fa0089cbed1ac716a4528874aea027fca2ed8691c838cf32f5b9f9ebd",
+          "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "lane": "agent",
+          "last_committed_memory_output_digest": "450ffe823dd4500052299fc244ac246474f57c1216315ee53e59c3ac90206a6b"
+        },
+        "opponent": {
+          "committed_output_chain_sha256": "8a31bbbe5f8b1792c1e7aa786d10b0ce574cba385fce7aaf38c23d3d872c3559",
+          "continuity": true,
+          "decision_count": 90,
+          "decision_input_chain_sha256": "3c2fcd97feff0b69ccd1ff2bc93c70fb0141ec26d113c8bc5977bd2771dd53a9",
+          "first_decision_input_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "initial_memory_digest": "266b74f0f530281c0419451c836465bd276dcc563ad34b557751ea5272c46916",
+          "lane": "mirror",
+          "last_committed_memory_output_digest": "76357d69cca304e33c711779430f3900bf3b721d52ba827c387b67d59e0965d1"
+        }
+      },
+      "mirror_terminal_record_count": 1,
+      "opponent_side": 0,
+      "terminal_return_agent": 1.0,
+      "terminal_return_opponent": -1.0
     }
   ],
-  "total_decisions": 158,
-  "total_rows": 168
+  "total_decisions": 672,
+  "total_rows": 759
 }

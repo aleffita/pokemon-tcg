@@ -1,31 +1,46 @@
-# AR-018 review - KEEP for the next RL task
+# AR-018 reviewer audit
 
-## Verdict
+## Initial audit
 
-**KEEP the implementation as the true recurrent self-play foundation.** The
-correctness gate passed and the result is interpretable as a collector smoke.
-It is not a competitive promotion and has no tournament evidence.
+The first review found one P0: `CabtEnv.reset()` could retry after a
+discarded opening in which the mirror had already acted, while the collector
+reset the mirror only once before calling `env.reset()`. The review also
+requested four-game coverage, an end-to-end learner/behavior logprob check,
+and independently recorded mirror terminal evidence.
 
-## Acceptance audit
+## Rework and final verdict
 
-- The mirror initializes one learned Stage 4 memory per episode.
-- Every mirror substep receives a non-null persistent `memory_in`; only the
-  final substep output is committed.
-- Agent and mirror lanes have independent continuity chains and reset digests.
-- `CabtEnv` side-specific tracker, ability, and deck arguments remain the
-  encoder context for the mirror.
-- Legal action indices and legality checks are recorded for both lanes.
-- Substep logprobs remain present and the complete logical decision sum is
-  recorded under `logical_action_logprob` and `decision_logprob`.
-- The real one-game metadata-bound smoke completed with symmetric terminal
-  return signs and no Parquet or packed hot-path use.
+**KEEP.** The P0 is closed by `28c2b96`. `CabtEnv` now accepts an explicit
+reset hook and invokes it before every battle-start attempt. The stateful
+mirror is wired to that hook, so memory, event records, and terminal state are
+cleared before every retry. `tests/test_trajectory_probe.py` includes a fake
+two-attempt environment proving that the discarded attempt invokes the mirror
+under the first reset state and the accepted attempt starts under a fresh
+reset state.
 
-## Non-blocking limitations
+The former P1 findings are also closed for this gate:
 
-- The probe is intentionally one game and not a strength evaluation.
-- The event JSONL is compact relative to tensor buffers but is still a
-  per-substep diagnostic log.
-- No batched collection or recurrent gradient update exists yet.
+- the final smoke ran four games and covered both agent sides, `[1, 0, 0, 1]`;
+- a copied learner snapshot recomputes each complete logical-action logprob
+  from the recorded actions and masked logits, with an importance ratio of one
+  against the behavior snapshot;
+- `CabtEnv` notifies the mirror of terminal outcomes, and mirror event records
+  carry the terminal flag and mirror-perspective reward. The manifest records
+  one or more terminal mirror records per game.
 
-Evidence: `report.md`, `manifest.json`, `logs/selfplay.jsonl`, and
-`logs/tests.log`.
+## Checks
+
+- `uv run --locked pytest -q tests/test_trajectory_probe.py tests/test_ar010_candidate_path.py`: `32 passed`.
+- `py_compile` for the environment, collector, executable probe, and tests: passed.
+- `git diff --check`: passed.
+- Four-game metadata-bound smoke: passed; 672 logical decisions, 759 records,
+  118.369 records/s, 104.801 decisions/s.
+- All four games had independent agent and mirror continuity chains, legal
+  action checks, composite logprob checks, and symmetric terminal returns.
+- Manifest and self-play JSONL SHA-256 values match the recorded files.
+- No GRPO, RoPE-ND, tournament, package, ETL, Parquet, or packed-data path was
+  run.
+
+No P0 or P1 remains. This is a correctness/throughput gate, not competitive
+evidence; Stage 4 remains the only promoted policy and fallback. The next
+control point is trajectory-group GRPO.

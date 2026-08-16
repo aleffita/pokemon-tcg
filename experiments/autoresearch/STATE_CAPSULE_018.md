@@ -1,6 +1,7 @@
-# State Capsule 018 - true recurrent self-play gate
+# State Capsule 018 - corrected true recurrent self-play gate
 
-Captured 2026-08-16 after AR-018 implementation and one real smoke game.
+Captured 2026-08-16 after the AR-018 reset-retry repair and final four-game
+smoke.
 
 ## Current policy and root
 
@@ -12,23 +13,25 @@ Captured 2026-08-16 after AR-018 implementation and one real smoke game.
 
 ## AR-018 state
 
-- Foundation code was present in commit `3867171`.
-- Probe, tests, and executable wrapper were committed in `434d3f6`.
+- Foundation commit: `3867171`.
+- Initial probe commit: `434d3f6`.
+- Reset-retry repair commit: `28c2b96`.
 - Mode: current-vs-current true recurrent self-play.
 - Metadata date: `2026-08-12`.
-- Games: 1.
-- Decisions: agent 85, mirror 73, total 158.
-- Substep records: 168.
-- Throughput: 52.532 records/s and 49.405 decisions/s.
-- Terminal returns: agent `-1.0`, opponent `+1.0`.
-- Both lane continuity checks: true.
+- Smoke: 4 games, seed `18000`, both agent sides covered `[1, 0, 0, 1]`.
+- Decisions: agent 353, mirror 319, total 672.
+- Substep records: 759.
+- Throughput: 118.369 records/s and 104.801 decisions/s.
+- Agent terminal returns: `[-1.0, +1.0, -1.0, +1.0]`.
+- Mirror terminal returns: `[+1.0, -1.0, +1.0, -1.0]`.
+- Both lane continuity checks: true in every game.
 - Parquet and packed hot paths: false.
 
-The learner and mirror begin from the same learned-init digest but maintain
-separate recurrent tensors. Each logical action keeps conditional substep
-logprobs and receives their complete sum as `logical_action_logprob` and
-`decision_logprob`. Legal actions, sides, memory input/output digests, and
-committed last-substep digests are recorded in the compact self-play log.
+The reset hook executes before every battle-start retry, preventing a
+discarded opening from leaking mirror memory or events into the accepted
+episode. Mirror terminal events carry the opponent-perspective reward. A
+copied learner snapshot recomputes complete logical-action logprobs and
+matches the behavior snapshot at ratio one.
 
 ## Evidence
 
@@ -38,6 +41,7 @@ committed last-substep digests are recorded in the compact self-play log.
 - `experiments/autoresearch/AR-018/logs/selfplay.jsonl`
 - `experiments/autoresearch/AR-018/logs/tests.log`
 
-Focused validation: 30 tests passed; `py_compile` and `git diff --check`
-passed. The next control point is trajectory-group GRPO, not another BC or
+Focused validation: 32 tests passed; `py_compile` and `git diff --check`
+passed. The corrected AR-018 gate is kept as the foundation for
+trajectory-group GRPO. The next control point is not another BC or
 Parquet/packed-data task.
