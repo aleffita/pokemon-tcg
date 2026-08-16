@@ -228,6 +228,21 @@ def _clean_agent_label(path: str) -> str:
     return base
 
 
+def _agent_deck_path(agent_path: str, agent_module) -> str:
+    """Return the deck shipped with the loaded agent.
+
+    A packaged submission is extracted to a temporary directory by
+    ``load_agent``.  Using the repository's ``agent/deck.csv`` for that
+    submission silently labels tournament rows with the wrong deck.
+    """
+    module_file = getattr(agent_module, "__file__", None)
+    if module_file:
+        return os.path.join(os.path.dirname(os.path.abspath(module_file)), "deck.csv")
+    if os.path.isfile(agent_path):
+        return os.path.join(os.path.dirname(os.path.abspath(agent_path)), "deck.csv")
+    return os.path.join(os.path.abspath(agent_path), "deck.csv")
+
+
 def _resolve_deck_human_info(db, deck_id: int | None, is_our_deck: bool = False) -> dict:
     """Resolve human info for deck_id. If is_our_deck is True, brands cleanly as Agent Submission Deck."""
     if deck_id is None:
@@ -648,6 +663,7 @@ def main():
 
 def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path: Path):
     our_agent, our_module = load_agent(our_path, return_module=True)
+    our_deck_path = _agent_deck_path(our_path, our_module)
     env = make_env()
 
     # Baselines + public agents. ``--opponent`` may be repeated to select a
@@ -679,12 +695,12 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
         )
     else:
         our_test_decks = _get_test_decks(db, source=args.sweep_source, n_top=args.top_decks)
-        default_card_ids = _read_deck_csv(os.path.join(AGENT_DIR, "deck.csv"))
+        default_card_ids = _read_deck_csv(our_deck_path)
 
     # Read original deck to restore after sweep
     original_deck = (
-        open(os.path.join(AGENT_DIR, "deck.csv")).read()
-        if not args.smoke and os.path.exists(os.path.join(AGENT_DIR, "deck.csv"))
+        open(our_deck_path).read()
+        if not args.smoke and os.path.exists(our_deck_path)
         else None
     )
 
@@ -763,7 +779,7 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                 deck_id = _find_or_create_deck(db, default_card_ids)
 
             # Swap agent/deck.csv ONCE for our agent for this entire deck batch
-            deck_csv = os.path.join(AGENT_DIR, "deck.csv")
+            deck_csv = our_deck_path
             try:
                 if card_ids:
                     with open(deck_csv, "w") as f:
@@ -864,6 +880,7 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                 deck_id = _find_or_create_deck(db, default_card_ids)
             else:
                 deck_id = None
+            opp_deck_id = opp_deck_ids.get(label)
 
             deck_label = f"{label} [deck:{deck_id}]" if deck_id else label
             rows.append((deck_label, w, l, d, wr, elapsed, replay_html))
@@ -871,7 +888,7 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                 "opponent_label": label,
                 "opponent_path": opp_path,
                 "deck_id": deck_id,
-                "opp_deck_id": None,
+                "opp_deck_id": opp_deck_id,
                 "wins": w, "losses": l, "draws": d,
                 "wr_pct": wr,
                 "elapsed_s": elapsed,
