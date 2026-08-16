@@ -17,8 +17,7 @@ from rl.packed_data import (
 )
 from scripts.bc.bc_train_mlx import (
     _load_resume_setup,
-    _prepare_optimizer_state,
-    _prepare_scheduler_phase,
+    _prepare_training_phases,
 )
 
 
@@ -113,26 +112,55 @@ def test_production_resume_setup_allows_only_exact_root_warmstart_and_resets_pha
     assert setup.state["optimizer"]
 
     optimizer = _RecordingOptimizer()
-    loaded = _prepare_optimizer_state(
+    phase = _prepare_training_phases(
         optimizer,
         model,
         state=setup.state,
         resume_path=APPROVED_ROOT,
         optimizer_state="reset",
-        optimizer_contract={"name": "tiny"},
-    )
-    assert loaded is False
-    assert optimizer.init_calls == 1
-    assert optimizer.state == {"fresh": True}
-
-    phase_step, total_steps = _prepare_scheduler_phase(
-        state=setup.state,
-        resume_path=APPROVED_ROOT,
         scheduler_state="reset",
+        optimizer_contract={"name": "tiny"},
         configured_total_steps=4,
         run_optimizer_steps=2,
     )
-    assert (phase_step, total_steps) == (0, 4)
+    assert phase.optimizer_resumed is False
+    assert optimizer.init_calls == 1
+    assert optimizer.state == {"fresh": True}
+    assert phase.optimizer_phase_step == 0
+    assert (phase.scheduler_phase_step, phase.scheduler_total_steps) == (0, 4)
+
+
+def test_production_resume_setup_continues_matching_identity_optimizer_and_scheduler(tmp_path):
+    current = _identity()
+    checkpoint = tmp_path / "matching.pkl"
+    _write_checkpoint(checkpoint, data_identity=current)
+    model = _RecordingModel({"kind": "tiny"})
+    setup = _load_resume_setup(
+        checkpoint,
+        model=model,
+        data_identity=current,
+        packed=True,
+        optimizer_state="resume",
+        scheduler_state="resume",
+    )
+    optimizer = _RecordingOptimizer()
+    phase = _prepare_training_phases(
+        optimizer,
+        model,
+        state=setup.state,
+        resume_path=checkpoint,
+        optimizer_state="resume",
+        scheduler_state="resume",
+        optimizer_contract={"name": "tiny"},
+        configured_total_steps=20,
+        run_optimizer_steps=2,
+    )
+    assert setup.compatibility == "validated"
+    assert phase.optimizer_resumed is True
+    assert optimizer.init_calls == 0
+    assert optimizer.state == {"loaded": True}
+    assert phase.optimizer_phase_step == 12
+    assert (phase.scheduler_phase_step, phase.scheduler_total_steps) == (13, 20)
 
 
 @pytest.mark.parametrize("mode", ["optimizer", "scheduler"])

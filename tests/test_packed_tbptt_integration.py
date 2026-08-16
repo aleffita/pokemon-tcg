@@ -1,5 +1,6 @@
 import json
 
+import mlx.core as mx
 import numpy as np
 
 from rl.packed_data import (
@@ -11,9 +12,10 @@ from rl.packed_data import (
     sha256_file,
 )
 from scripts.bc.bc_train_mlx import (
-    _apply_dedup_relabel,
+    _batched_sequential_tbptt_loss,
     _build_tbptt_decision_groups,
     _build_tbptt_plan,
+    _load_temporal_batch,
 )
 
 
@@ -74,25 +76,71 @@ def _write_store(root):
     return arrays
 
 
-def test_packed_store_feeds_tbptt_plan_with_masks_and_aux_targets(tmp_path):
+class _SequentialProbeModel:
+    scratch_tokens = 1
+    d = 1
+    learned_init = mx.zeros((1, 1, 1), dtype=mx.float32)
+
+    def logits_value(self, observations, *, memory_in):
+        rows = int(observations["action_mask"].shape[0])
+        return (
+            mx.zeros((rows, 3), dtype=mx.float32),
+            mx.zeros((rows, 1), dtype=mx.float32),
+            memory_in + mx.ones_like(memory_in),
+        )
+
+
+def test_packed_production_temporal_loader_relabels_and_consumes_tbptt_sequentially(
+    tmp_path,
+):
     arrays = _write_store(tmp_path)
     store = PackedArrayStore(tmp_path, columns=list(arrays))
     meta = {name: arrays[name] for name in ("episode_id", "side", "step_id")}
     groups = _build_tbptt_decision_groups(meta, len(arrays["episode_id"]))
-    plan = _build_tbptt_plan(groups, chunk_size=2, row_budget=4)
-    assert len(plan) == 2
+    plan = _build_tbptt_plan(groups, chunk_size=1, row_budget=3)
+    assert len(plan) == 3
 
     seen_rows = []
     seen_labels = []
+    memories = {}
+    model = _SequentialProbeModel()
     for temporal_batch in plan:
-        for chunk in temporal_batch:
-            rows = np.concatenate(chunk.decisions)
-            fetched = store.read_rows(rows)
-            _apply_dedup_relabel(fetched)
+        loaded = _load_temporal_batch(
+            temporal_batch,
+            keys=["action_mask"],
+            int_keys=set(),
+            aux_active=False,
+            source="tbptt-cache",
+            cache_backend=(
+                store,
+                np.zeros(len(arrays["y"]), dtype=np.int32),
+                np.zeros(len(arrays["y"]), dtype=np.int32),
+                np.arange(len(arrays["y"]), dtype=np.int32),
+            ),
+            emit_fetched=True,
+        )
+        lane_observations, lane_labels, decision_lengths, lane_rows, _, fetched = loaded
+        lane_memories = [
+            None if chunk.is_new_group else memories[chunk.group_index]
+            for chunk in temporal_batch
+        ]
+        _, memory_out = _batched_sequential_tbptt_loss(
+            model,
+            lane_observations,
+            lane_labels,
+            decision_lengths,
+            lane_memories,
+        )
+        mx.eval(memory_out)
+        for lane_index, chunk in enumerate(temporal_batch):
+            memories[chunk.group_index] = memory_out[lane_index : lane_index + 1]
+            rows = lane_rows[lane_index]
             seen_rows.extend(rows.tolist())
-            seen_labels.extend(fetched["y"].tolist())
-            assert fetched["action_mask"].shape[0] == len(rows)
-            assert fetched["aux_valid"].shape == fetched["aux_return"].shape
-            np.testing.assert_array_equal(fetched["y"], np.array([0, 0, 1, 2, 0, 1])[rows])
-    assert seen_rows == list(range(len(arrays["episode_id"])))
-    assert seen_labels == [0, 0, 1, 2, 0, 1]
+            seen_labels.extend(np.asarray(lane_labels[lane_index]).tolist())
+            assert fetched[lane_index]["action_mask"].shape[0] == len(rows)
+            np.testing.assert_array_equal(
+                fetched[lane_index]["y"], np.array([0, 0, 1, 2, 0, 1])[rows]
+            )
+    assert seen_rows == [0, 1, 2, 5, 3, 4]
+    assert seen_labels == [0, 0, 1, 1, 2, 0]
+    assert sorted(int(np.asarray(value).reshape(-1)[0]) for value in memories.values()) == [1, 1, 2]

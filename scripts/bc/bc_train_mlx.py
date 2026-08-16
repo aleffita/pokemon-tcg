@@ -254,6 +254,16 @@ class _ResumeSetup:
     compatibility: str
 
 
+@dataclass(frozen=True)
+class _TrainingPhaseSetup:
+    """Production optimizer/scheduler continuation state for one run."""
+
+    optimizer_resumed: bool
+    optimizer_phase_step: int
+    scheduler_phase_step: int
+    scheduler_total_steps: int
+
+
 def _load_resume_setup(
     resume_path: str | os.PathLike[str] | None,
     *,
@@ -369,6 +379,47 @@ def _prepare_scheduler_phase(
     if total_steps <= 0:
         raise ValueError("scheduler_total_steps must be positive")
     return 0, total_steps
+
+
+def _prepare_training_phases(
+    optimizer,
+    model,
+    *,
+    state: dict,
+    resume_path: str | os.PathLike[str] | None,
+    optimizer_state: str,
+    scheduler_state: str,
+    optimizer_contract: dict,
+    configured_total_steps: int,
+    run_optimizer_steps: int,
+) -> _TrainingPhaseSetup:
+    """Initialize or continue both phases through the production setup path."""
+    optimizer_resumed = _prepare_optimizer_state(
+        optimizer,
+        model,
+        state=state,
+        resume_path=resume_path,
+        optimizer_state=optimizer_state,
+        optimizer_contract=optimizer_contract,
+    )
+    optimizer_phase_step = (
+        int(state.get("optimizer_phase_step", 0))
+        if resume_path and optimizer_state == "resume"
+        else 0
+    )
+    scheduler_phase_step, scheduler_total_steps = _prepare_scheduler_phase(
+        state=state,
+        resume_path=resume_path,
+        scheduler_state=scheduler_state,
+        configured_total_steps=configured_total_steps,
+        run_optimizer_steps=run_optimizer_steps,
+    )
+    return _TrainingPhaseSetup(
+        optimizer_resumed=optimizer_resumed,
+        optimizer_phase_step=optimizer_phase_step,
+        scheduler_phase_step=scheduler_phase_step,
+        scheduler_total_steps=scheduler_total_steps,
+    )
 
 
 def _build_optimizer(cfg) -> optim.MultiOptimizer:
@@ -1497,6 +1548,130 @@ def _apply_dedup_relabel(chunk: dict[str, np.ndarray]) -> None:
     chunk["y"] = group[np.arange(len(y)), y]
 
 
+def _load_temporal_batch(
+    temporal_batch: list[_TBPTTChunk],
+    *,
+    keys: list[str],
+    int_keys: set[str],
+    aux_active: bool,
+    zero_wouldko: bool = False,
+    arrays: dict | None = None,
+    labels: np.ndarray | None = None,
+    label_base: int = 0,
+    aux_arrays: dict[str, np.ndarray] | None = None,
+    source: str = "materialized",
+    cache_backend: tuple | None = None,
+    emit_fetched: bool = False,
+):
+    """Materialize one production TBPTT batch with lane-local row order.
+
+    ``source="tbptt-cache"`` is the packed/streaming production path.  The
+    cache backend is explicit so tests and callers exercise the same loader
+    without relying on ``main``'s closure state.  Relative to the old nested
+    implementation, this only makes those dependencies explicit.
+    """
+    lane_observations: list[dict[str, mx.array]] = []
+    lane_labels: list[mx.array] = []
+    lane_decision_lengths: list[list[int]] = []
+    lane_rows: list[np.ndarray] = []
+    lane_aux_targets: list[dict[str, mx.array]] | None = (
+        [] if aux_arrays is not None or (source == "tbptt-cache" and aux_active) else None
+    )
+    lane_fetched: list[dict[str, np.ndarray]] | None = (
+        [] if source == "tbptt-cache" and emit_fetched else None
+    )
+
+    if source == "tbptt-cache":
+        if cache_backend is None:
+            raise ValueError("tbptt-cache source requires an explicit cache_backend")
+        cache_obj, cb_file_idx, cb_rg_idx, cb_offset = cache_backend
+
+    for chunk in temporal_batch:
+        chunk_arr = np.concatenate(chunk.decisions)
+        lane_rows.append(chunk_arr)
+        if source == "tbptt-cache":
+            fetched = cache_obj.read_rows(
+                chunk_arr,
+                cb_file_idx,
+                cb_rg_idx,
+                cb_offset,
+            )
+            # Dedup relabel is per chunk and row-local, exactly matching the
+            # legacy loader while keeping packed TBPTT labels canonical.
+            _apply_dedup_relabel(fetched)
+            lane_observations.append(
+                {
+                    key: mx.array(
+                        fetched[key].astype(np.int32 if key in int_keys else np.float32)
+                    )
+                    for key in keys
+                }
+            )
+            if zero_wouldko:
+                attr = np.asarray(lane_observations[-1]["opt_attr"]).copy()
+                attr[..., WK_LO:WK_HI] = 0.0
+                lane_observations[-1]["opt_attr"] = mx.array(attr, dtype=mx.float32)
+            lane_labels.append(mx.array(fetched["y"].astype(np.int32)))
+            if aux_active:
+                lane_aux_targets.append(
+                    {
+                        c: mx.array(fetched[c].astype(np.float32))
+                        for c in _AUX_COLUMNS
+                    }
+                )
+            lane_decision_lengths.append(
+                [len(decision_rows) for decision_rows in chunk.decisions]
+            )
+            if lane_fetched is not None:
+                lane_fetched.append(fetched)
+            continue
+
+        if arrays is None or labels is None:
+            raise ValueError("materialized source requires arrays and labels")
+        lane_observations.append(
+            {
+                key: mx.array(
+                    np.asarray(arrays[key][chunk_arr]).astype(
+                        np.int32 if key in int_keys else np.float32
+                    )
+                )
+                for key in keys
+            }
+        )
+        if zero_wouldko:
+            attr = np.asarray(lane_observations[-1]["opt_attr"]).copy()
+            attr[..., WK_LO:WK_HI] = 0.0
+            lane_observations[-1]["opt_attr"] = mx.array(attr, dtype=mx.float32)
+        lane_labels.append(mx.array(labels[label_base + chunk_arr].astype(np.int32)))
+        if aux_arrays is not None:
+            lane_aux_targets.append(
+                {
+                    c: mx.array(np.asarray(aux_arrays[c][chunk_arr]).astype(np.float32))
+                    for c in _AUX_COLUMNS
+                }
+            )
+        lane_decision_lengths.append(
+            [len(decision_rows) for decision_rows in chunk.decisions]
+        )
+
+    if emit_fetched:
+        return (
+            lane_observations,
+            lane_labels,
+            lane_decision_lengths,
+            lane_rows,
+            lane_aux_targets,
+            lane_fetched,
+        )
+    return (
+        lane_observations,
+        lane_labels,
+        lane_decision_lengths,
+        lane_rows,
+        lane_aux_targets,
+    )
+
+
 def _stream_train_microbatches(
     dataset,
     columns: list[str],
@@ -2584,24 +2759,6 @@ def main() -> None:
         for path, parameter in trainable_leaves
         if not _use_muon_parameter(path, parameter)
     )
-    _prepare_optimizer_state(
-        optimizer,
-        model,
-        state=state,
-        resume_path=a.resume,
-        optimizer_state=a.optimizer_state,
-        optimizer_contract=optimizer_contract,
-    )
-    optimizer.learning_rate = a.lr
-    mx.eval(optimizer.state)
-    _validate_optimizer_state_dtypes(optimizer.state)
-    print(
-        f"[bc-train-mlx] optimizer routing: Muon={muon_parameter_count:,} "
-        f"hidden-matrix params; AdamW={adamw_parameter_count:,} "
-        "embedding/head/vector params",
-        flush=True,
-    )
-
     nparams = sum(p.size for _, p in nn.utils.tree_flatten(model.parameters()))
     tag = (
         f"d{a.d_model}L{a.nlayers}h{a.nhead}"
@@ -2789,17 +2946,28 @@ def main() -> None:
     ):
         raise ValueError("phase state cannot be resumed without --resume")
 
-    optimizer_phase_step = (
-        int(state.get("optimizer_phase_step", 0))
-        if a.resume and a.optimizer_state == "resume"
-        else 0
-    )
-    scheduler_phase_step, scheduler_total_steps = _prepare_scheduler_phase(
+    phase_setup = _prepare_training_phases(
+        optimizer,
+        model,
         state=state,
         resume_path=a.resume,
+        optimizer_state=a.optimizer_state,
         scheduler_state=a.scheduler_state,
+        optimizer_contract=optimizer_contract,
         configured_total_steps=int(a.scheduler_total_steps),
         run_optimizer_steps=run_optimizer_steps,
+    )
+    optimizer_phase_step = phase_setup.optimizer_phase_step
+    scheduler_phase_step = phase_setup.scheduler_phase_step
+    scheduler_total_steps = phase_setup.scheduler_total_steps
+    optimizer.learning_rate = a.lr
+    mx.eval(optimizer.state)
+    _validate_optimizer_state_dtypes(optimizer.state)
+    print(
+        f"[bc-train-mlx] optimizer routing: Muon={muon_parameter_count:,} "
+        f"hidden-matrix params; AdamW={adamw_parameter_count:,} "
+        "embedding/head/vector params",
+        flush=True,
     )
     warmup_steps = min(a.warmup_steps, max(1, scheduler_total_steps // 5))
     scheduler_contract = _scheduler_contract(a, scheduler_total_steps, warmup_steps)
@@ -3001,144 +3169,6 @@ def main() -> None:
     # (see _ParquetRowGroupCache) owns cross-batch retention.
 
     # ---- F.3: TBPTT batch generator ----
-    def _load_temporal_batch(
-        temporal_batch: list[_TBPTTChunk],
-        arrays: dict | None,
-        labels: np.ndarray | None,
-        *,
-        label_base: int = 0,
-        aux_arrays: dict[str, np.ndarray] | None = None,
-        source: str = "materialized",
-        cache_backend: tuple | None = None,
-        emit_fetched: bool = False,
-    ):
-        """Materialize one pre-planned temporal batch with lane-local row order.
-
-        Two backing modes are supported:
-
-        * ``source="materialized"`` (in-RAM caller-owned arrays for the
-          non-TBPTT train path via ``_stream_train_microbatches``):
-          ``arrays``, ``labels`` and ``aux_arrays`` are sliced with the
-          chunk's row indices.
-        * ``source="tbptt-cache"`` (streaming row_group cache): rows are
-          fetched on demand from ``cache_backend`` -- a 4-tuple
-          ``(cache, file_idx, rg_idx, offset)``. When ``cache_backend`` is
-          None the train backend from the enclosing scope is used.
-
-        Returned tuple is 5 elements by default:
-        ``(lane_observations, lane_labels, lane_decision_lengths,
-        lane_rows, lane_aux_targets)``. With ``emit_fetched=True`` (cache
-        mode only) a 6th element ``lane_fetched`` is appended -- the raw
-        per-lane fetched dicts. The val loop uses it to accumulate y,
-        is_attack, is_ko and opt_group without a second cache read.
-        """
-        lane_observations: list[dict[str, mx.array]] = []
-        lane_labels: list[mx.array] = []
-        lane_decision_lengths: list[list[int]] = []
-        lane_rows: list[np.ndarray] = []
-        lane_aux_targets: list[dict[str, mx.array]] | None = (
-            []
-            if aux_arrays is not None or source == "tbptt-cache" and aux_active
-            else None
-        )
-        lane_fetched: list[dict[str, np.ndarray]] | None = (
-            [] if (source == "tbptt-cache" and emit_fetched) else None
-        )
-        if source == "tbptt-cache":
-            if cache_backend is not None:
-                cache_obj, cb_file_idx, cb_rg_idx, cb_offset = cache_backend
-            else:
-                cache_obj = _tbptt_row_group_cache
-                cb_file_idx = _tbptt_row_file_idx
-                cb_rg_idx = _tbptt_row_group_idx
-                cb_offset = _tbptt_row_offset
-        for chunk in temporal_batch:
-            chunk_arr = np.concatenate(chunk.decisions)
-            lane_rows.append(chunk_arr)
-            if source == "tbptt-cache":
-                fetched = cache_obj.read_rows(
-                    chunk_arr,
-                    cb_file_idx,
-                    cb_rg_idx,
-                    cb_offset,
-                )
-                # dedup label relabel is per-chunk (same as the .npy loader);
-                # this is exact because the remap is row-local.
-                _apply_dedup_relabel(fetched)
-                lane_observations.append(
-                    {
-                        key: mx.array(
-                            fetched[key].astype(
-                                np.int32 if key in int_keys else np.float32
-                            )
-                        )
-                        for key in keys
-                    }
-                )
-                if a.zero_wouldko:
-                    attr = np.asarray(lane_observations[-1]["opt_attr"]).copy()
-                    attr[..., WK_LO:WK_HI] = 0.0
-                    lane_observations[-1]["opt_attr"] = mx.array(attr, dtype=mx.float32)
-                lane_labels.append(mx.array(fetched["y"].astype(np.int32)))
-                if aux_active:
-                    lane_aux_targets.append(
-                        {
-                            c: mx.array(fetched[c].astype(np.float32))
-                            for c in _AUX_COLUMNS
-                        }
-                    )
-                lane_decision_lengths.append(
-                    [len(decision_rows) for decision_rows in chunk.decisions]
-                )
-                if lane_fetched is not None:
-                    lane_fetched.append(fetched)
-                continue
-            # materialized path
-            lane_observations.append(
-                {
-                    key: mx.array(
-                        np.asarray(arrays[key][chunk_arr]).astype(
-                            np.int32 if key in int_keys else np.float32
-                        )
-                    )
-                    for key in keys
-                }
-            )
-            if a.zero_wouldko:
-                attr = np.asarray(lane_observations[-1]["opt_attr"]).copy()
-                attr[..., WK_LO:WK_HI] = 0.0
-                lane_observations[-1]["opt_attr"] = mx.array(attr, dtype=mx.float32)
-            lane_labels.append(
-                mx.array(labels[label_base + chunk_arr].astype(np.int32))
-            )
-            if aux_arrays is not None:
-                lane_aux_targets.append(
-                    {
-                        c: mx.array(
-                            np.asarray(aux_arrays[c][chunk_arr]).astype(np.float32)
-                        )
-                        for c in _AUX_COLUMNS
-                    }
-                )
-            lane_decision_lengths.append(
-                [len(decision_rows) for decision_rows in chunk.decisions]
-            )
-        if emit_fetched:
-            return (
-                lane_observations,
-                lane_labels,
-                lane_decision_lengths,
-                lane_rows,
-                lane_aux_targets,
-                lane_fetched,
-            )
-        return (
-            lane_observations,
-            lane_labels,
-            lane_decision_lengths,
-            lane_rows,
-            lane_aux_targets,
-        )
 
     def _tbptt_batches():
         """Yield the exact packed temporal batches used by the work plan,
@@ -3152,10 +3182,17 @@ def main() -> None:
         def _load_one(temporal_batch):
             return _load_temporal_batch(
                 temporal_batch,
-                arrays=None,
-                labels=None,
-                aux_arrays=None,
+                keys=keys,
+                int_keys=int_keys,
+                aux_active=aux_active,
+                zero_wouldko=a.zero_wouldko,
                 source="tbptt-cache",
+                cache_backend=(
+                    _tbptt_row_group_cache,
+                    _tbptt_row_file_idx,
+                    _tbptt_row_group_idx,
+                    _tbptt_row_offset,
+                ),
             )
 
         with ThreadPoolExecutor(
@@ -3692,9 +3729,10 @@ def main() -> None:
                     lane_fetched,
                 ) = _load_temporal_batch(
                     temporal_batch,
-                    arrays=None,
-                    labels=None,
-                    aux_arrays=None,
+                    keys=keys,
+                    int_keys=int_keys,
+                    aux_active=aux_active,
+                    zero_wouldko=a.zero_wouldko,
                     source="tbptt-cache",
                     cache_backend=_val_cache_backend,
                     emit_fetched=True,

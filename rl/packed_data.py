@@ -129,7 +129,13 @@ def approved_stage4_root_matches(
     *,
     repo_root: str | os.PathLike[str] | None = None,
 ) -> bool:
-    """Return whether ``path`` is exactly the approved frozen root artifact."""
+    """Return whether ``path`` is exactly the approved frozen root artifact.
+
+    A relative candidate is interpreted against the process current working
+    directory, not ``repo_root``. Callers must verify that cwd is the project
+    root before passing a project-relative path. The candidate is intentionally
+    not symlink-resolved: only the canonical path plus the approved SHA passes.
+    """
     project_root = (
         Path(repo_root).resolve()
         if repo_root is not None

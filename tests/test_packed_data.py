@@ -1,5 +1,6 @@
 import copy
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +36,7 @@ def test_split_episode_ids_matches_first_appearance_cap():
     assert train.tolist() == [11, 12]
 
 
-def test_split_max_rows_zero_is_seed_independent():
+def test_split_episode_ids_is_deterministic_without_a_seed_argument():
     ids = np.array([20, 20, 21, 22, 22, 23], dtype=np.int64)
     first = split_episode_ids(ids, max_rows=0, val_frac=0.25)
     second = split_episode_ids(ids, max_rows=0, val_frac=0.25)
@@ -329,7 +330,7 @@ def test_inverted_source_order_is_rejected(tmp_path):
         )
 
 
-def test_seed_variants_do_not_change_zero_cap_membership():
+def test_split_membership_is_deterministic_without_a_seed_argument():
     ids = np.array([20, 20, 21, 22, 22, 23], dtype=np.int64)
     first = split_episode_ids(ids, max_rows=0, val_frac=0.25)
     second = split_episode_ids(ids, max_rows=0, val_frac=0.25)
@@ -391,13 +392,38 @@ def test_resume_identity_rejects_legacy_without_production_artifact_policy(tmp_p
         )
 
 
-def test_approved_stage4_root_requires_exact_path_and_sha256(tmp_path):
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("canonical-relative", True),
+        ("canonical-absolute", True),
+        ("regular-copy", False),
+        ("hardlink", False),
+        ("symlink", False),
+    ],
+)
+def test_approved_stage4_root_accepts_only_canonical_path_and_sha256(
+    tmp_path, monkeypatch, case, expected
+):
+    """Relative candidates are interpreted against the verified process cwd."""
     root = Path(__file__).resolve().parents[1] / "experiments/autoresearch/root/stage4_root.pkl"
+    project_root = root.parents[3]
     assert root.is_file(), "the frozen Stage 4 root must be present for this policy test"
-    assert approved_stage4_root_matches(root)
-    copied_basename = tmp_path / "stage4_root.pkl"
-    copied_basename.hardlink_to(root)
-    assert not approved_stage4_root_matches(copied_basename)
+    if case == "canonical-relative":
+        monkeypatch.chdir(project_root)
+        candidate = Path("experiments/autoresearch/root/stage4_root.pkl")
+    elif case == "canonical-absolute":
+        candidate = root
+    elif case == "regular-copy":
+        candidate = tmp_path / "stage4_root-copy.pkl"
+        shutil.copyfile(root, candidate)
+    elif case == "hardlink":
+        candidate = tmp_path / "stage4_root-hardlink.pkl"
+        candidate.hardlink_to(root)
+    else:
+        candidate = tmp_path / "stage4_root-symlink.pkl"
+        candidate.symlink_to(root)
+    assert approved_stage4_root_matches(candidate, repo_root=project_root) is expected
     assert APPROVED_STAGE4_ROOT_SHA256 == "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b"
 
 
@@ -428,4 +454,12 @@ def test_packed_without_tbptt_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="no Parquet fallback"):
         validate_packed_tbptt_compatibility(store, 0)
     validate_packed_tbptt_compatibility(store, 16)
-    approved_stage4_root_matches,
+
+
+def test_resume_identity_seed_variants_are_distinct_but_keep_split_identity():
+    first = _resume_identity(seed=7)
+    second = _resume_identity(seed=8)
+    assert first["selection"] == second["selection"]
+    assert first["split"] == second["split"]
+    assert first["trainer"]["seed"] != second["trainer"]["seed"]
+    assert first != second
