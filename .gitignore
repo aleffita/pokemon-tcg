@@ -42,3 +42,6 @@ model/checkpoint/smoke/
 model/bc_model/smoke/
 public_agents/submissions/smoke/
 model/submission_work/
+
+# Oversized generated autoresearch logs stay local; keep compact reports/metrics tracked.
+experiments/autoresearch/**/pytest.log

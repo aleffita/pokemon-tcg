@@ -38,6 +38,7 @@ from scripts.rl.ppo_micro_update import (
 DEFAULT_CHECKPOINT = Path("experiments/autoresearch/root/stage4_root.pkl")
 DEFAULT_DECK = Path("agent/deck.csv")
 DEFAULT_OUTPUT = Path("experiments/autoresearch/AR-009/logs")
+DEFAULT_TRUE_RECURRENT_OUTPUT = Path("experiments/autoresearch/AR-018/logs")
 APPROVED_STAGE4_ROOT_SHA256 = "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b"
 MAX_GAMES_PER_MODE = 4
 
@@ -218,6 +219,32 @@ def _sample_distribution(
     return int(torch.multinomial(distribution.probs, 1, generator=generator).item())
 
 
+def composite_behavior_logprob(substep_logprobs: list[float] | tuple[float, ...]) -> float:
+    """Return the behavior log-probability of one complete logical action.
+
+    A multi-select engine decision is a conditional product of substep
+    policies.  Keeping the individual values while exposing their sum makes
+    the later GRPO importance ratio operate on the complete logical action.
+    """
+    values = [float(value) for value in substep_logprobs]
+    if not values:
+        raise ValueError("a logical action must contain at least one substep")
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("logical action substep logprobs must be finite")
+    return float(math.fsum(values))
+
+
+def behavior_importance_ratio(learner_logprob: float, behavior_logprob: float) -> float:
+    """Compute the complete-action learner/behavior ratio in log-space."""
+    delta = float(learner_logprob) - float(behavior_logprob)
+    if not math.isfinite(delta):
+        raise ValueError("learner and behavior logprobs must produce a finite ratio")
+    ratio = float(torch.exp(torch.tensor(delta, dtype=torch.float64)).item())
+    if not math.isfinite(ratio):
+        raise ValueError("learner/behavior importance ratio is not finite")
+    return ratio
+
+
 def _mirror_opponent(
     model: Any,
     encoder: DateBoundEncoder,
@@ -260,6 +287,155 @@ def _mirror_opponent(
     return choose
 
 
+class _StatefulMirror:
+    """A current-policy opponent with one persistent Stage 4 memory lane.
+
+    The engine calls this object once per logical opponent decision.  Every
+    autoregressive substep reads the same incoming memory, and only the last
+    substep output is committed, matching ``agent/main.py`` exactly.  The
+    environment supplies the opponent's own tracker, ability slots, and deck;
+    this class never substitutes the learner's side-specific context.
+    """
+
+    def __init__(self, model: Any, encoder: DateBoundEncoder, rng: np.random.Generator) -> None:
+        self.model = model
+        self.encoder = encoder
+        self.rng = rng
+        self.memory: torch.Tensor | None = None
+        self.episode_id: str | None = None
+        self.side: int | None = None
+        self.initial_memory_digest: str | None = None
+        self.events: list[dict[str, Any]] = []
+        self.decisions: list[dict[str, Any]] = []
+
+    def reset_episode(self, episode_id: str) -> None:
+        self.episode_id = episode_id
+        self.side = None
+        self.memory = initial_memory(self.model)
+        self.initial_memory_digest = digest_tensor(self.memory)
+        self.events = []
+        self.decisions = []
+
+    def set_side(self, side: int) -> None:
+        self.side = int(side)
+        for record in self.events:
+            record["side"] = self.side
+        for record in self.decisions:
+            record["side"] = self.side
+
+    def __call__(
+        self,
+        raw_obs: dict[str, Any],
+        _rng: random.Random,
+        *,
+        deck=None,
+        tracker=None,
+        ability_slots=None,
+        **_,
+    ) -> list[int]:
+        if self.memory is None or self.episode_id is None:
+            raise RuntimeError("stateful mirror must be reset before the first episode decision")
+        select = raw_obs["select"]
+        options = select.get("option") or []
+        min_count = int(select.get("minCount", 1))
+        max_count = int(select.get("maxCount", 1))
+        picked: set[int] = set()
+        result: list[int] = []
+        decision_index = len(self.decisions)
+        decision_memory_in = self.memory
+        decision_input_digest = digest_tensor(decision_memory_in)
+        decision_substep_logprobs: list[float] = []
+        pending_events: list[dict[str, Any]] = []
+        memory_out = decision_memory_in
+
+        for substep in range(max_count):
+            encoded = self.encoder.encode(
+                raw_obs,
+                picked=picked,
+                self_deck=deck,
+                tracker=tracker,
+                ability_slots=ability_slots,
+            )
+            model_input = as_model_input(encoded, self.encoder.int_keys)
+            with torch.inference_mode():
+                logits, _value, memory_out = self.model.logits_value(
+                    model_input,
+                    memory_in=decision_memory_in,
+                )
+            distribution = _masked_distribution(logits, encoded["action_mask"])
+            probabilities = distribution.probs.numpy()
+            action = int(self.rng.choice(len(probabilities), p=probabilities))
+            if action < 0 or action >= len(probabilities):
+                raise AssertionError("stateful mirror sampled an out-of-range action")
+            substep_logprob = float(distribution.log_prob(torch.tensor(action)).item())
+            if not math.isfinite(substep_logprob):
+                raise AssertionError("stateful mirror sampled an action without finite logprob")
+            legal_actions = [
+                int(index)
+                for index, is_legal in enumerate(np.asarray(encoded["action_mask"]).reshape(-1) >= 0.5)
+                if bool(is_legal)
+            ]
+            if action not in legal_actions:
+                raise AssertionError("stateful mirror sampled an illegal action")
+            pending_events.append(
+                {
+                    "lane": "mirror",
+                    "episode_id": self.episode_id,
+                    "decision_index": decision_index,
+                    "substep": substep,
+                    "side": self.side,
+                    "action": action,
+                    "legal_action": True,
+                    "legal_actions": legal_actions,
+                    "legal_action_count": len(legal_actions),
+                    "legal_action_mask_digest": sha256_bytes(
+                        np.asarray(encoded["action_mask"], dtype=np.float32).tobytes(order="C")
+                    ),
+                    "action_logprob": substep_logprob,
+                    "logical_action_logprob": None,
+                    "decision_logprob": None,
+                    "memory_input_digest": digest_tensor(decision_memory_in),
+                    "memory_output_digest": digest_tensor(memory_out),
+                    "decision_memory_output_digest": None,
+                    "metadata_date": self.encoder.meta_date,
+                }
+            )
+            decision_substep_logprobs.append(substep_logprob)
+            if action == SUBMIT_ACTION:
+                break
+            if action >= len(options) or action in picked:
+                raise AssertionError("stateful mirror sampled an illegal option")
+            picked.add(action)
+            result.append(action)
+            if len(result) >= max_count:
+                break
+
+        if len(result) < min_count:
+            raise RuntimeError("stateful mirror submitted fewer picks than the engine minimum")
+        logical_logprob = composite_behavior_logprob(decision_substep_logprobs)
+        committed_memory = memory_out.detach().to(dtype=torch.float32).clone()
+        committed_digest = digest_tensor(committed_memory)
+        for record in pending_events:
+            record["logical_action_logprob"] = logical_logprob
+            record["decision_logprob"] = logical_logprob
+            record["decision_memory_output_digest"] = committed_digest
+        decision = {
+            "lane": "mirror",
+            "episode_id": self.episode_id,
+            "decision_index": decision_index,
+            "side": self.side,
+            "substeps": len(pending_events),
+            "memory_input_digest": decision_input_digest,
+            "committed_memory_output_digest": committed_digest,
+            "logical_action_logprob": logical_logprob,
+            "decision_logprob": logical_logprob,
+        }
+        self.events.extend(pending_events)
+        self.decisions.append(decision)
+        self.memory = committed_memory
+        return result
+
+
 def collect_episode(
     env: CabtEnv,
     model: Any,
@@ -272,9 +448,15 @@ def collect_episode(
     model_hash: str,
     action_generator: torch.Generator,
     bundle: list[dict[str, Any]],
+    on_episode_start: Callable[[], None] | None = None,
+    on_episode_reset: Callable[[int], None] | None = None,
 ) -> list[dict[str, Any]]:
+    if on_episode_start is not None:
+        on_episode_start()
     observation, reset_info = env.reset(seed=reset_seed)
     side = int(reset_info["agent_index"])
+    if on_episode_reset is not None:
+        on_episode_reset(side)
     memory = initial_memory(model)
     initial_memory_digest = digest_tensor(memory)
     rows: list[dict[str, Any]] = []
@@ -283,6 +465,9 @@ def collect_episode(
     picked: set[int] = set()
     decision_memory_in = memory
     decision_substep = 0
+    decision_row_indices: list[int] = []
+    decision_bundle_indices: list[int] = []
+    decision_substep_logprobs: list[float] = []
     done = False
 
     while not done:
@@ -321,8 +506,17 @@ def collect_episode(
                 "substep": decision_substep,
                 "side": side,
                 "action": action,
+                "legal_action": legal,
+                "legal_actions": [
+                    int(index)
+                    for index, is_legal in enumerate(action_mask >= 0.5)
+                    if bool(is_legal)
+                ],
+                "legal_action_count": int(np.sum(action_mask >= 0.5)),
                 "legal_action_mask_digest": mask_digest,
                 "action_logprob": logprob,
+                "logical_action_logprob": None,
+                "decision_logprob": None,
                 "entropy": entropy,
                 "value": float(value.detach().reshape(-1)[0].item()),
                 "reward": float(reward),
@@ -331,6 +525,7 @@ def collect_episode(
                 "truncated": bool(truncated),
                 "memory_input_digest": digest_tensor(memory_input),
                 "memory_output_digest": digest_tensor(memory_out),
+                "decision_memory_output_digest": None,
                 "model_input_digests": [
                     {"name": key, "sha256": digest_tensor(value)}
                     for key, value in model_input.items()
@@ -357,21 +552,38 @@ def collect_episode(
                 "memory_input": memory_input.detach().to(device="cpu", dtype=torch.float32).clone(),
                 "action": action,
                 "behavior_logprob": logprob,
+                "logical_action_logprob": None,
+                "decision_logprob": None,
                 "value": float(value.detach().reshape(-1)[0].item()),
                 "reward": float(reward),
                 "done": bool(done),
             }
         )
+        decision_row_indices.append(len(rows) - 1)
+        decision_bundle_indices.append(len(bundle) - 1)
+        decision_substep_logprobs.append(logprob)
         env_step += 1
         observation = next_observation
         if truncated:
             raise RuntimeError(f"episode {episode_id} truncated before terminal reward")
         if decision_complete:
+            logical_logprob = composite_behavior_logprob(decision_substep_logprobs)
             memory = memory_out.detach().to(dtype=torch.float32).clone()
+            committed_digest = digest_tensor(memory)
+            for row_index in decision_row_indices:
+                rows[row_index]["logical_action_logprob"] = logical_logprob
+                rows[row_index]["decision_logprob"] = logical_logprob
+                rows[row_index]["decision_memory_output_digest"] = committed_digest
+            for bundle_index in decision_bundle_indices:
+                bundle[bundle_index]["logical_action_logprob"] = logical_logprob
+                bundle[bundle_index]["decision_logprob"] = logical_logprob
             decision_memory_in = memory
             picked = set()
             decision_index += 1
             decision_substep = 0
+            decision_row_indices = []
+            decision_bundle_indices = []
+            decision_substep_logprobs = []
         else:
             decision_substep += 1
 
@@ -382,6 +594,8 @@ def collect_episode(
         raise AssertionError(f"episode {episode_id} did not end with done=True")
     if initial_memory_digest != rows[0]["memory_input_digest"]:
         raise AssertionError(f"episode {episode_id} did not reset recurrent memory at boundary")
+    if decision_row_indices or decision_bundle_indices or decision_substep_logprobs:
+        raise AssertionError(f"episode {episode_id} ended with an incomplete logical decision")
     return rows
 
 
@@ -404,6 +618,19 @@ def validate_rows(rows: list[dict[str, Any]]) -> None:
                 raise AssertionError("missing action logprob")
             if not row["memory_input_digest"] or not row["memory_output_digest"]:
                 raise AssertionError("missing recurrent memory digest")
+            if "legal_actions" in row and "action" in row:
+                if int(row["action"]) not in {int(action) for action in row["legal_actions"]}:
+                    raise AssertionError("recorded action is absent from its legal action set")
+            if "logical_action_logprob" in row:
+                if row["logical_action_logprob"] is None:
+                    raise AssertionError("logical action logprob was not committed")
+                if not math.isfinite(float(row["logical_action_logprob"])):
+                    raise AssertionError("logical action logprob is not finite")
+            if "decision_logprob" in row:
+                if row["decision_logprob"] is None:
+                    raise AssertionError("decision logprob was not committed")
+                if not math.isfinite(float(row["decision_logprob"])):
+                    raise AssertionError("decision logprob is not finite")
         if not any(row["terminal"] and "reward" in row for row in episode_rows):
             raise AssertionError(f"episode {episode_id} has no terminal reward row")
     for episode_id in episodes:
@@ -415,6 +642,34 @@ def validate_rows(rows: list[dict[str, Any]]) -> None:
             actual = [int(row["substep"]) for row in decision_rows]
             if actual != expected:
                 raise AssertionError(f"episode {episode_id} decision {decision} has broken substep order")
+            if any("logical_action_logprob" in row for row in decision_rows):
+                observed = {
+                    float(row["logical_action_logprob"])
+                    for row in decision_rows
+                }
+                if len(observed) != 1:
+                    raise AssertionError(
+                        f"episode {episode_id} decision {decision} has inconsistent logical logprob"
+                    )
+                expected_logprob = composite_behavior_logprob(
+                    [float(row["action_logprob"]) for row in decision_rows]
+                )
+                if not math.isclose(next(iter(observed)), expected_logprob, rel_tol=1e-6, abs_tol=1e-6):
+                    raise AssertionError(
+                        f"episode {episode_id} decision {decision} logical logprob does not equal substep sum"
+                    )
+                if any(
+                    not math.isclose(
+                        float(row["decision_logprob"]),
+                        expected_logprob,
+                        rel_tol=1e-6,
+                        abs_tol=1e-6,
+                    )
+                    for row in decision_rows
+                ):
+                    raise AssertionError(
+                        f"episode {episode_id} decision {decision} decision_logprob mismatch"
+                    )
 
 
 def write_outputs(
