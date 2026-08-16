@@ -7,8 +7,9 @@ Captured on 2026-08-16T17:02:10.629259+00:00 from frozen Stage 4 root `b59daeab1
 The corrected AR-018 current-vs-current true recurrent collector produced a
 single in-memory group of K=4 complete agent trajectories. One FP32,
 policy-only trajectory-group GRPO update was applied to a copy of the root.
-The frozen root remains the fallback. No tournament, package, submission, or
-promotion was run.
+The frozen root remains the fallback. The candidate then ran a 10-game direct
+gate against the frozen root and a 30-game opponent panel. No promotion was
+made.
 
 | Metric | Result |
 | --- | ---: |
@@ -21,6 +22,18 @@ promotion was run.
 | Ratio mean / min / max | 1.0 / 0.9999923706054688 / 1.0000028610229492 |
 | Candidate parameter L2 delta | 0.009198722439288157 |
 | Candidate bytes | 5694416 |
+
+## Tournament gate
+
+| Surface | W-L-D | Win rate |
+| --- | ---: | ---: |
+| Candidate vs frozen Stage 4 root, n=10 | 6-4-0 | 60.0% |
+| Candidate panel: lb826, random, first, n=30 | 9-21-0 | 30.0% |
+| Frozen root panel: lb826, random, first, n=30 | 9-21-0 | 30.0% |
+
+The direct candidate-vs-root result is positive, while the small panel ties
+the frozen root. The candidate remains experimental and the root remains the
+fallback; this is not evidence for unconditional promotion.
 
 ## Contracts checked
 
@@ -43,10 +56,10 @@ promotion was run.
 ## Limitations
 
 This is a K=4 micro-update, not a strength estimate. Collection is serial,
-the recurrent learner boundary is detached, value loss is intentionally zero,
-and no tournament has been run. The candidate is experimental only; Stage 4
-root remains the fallback. The group return variance is small-sample and the
-candidate has not been promoted.
+the recurrent learner boundary is detached, and value loss is intentionally
+zero. Tournament samples are small and the panel did not improve aggregate
+win rate over the frozen root. The candidate is experimental only; Stage 4
+root remains the fallback.
 
 ## Provenance
 
@@ -60,4 +73,7 @@ candidate has not been promoted.
 - Trajectory bundle: `experiments/autoresearch/AR-019/trajectory_bundle.pt.gz`
 - Trajectory bundle SHA-256: `e86ede4ecd2dac75585452f08d52d43eaf64f6bd90848786618657566c3a18f3`
 - Candidate preflight: `{'passed': True, 'approved_root_sha256': 'b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b', 'artifacts': {'sample_manifest': 'experiments/autoresearch/AR-019/sample.manifest.json', 'trajectory_bundle': 'experiments/autoresearch/AR-019/trajectory_bundle.pt.gz'}}`
+- Candidate-vs-root tournament: `experiments/autoresearch/AR-019/tournament_candidate_vs_root_10.json`
+- Candidate panel tournament: `experiments/autoresearch/AR-019/tournament_candidate_panel_10.json`
+- Frozen root panel tournament: `experiments/autoresearch/AR-019/tournament_root_panel_10.json`
 - Rollout persistence: `compact bounded provenance bundle persisted; no unbounded rollout buffer`

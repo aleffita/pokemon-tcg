@@ -11,4 +11,4 @@ sample_manifest_content_sha256=f4b02aec85d4c1bad46194316920646d6f264f90ff205d6ca
 trajectory_bundle=experiments/autoresearch/AR-019/trajectory_bundle.pt.gz
 bundle_sha256=e86ede4ecd2dac75585452f08d52d43eaf64f6bd90848786618657566c3a18f3
 candidate_preflight=passed
-tournament=not_run
+tournament=candidate_vs_root 6-4; candidate_panel 9-21; frozen_root_panel 9-21

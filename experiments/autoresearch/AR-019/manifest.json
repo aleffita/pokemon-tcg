@@ -49,7 +49,9 @@
     "detached_recurrent_memory_inputs_retained_in_memory": true,
     "group_credit_shared_across_logical_decisions_and_substeps": true,
     "logical_logprob_is_conditional_substep_sum": true,
-    "no_tournament": true,
+    "no_tournament": false,
+    "candidate_vs_root_tournament_completed": true,
+    "candidate_panel_tournament_completed": true,
     "ratio_uses_logical_action_once": true,
     "real_legal_masks_retained_in_memory": true,
     "stage4_root_preserved": true,
@@ -102,6 +104,32 @@
   "sample_manifest_content_sha256": "f4b02aec85d4c1bad46194316920646d6f264f90ff205d6cad5d61232d600e08",
   "sample_manifest_sha256": "c757a496457983bacf851bb31815f399d2e64829cc57a7613c304789e971a30a",
   "substeps": 311,
+  "tournament": {
+    "candidate_vs_root": {
+      "draws": 0,
+      "games": 10,
+      "losses": 4,
+      "report": "experiments/autoresearch/AR-019/tournament_candidate_vs_root_10.json",
+      "win_rate": 0.6,
+      "wins": 6
+    },
+    "candidate_panel": {
+      "draws": 0,
+      "games": 30,
+      "losses": 21,
+      "report": "experiments/autoresearch/AR-019/tournament_candidate_panel_10.json",
+      "win_rate": 0.3,
+      "wins": 9
+    },
+    "frozen_root_panel": {
+      "draws": 0,
+      "games": 30,
+      "losses": 21,
+      "report": "experiments/autoresearch/AR-019/tournament_root_panel_10.json",
+      "win_rate": 0.3,
+      "wins": 9
+    }
+  },
   "trajectory_bundle": "experiments/autoresearch/AR-019/trajectory_bundle.pt.gz",
   "trajectory_summaries": [
     {

@@ -9,7 +9,7 @@ Captured: 2026-08-16
 - AR-018 status: corrected gate passed review; keep foundation
 - AR-019 implementation commit: `5dd6cfc`
 - AR-019 regenerated evidence: working-tree artifacts produced from `5dd6cfc`; provenance evidence commit pending
-- AR-019 status: K=4 policy-only micro-update complete; candidate provenance preflight and strict FP32 reload passed; no tournament; not promoted
+- AR-019 status: K=4 policy-only micro-update complete; provenance preflight and strict FP32 reload passed; tournament complete; not promoted
 - AR-019 candidate SHA-256: `3e23d7c3c191fa301baabc559dd9add82d6ffbec05ae8b8e6fd3327cdc17d183`
 - AR-019 sample manifest: `experiments/autoresearch/AR-019/sample.manifest.json`
 - AR-019 sample manifest file SHA-256: `c757a496457983bacf851bb31815f399d2e64829cc57a7613c304789e971a30a`
@@ -24,10 +24,11 @@ Captured: 2026-08-16
   composite logical behavior logprob, end-to-end ratio identity, legal-action
   checks, candidate root/sample/bundle hashes linked, candidate preflight passed,
   Stage 4 root preserved
-- GRPO is implemented and exercised in AR-019. No RoPE-ND, tournament, package,
-  submission, promotion, MoE, Parquet, or packed-data path was run.
-- Next action: commit the regenerated evidence, then candidate-vs-root tournament;
-  after the tournament, start sibling-fiber GRPO.
+- GRPO is implemented and exercised in AR-019. Candidate-vs-root: `6-4-0`
+  (60%, n=10). Candidate panel: `9-21-0` (30%, n=30); frozen root panel:
+  `9-21-0` (30%). Candidate remains experimental; root remains fallback.
+- No RoPE-ND, package, submission, MoE, Parquet, or packed-data path was run.
+- Next action: start sibling-fiber GRPO, then run the same tournament surface.
 
 Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`,
 `AR-019/manifest.json`, `AR-019/metrics.json`, `AR-019/logs/tests.log`,

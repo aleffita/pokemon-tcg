@@ -15,8 +15,11 @@ Captured 2026-08-16T17:02:10.629259+00:00.
 - Compact trajectory bundle: `experiments/autoresearch/AR-019/trajectory_bundle.pt.gz`;
   SHA-256 `e86ede4ecd2dac75585452f08d52d43eaf64f6bd90848786618657566c3a18f3`.
 - Candidate provenance preflight passed: `True`.
-- No tournament, package, submission, promotion, MoE, RoPE-ND, or historical
-  ETL/Parquet/packed-data work was run.
+- Candidate-vs-root gate: candidate `6-4-0` (60%) over 10 games.
+- Candidate panel: `9-21-0` (30%) over lb826, random, and first; frozen root
+  panel on the same surface was also `9-21-0` (30%). Candidate was not promoted.
+- No package, submission, MoE, RoPE-ND, or historical ETL/Parquet/packed-data
+  work was run.
 
 ## Evidence
 
@@ -26,6 +29,9 @@ Captured 2026-08-16T17:02:10.629259+00:00.
 - `experiments/autoresearch/AR-019/logs/tests.log`
 - `experiments/autoresearch/AR-019/sample.manifest.json`
 - `experiments/autoresearch/AR-019/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-019/tournament_candidate_vs_root_10.json`
+- `experiments/autoresearch/AR-019/tournament_candidate_panel_10.json`
+- `experiments/autoresearch/AR-019/tournament_root_panel_10.json`
 - `experiments/autoresearch/AR-019/candidate.pt`
 
 ## Metrics
@@ -39,5 +45,6 @@ Captured 2026-08-16T17:02:10.629259+00:00.
 ## Limitations and next control point
 
 This micro-update is not a competitive result. It uses a detached recurrent
-learner boundary, no value loss, serial collection, and K=4 returns. Do not
-promote or tournament this candidate without a later explicit research gate.
+learner boundary, no value loss, serial collection, and K=4 returns. The
+direct root gate was positive but the opponent panel tied the frozen root, so
+keep the candidate experimental and use sibling-fiber GRPO as the next probe.

@@ -1,0 +1,52 @@
+{
+  "our_agent": "/Users/alefita/workdir/pokemon-tcg/public_agents/submissions/latest-submission-300elo/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 10,
+  "note": "AR-019_candidate_panel",
+  "rows": [
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "public_agents/lb826_alakazam_seok",
+      "deck_id": 1,
+      "opp_deck_id": 4,
+      "wins": 3,
+      "losses": 7,
+      "draws": 0,
+      "wr_pct": 30.0,
+      "elapsed_s": 5.365292072296143,
+      "error": null
+    },
+    {
+      "opponent_label": "random",
+      "opponent_path": "random",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 4,
+      "losses": 6,
+      "draws": 0,
+      "wr_pct": 40.0,
+      "elapsed_s": 5.715085983276367,
+      "error": null
+    },
+    {
+      "opponent_label": "first",
+      "opponent_path": "first",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 2,
+      "losses": 8,
+      "draws": 0,
+      "wr_pct": 20.0,
+      "elapsed_s": 4.429619073867798,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 9,
+    "losses": 21,
+    "draws": 0,
+    "wr_pct": 30.0,
+    "elapsed_s": 15.527607917785645
+  }
+}
