@@ -699,19 +699,20 @@ def sibling_fiber_grpo_update_groups(
     credit_parts: list[torch.Tensor] = []
     branch_mask_parts: list[torch.Tensor] = []
     group_stats_list: list[dict[str, Any]] = []
+    prepared_groups: list[
+        tuple[list[dict[str, Any]], torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]
+    ] = []
+    total_active = 0
     for trajectories in trajectory_groups:
         _validate_group(trajectories)
         returns = [float(item["terminal_return"]) for item in trajectories]
         advantages, group_stats = normalize_group_returns(returns, epsilon=advantage_epsilon)
-        learner, behavior, decision_mapping, _substep_mapping = recompute_logprobs_by_decision(
-            model, trajectories
+        expected_mapping = torch.cat(
+            [
+                torch.full((len(item["decisions"]),), index, dtype=torch.long)
+                for index, item in enumerate(trajectories)
+            ]
         )
-        expected_mapping = torch.cat([
-            torch.full((len(item["decisions"]),), index, dtype=torch.long)
-            for index, item in enumerate(trajectories)
-        ])
-        if not torch.equal(decision_mapping, expected_mapping):
-            raise AssertionError("sibling logical decision mapping changed during recomputation")
         branch_values: list[bool] = []
         discount_values: list[float] = []
         for trajectory in trajectories:
@@ -724,51 +725,75 @@ def sibling_fiber_grpo_update_groups(
                     else continuation_discount**decision_index
                 )
         branch_mask = torch.as_tensor(branch_values, dtype=torch.bool)
-        credit = advantages[decision_mapping] * torch.as_tensor(
+        credit = advantages[expected_mapping] * torch.as_tensor(
             discount_values, dtype=torch.float32
         )
         if credit_scope == "branch_only":
             credit = credit.masked_fill(~branch_mask, 0.0)
-        learner_parts.append(learner)
-        behavior_parts.append(behavior)
+        active = credit != 0.0
+        total_active += int(active.sum().item())
         credit_parts.append(credit)
         branch_mask_parts.append(branch_mask)
         group_stats_list.append(group_stats)
+        prepared_groups.append((trajectories, expected_mapping, branch_mask, credit, group_stats))
+
+    if total_active == 0:
+        raise ValueError("sibling update has no credited logical decisions")
+
+    started = time.perf_counter()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer.zero_grad(set_to_none=True)
+    model.train()
+    surrogate_sums: list[torch.Tensor] = []
+    for trajectories, expected_mapping, branch_mask, credit, _group_stats in prepared_groups:
+        # Recompute one group at a time so the update never retains the full
+        # multi-thousand-decision autograd graph. Gradients are accumulated
+        # against the same global active-decision denominator, then applied by
+        # exactly one optimizer step below.
+        learner, behavior, decision_mapping, _substep_mapping = recompute_logprobs_by_decision(
+            model, trajectories
+        )
+        if not torch.equal(decision_mapping, expected_mapping):
+            raise AssertionError("sibling logical decision mapping changed during recomputation")
+        ratio = torch.exp(learner - behavior.detach())
+        if not _finite(ratio):
+            raise ValueError("grouped sibling importance ratios are non-finite")
+        clipped = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
+        surrogate = torch.minimum(ratio * credit.detach(), clipped * credit.detach())
+        active = credit != 0.0
+        if bool(active.any().item()):
+            surrogate_sum = surrogate[active].sum()
+            if not _finite(surrogate_sum):
+                raise ValueError("grouped sibling policy loss is non-finite")
+            (-(surrogate_sum / float(total_active))).backward()
+            surrogate_sums.append(surrogate_sum.detach())
+        else:
+            surrogate_sums.append(torch.tensor(0.0))
+        learner_parts.append(learner.detach())
+        behavior_parts.append(behavior.detach())
+        del learner, behavior, decision_mapping, _substep_mapping, ratio, clipped, surrogate
 
     learner = torch.cat(learner_parts)
     behavior = torch.cat(behavior_parts)
     credit = torch.cat(credit_parts)
     branch_mask = torch.cat(branch_mask_parts)
-    ratio = torch.exp(learner - behavior.detach())
+    ratio = torch.exp(learner - behavior)
     if not _finite(ratio):
-        raise ValueError("sibling-fiber importance ratios are non-finite")
+        raise ValueError("grouped sibling importance ratios are non-finite")
     active = credit != 0.0
     if not bool(active.any().item()):
         raise ValueError("sibling update has no credited logical decisions")
-    clipped = ratio.clamp(1.0 - clip_epsilon, 1.0 + clip_epsilon)
-    surrogate = torch.minimum(ratio * credit.detach(), clipped * credit.detach())
-    policy_loss = -surrogate[active].mean()
+    surrogate_total = torch.stack(surrogate_sums).sum()
+    policy_loss_value = -float(surrogate_total.item()) / float(total_active)
     zero_variance_groups = sum(bool(item["zero_variance"]) for item in group_stats_list)
-    gradient_norm = torch.tensor(0.0)
-    started = time.perf_counter()
-    if zero_variance_groups == len(group_stats_list):
-        loss = policy_loss.detach() * 0.0
-        optimizer_steps = 0
-    else:
-        model.train()
-        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-        optimizer.zero_grad(set_to_none=True)
-        loss = policy_loss
-        if not _finite(loss):
-            raise ValueError("sibling-fiber policy loss is non-finite")
-        loss.backward()
-        gradient_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        if not _finite(gradient_norm):
-            raise ValueError("sibling-fiber gradient norm is non-finite")
-        optimizer.step()
-        model.eval()
-        optimizer_steps = 1
+    gradient_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    if not _finite(gradient_norm):
+        raise ValueError("sibling-fiber gradient norm is non-finite")
+    optimizer.step()
+    model.eval()
+    optimizer_steps = 1
     update_seconds = time.perf_counter() - started
+    loss_value = policy_loss_value
     metrics: dict[str, Any] = {
         "algorithm": "sibling_fiber_grpo_grouped",
         "precision": "FP32",
@@ -793,8 +818,8 @@ def sibling_fiber_grpo_update_groups(
         "continuation_logical_decisions": int((~branch_mask).sum().item()),
         "credited_logical_actions": int(active.sum().item()),
         "continuation_credit_sum": float(credit[~branch_mask].sum().item()),
-        "loss": float(loss.detach().item()),
-        "policy_loss": float(policy_loss.detach().item()),
+        "loss": loss_value,
+        "policy_loss": policy_loss_value,
         "gradient_norm": float(gradient_norm.detach().item()),
         "ratio_mean": float(ratio.detach()[active].mean().item()),
         "ratio_min": float(ratio.detach()[active].min().item()),
@@ -805,7 +830,7 @@ def sibling_fiber_grpo_update_groups(
             .mean()
             .item()
         ),
-        "approx_kl_behavior": float((behavior.detach()[active] - learner.detach()[active]).mean().item()),
+        "approx_kl_behavior": float((behavior[active] - learner[active]).mean().item()),
         **_parameter_delta(model, root_reference),
     }
     if not all(_finite(value) for value in metrics.values() if isinstance(value, (float, int))):
