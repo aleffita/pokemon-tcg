@@ -72,9 +72,19 @@ _LATENT_K = int(os.environ.get("PTCG_LATENT_K", "3"))
 _PERTURB_EPS = float(os.environ.get("PTCG_PERTURB_EPS", "0.05"))
 
 # ---- model checkpoint search ----
+def _resolve_model_path(value: str | None) -> str | None:
+    """Resolve configured checkpoints independently of the importer cwd."""
+    if not value:
+        return None
+    expanded = os.path.abspath(os.path.expanduser(value)) if os.path.isabs(value) else os.path.join(
+        _PROJECT_ROOT, os.path.expanduser(value)
+    )
+    return os.path.abspath(expanded)
+
+
 _MODEL_PATH = None
 _MODEL_CANDIDATES = [
-    os.environ.get("PTCG_MODEL_PATH"),
+    _resolve_model_path(os.environ.get("PTCG_MODEL_PATH")),
     os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_torch_fp32.pt"),
     os.path.join(_PROJECT_ROOT, "model", "checkpoint", "bc_best_torch_fp32.pt"),
     os.path.join(_PROJECT_ROOT, "model", "bc_model", "bc_best_mlx_final.pkl"),
