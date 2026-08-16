@@ -2,10 +2,10 @@
 
 Captured: 2026-08-16
 
-- Last assimilated code commit: `0e16b76455e48c82762a9ed981c2e3b29d956f01`
+- Last assimilated code commit: `c051b8cd234a7791c366cf58e55e107d90a51745`
 - Current best and fallback: frozen Stage 4 root
 - Stage 4 root SHA-256: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`
-- Active experiment: AR-024 scaled external-policy grouped dynamic prospective sibling-fiber GRPO
+- Active experiment: AR-026 targeted credit/branch-selection hypothesis after AR-025 scale rejection
 - AR-018 code commits: `434d3f6`, repaired by `28c2b96` and `4cfe5e8`
 - AR-018 status: corrected gate passed review; keep foundation
 - AR-019 implementation commit: `5dd6cfc`
@@ -72,8 +72,20 @@ Captured: 2026-08-16
 - AR-024 tournament: same-deck candidate-vs-root `19-11-0` in 30; candidate
   six-opponent panel `8-52-0`; frozen-root panel `7-53-0`. Candidate rejected
   for promotion despite a marginal one-win panel gain; root remains fallback.
-- Next action: scale the same four-policy strata to more independent sibling
-  groups, then retain the six-opponent panel as the gate.
+- AR-025 implementation/execution commit: `c051b8c`
+- AR-025 scaled external-policy run: 16 exact bases, effective K
+  `[4,2,4,2,2,2,2,2,2,2,3,4,2,2,4,4]`, 43 fibers, 2,914 logical decisions,
+  1,088 credited decisions, 106.834 decisions/s, 66.632 s update; 11 of 16
+  groups were zero variance.
+- AR-025 tournament: same-deck candidate-vs-root `13-17-0` in 30; candidate
+  six-opponent panel `10-50-0`; frozen-root panel `12-48-0`. Rejected for
+  promotion; increasing scale reduced absolute field strength.
+- AR-025-retry bounded scale diagnostic: 8 bases, effective K
+  `[2,2,2,2,2,2,2,3]`, 17 fibers, 1,200 logical decisions, 435 credited
+  decisions. Direct root gate `16-14-0`, panel `7-53-0`; rejected for
+  promotion and retained as diagnostic only.
+- Next action: test a targeted credit or branch-selection change rather than
+  scaling this configuration further; keep the six-opponent panel as gate.
 
 Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-019/manifest.json`, `AR-019/metrics.json`, `AR-019/logs/tests.log`,
@@ -104,3 +116,15 @@ Evidence: `experiment_ledger.jsonl`, `AR-019/report.md`, `AR-020/report.md`,
 `AR-024/candidate.pt`, `AR-024/tournament_candidate_vs_root_same_deck_30.json`,
 `AR-024/tournament_candidate_panel_10.json`,
 `AR-024/tournament_root_panel_10.json`, `STATE_CAPSULE_024.md`.
+`AR-025/report.md`, `AR-025/manifest.json`, `AR-025/metrics.json`,
+`AR-025/sample.manifest.json`, `AR-025/trajectory_bundle.pt.gz`,
+`AR-025/candidate.pt`, `AR-025/tournament_candidate_vs_root_same_deck_30.json`,
+`AR-025/tournament_candidate_panel_10.json`,
+`AR-025/tournament_root_panel_10.json`, `AR-025/logs/scale_attempt.md`,
+`STATE_CAPSULE_025.md`, `AR-025-retry/report.md`,
+`AR-025-retry/manifest.json`, `AR-025-retry/metrics.json`,
+`AR-025-retry/sample.manifest.json`, `AR-025-retry/trajectory_bundle.pt.gz`,
+`AR-025-retry/candidate.pt`,
+`AR-025-retry/tournament_candidate_vs_root_same_deck_30.json`,
+`AR-025-retry/tournament_candidate_panel_10.json`,
+`STATE_CAPSULE_025_RETRY.md`.

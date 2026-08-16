@@ -1,0 +1,88 @@
+{
+  "our_agent": "agent/main.py",
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 10,
+  "note": "AR-025_candidate_panel_10",
+  "rows": [
+    {
+      "opponent_label": "lb1009_mega_lucario_ex_islet",
+      "opponent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "deck_id": 1,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 10,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 2.7884838581085205,
+      "error": null
+    },
+    {
+      "opponent_label": "lb945_multiply_ivan",
+      "opponent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "deck_id": 1,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 10,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 2.6986489295959473,
+      "error": null
+    },
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "deck_id": 1,
+      "opp_deck_id": 4,
+      "wins": 1,
+      "losses": 9,
+      "draws": 0,
+      "wr_pct": 10.0,
+      "elapsed_s": 5.44714093208313,
+      "error": null
+    },
+    {
+      "opponent_label": "lb814_crustle_emre",
+      "opponent_path": "public_agents/lb814_crustle_emre/main.py",
+      "deck_id": 1,
+      "opp_deck_id": 3,
+      "wins": 3,
+      "losses": 7,
+      "draws": 0,
+      "wr_pct": 30.0,
+      "elapsed_s": 3.708226203918457,
+      "error": null
+    },
+    {
+      "opponent_label": "random",
+      "opponent_path": "random",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 3,
+      "losses": 7,
+      "draws": 0,
+      "wr_pct": 30.0,
+      "elapsed_s": 7.107275009155273,
+      "error": null
+    },
+    {
+      "opponent_label": "first",
+      "opponent_path": "first",
+      "deck_id": 1,
+      "opp_deck_id": null,
+      "wins": 3,
+      "losses": 7,
+      "draws": 0,
+      "wr_pct": 30.0,
+      "elapsed_s": 4.751084089279175,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 10,
+    "losses": 50,
+    "draws": 0,
+    "wr_pct": 16.666666666666664,
+    "elapsed_s": 26.5408718585968
+  }
+}

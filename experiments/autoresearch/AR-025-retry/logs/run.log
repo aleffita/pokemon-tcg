@@ -1,0 +1,11 @@
+AR-025-retry grouped dynamic-K sibling-fiber GRPO
+group_count=8
+effective_group_sizes=[2, 2, 2, 2, 2, 2, 2, 3]
+returns=[[-1.0, -1.0], [-1.0, -1.0], [1.0, -1.0], [-1.0, -1.0], [-1.0, 1.0], [-1.0, 1.0], [1.0, 1.0], [1.0, 1.0, 1.0]]
+logical_decisions=1200
+substeps=1245
+collection_seconds=12.10168
+update_seconds=6.603137208148837
+candidate_sha256=2bd20e999284877a75ca7cdfe3f6be7a53af1269deaff7ce81c8d75e7111700b
+candidate_preflight=passed
+tournament=pending
