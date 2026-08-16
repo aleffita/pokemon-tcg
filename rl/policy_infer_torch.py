@@ -19,6 +19,11 @@ from rl.encoder.card_features import CardTable
 from rl.encoder.encoding import MAX_OPTIONS, OPT_PICKED
 from rl.encoder.enc_constants import N_META_BUCKETS
 from rl.policy import TokenTransformer, build_token_net
+from rl.ropend import (
+    encoder_forward_ropend,
+    temporal_coordinates,
+    validate_ropend_config,
+)
 from rl.token_schema import ARCH_VERSION, TOKEN_SCHEMA_VERSION, T_META_CTX, N_TTYPES
 
 TORCH_INFERENCE_FORMAT = "ptcg-torch-fp32-v1"
@@ -109,7 +114,14 @@ def checkpoint_arch_config(state: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"checkpoint max_options={cfg.get('max_options')} != encoder max_options={MAX_OPTIONS}")
     if not cfg.get("has_learned_init", False):
         raise ValueError("checkpoint has no learned_init; current recurrent inference contract requires it")
-    return dict(cfg)
+    result = dict(cfg)
+    if result.get("ropend") is not None:
+        d_model = int(result["d_model"])
+        nhead = int(result["nhead"])
+        if d_model % nhead:
+            raise ValueError("RoPE-ND checkpoint d_model must be divisible by nhead")
+        result["ropend"] = validate_ropend_config(result["ropend"], d_model // nhead)
+    return result
 
 
 def checkpoint_inference_config(state: dict[str, Any]) -> dict[str, Any]:
@@ -236,6 +248,10 @@ class TokenTransformerTorchInference(TokenTransformer):
         self.scratch_tokens = n_scratch
         self.scratch = torch.nn.Parameter(torch.zeros(n_scratch, self.d))
         self.learned_init = torch.nn.Parameter(torch.zeros(n_scratch, self.d))
+        self.ropend_config: dict[str, Any] | None = None
+        self.register_parameter("ropend_axis_scale", None)
+        if cfg.get("ropend") is not None:
+            self.enable_ropend(cfg["ropend"])
         if static_card_features is not None:
             static_tensor = torch.as_tensor(
                 static_card_features, dtype=torch.float32
@@ -251,6 +267,19 @@ class TokenTransformerTorchInference(TokenTransformer):
                 )
             self.card_feat = static_tensor
         self._card_table = card_table
+
+    def enable_ropend(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Expand a loaded Stage 4 policy with trainable identity-start RoPE-ND."""
+        head_dim = self.d // int(self.encoder.layers[0].self_attn.num_heads)
+        canonical = validate_ropend_config(config, head_dim)
+        scale = torch.full(
+            (len(canonical["axes"]),),
+            float(canonical["init_scale"]),
+            dtype=torch.float32,
+        )
+        self.ropend_axis_scale = torch.nn.Parameter(scale)
+        self.ropend_config = canonical
+        return dict(canonical)
 
     def _card_emb(self, ids: torch.Tensor) -> torch.Tensor:
         emb = self.card_emb(ids)
@@ -385,7 +414,24 @@ class TokenTransformerTorchInference(TokenTransformer):
         scr = mem + self._type(b, self.scratch_tokens, 0, dev)
         seq = torch.cat((state_seq, scr, opt_tok), 1)
         pad = torch.cat((pad_state, torch.zeros(b, self.scratch_tokens, dtype=torch.bool, device=dev), ~present), 1)
-        enc = self.encoder(seq, src_key_padding_mask=pad)
+        if self.ropend_config is None:
+            enc = self.encoder(seq, src_key_padding_mask=pad)
+        else:
+            coordinates = temporal_coordinates(
+                o,
+                state_tokens=state_seq.shape[1],
+                scratch_tokens=self.scratch_tokens,
+                option_tokens=opt_tok.shape[1],
+            )
+            enc = encoder_forward_ropend(
+                self.encoder,
+                seq,
+                pad,
+                coordinates,
+                self.ropend_axis_scale,
+                self.ropend_config["pair_counts"],
+                base=float(self.ropend_config["base"]),
+            )
         cls_out, opt_out = enc[:, 0], enc[:, -opt_tok.shape[1]:]
         present_all = (~pad).unsqueeze(-1).to(enc.dtype)
         pooled = (enc * present_all).sum(1) / present_all.sum(1).clamp_min(1)
