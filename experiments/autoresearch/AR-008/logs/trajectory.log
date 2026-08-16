@@ -1,0 +1,8 @@
+AR-008 Stage4 trajectory probe
+metadata_date=2026-08-12
+model_sha256=b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b
+deck_sha256=606a775392ffe25e058b19c17801d58a4bf30f7cd8c62782388d3de7e7eb5283
+rows=233
+trajectory_sha256=df8824943665afe899f31089dfab3ae18ed5b11e37af17926ea1d9f52db1114c
+mode=random episodes=1 rows=114 terminals=1
+mode=mirror_no_memory episodes=1 rows=119 terminals=1
