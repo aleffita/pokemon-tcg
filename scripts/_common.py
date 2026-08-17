@@ -1,8 +1,10 @@
 """Shared helpers for the local scripts."""
 
+import atexit
 import importlib.util
 import logging
 import os
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -32,15 +34,45 @@ AGENT_DIR = os.path.join(ROOT, "agent")
 
 # Keep references to temp dirs so they aren't garbage-collected
 _temp_dirs: list[str] = []
+_submission_cache: dict[str, str] = {}
+_agent_sys_paths: set[str] = set()
+
+
+def _cleanup_temp_dirs() -> None:
+    for path in _temp_dirs:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+atexit.register(_cleanup_temp_dirs)
 
 
 def _extract_submission(tar_path: str) -> str:
-    """Extract a submission.tar.gz to a temp dir and return the path."""
+    """Extract a submission once per process and return its temporary path."""
+    tar_path = os.path.realpath(tar_path)
+    cached = _submission_cache.get(tar_path)
+    if cached and os.path.isdir(cached):
+        return cached
     tmp = tempfile.mkdtemp(prefix="ptcg_sub_")
-    _temp_dirs.append(tmp)  # prevent GC
-    with tarfile.open(tar_path, "r:gz") as tar:
-        tar.extractall(tmp)
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            tar.extractall(tmp)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    _temp_dirs.append(tmp)
+    _submission_cache[tar_path] = tmp
     return tmp
+
+
+def materialize_agent_path(path: str) -> str:
+    """Return a stable main.py path, extracting packaged agents only once."""
+    absolute = os.path.abspath(path)
+    if absolute.endswith((".tar.gz", ".tgz")):
+        main_py = os.path.join(_extract_submission(absolute), "main.py")
+        if not os.path.exists(main_py):
+            raise FileNotFoundError(f"No main.py found in {absolute}")
+        return main_py
+    return absolute
 
 
 def load_agent(path: str, return_module: bool = False):
@@ -54,17 +86,10 @@ def load_agent(path: str, return_module: bool = False):
     Returns the agent callable, or (callable, module) when `return_module` is
     set — callers that swap deck.csv between runs need the module to reload it.
     """
-    path = os.path.abspath(path)
+    path = materialize_agent_path(path)
 
     # If tar.gz, extract first
-    if path.endswith(".tar.gz") or path.endswith(".tgz"):
-        agent_dir = _extract_submission(path)
-        main_py = os.path.join(agent_dir, "main.py")
-        if not os.path.exists(main_py):
-            raise FileNotFoundError(f"No main.py found in {path}")
-        path = main_py
-    # If directory, look for main.py or submission.tar.gz inside
-    elif os.path.isdir(path):
+    if os.path.isdir(path):
         sub_tar = os.path.join(path, "submission.tar.gz")
         main_py = os.path.join(path, "main.py")
         sub_main_py = os.path.join(path, "submission", "main.py")
@@ -98,7 +123,16 @@ def load_agent(path: str, return_module: bool = False):
     spec = importlib.util.spec_from_file_location("submission_agent", path)
     module = importlib.util.module_from_spec(spec)
     # Make sibling files (deck.csv, rl/, model/) resolvable from the agent dir.
+    public_agents_root = os.path.join(ROOT, "public_agents")
+    sys.path[:] = [
+        entry
+        for entry in sys.path
+        if entry not in _agent_sys_paths
+        and "ptcg_sub_" not in entry
+        and not os.path.realpath(entry).startswith(public_agents_root)
+    ]
     sys.path.insert(0, agent_dir)
+    _agent_sys_paths.add(agent_dir)
     # Agents may use os.path.exists("deck.csv") at module level — set CWD to agent dir.
     old_cwd = os.getcwd()
     try:

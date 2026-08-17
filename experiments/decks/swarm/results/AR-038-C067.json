@@ -1,0 +1,1947 @@
+{
+  "candidate": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/candidate.pt",
+  "candidate_sha256": "ac4798935317bddce6767683c9a39574cdbbe74da886ce77f4fae62825ebf4db",
+  "captured_at": "2026-08-17T12:35:23.214692+00:00",
+  "deck_relative_cohorts": [
+    {
+      "advantages": [
+        -0.1502539389451686,
+        -0.022686880615689842,
+        0.48758144394531916,
+        -0.4479104996237116,
+        -0.4691716532011849,
+        -0.10773160137585779,
+        -0.34160454925015993,
+        3.484106366258201,
+        -0.27782099727464743,
+        -0.2778210314908076,
+        -0.532955227987471,
+        -0.5329552051766981,
+        -0.4053881240364459,
+        -0.4053881012256724
+      ],
+      "group_index": 0,
+      "learner_deck_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ],
+      "matchup_index": 0,
+      "mean": -1.2377380881103732,
+      "scores": [
+        -1.285833323597908,
+        -1.245,
+        -1.081666676402092,
+        -1.3811111078659692,
+        -1.3879166544973849,
+        -1.2722222205996514,
+        -1.347083316296339,
+        -0.12249999634921549,
+        -1.326666647195816,
+        -1.3266666581481696,
+        -1.408333330899477,
+        -1.408333323597908,
+        -1.367499992698431,
+        -1.367499985396862
+      ],
+      "std": 0.32009300937585367,
+      "zero_variance": false
+    },
+    {
+      "advantages": [
+        1.3543354811471986,
+        2.9021474525406683,
+        0.580429460854167,
+        -0.1934764556499805,
+        -0.19347649024627311,
+        -0.9673825105393027,
+        -0.1934764556499805,
+        -0.19347649024627311,
+        -0.580429500392789,
+        -0.9673825105393027,
+        -0.19347652484256783,
+        -0.1934764556499805,
+        -0.19347649024627311,
+        -0.9673825105393027
+      ],
+      "group_index": 0,
+      "learner_deck_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ],
+      "matchup_index": 1,
+      "mean": -1.3062499960884453,
+      "scores": [
+        -1.1633333308994769,
+        -1.0,
+        -1.245,
+        -1.3266666581481696,
+        -1.326666661798954,
+        -1.408333330899477,
+        -1.3266666581481696,
+        -1.326666661798954,
+        -1.3674999963492156,
+        -1.408333330899477,
+        -1.3266666654497385,
+        -1.3266666581481696,
+        -1.326666661798954,
+        -1.408333330899477
+      ],
+      "std": 0.10552530534599146,
+      "zero_variance": false
+    },
+    {
+      "advantages": [
+        -0.4270061489764206,
+        -0.1329035147988566,
+        -0.23093774079961452,
+        -0.32897195803542995,
+        2.660071220656111,
+        -0.6230745922129934,
+        -0.23093774956455593,
+        -0.32897195803542995,
+        -0.4270061752712454,
+        -0.4270061752712454,
+        -0.525040374977178,
+        2.169900152006916,
+        -0.6230746009779354,
+        -0.5250403837421194
+      ],
+      "group_index": 0,
+      "learner_deck_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ],
+      "matchup_index": 2,
+      "mean": -1.1079761856954013,
+      "scores": [
+        -1.2858333199471237,
+        -1.163333323597908,
+        -1.2041666617989542,
+        -1.2449999963492155,
+        0.0,
+        -1.367499992698431,
+        -1.2041666654497385,
+        -1.2449999963492155,
+        -1.285833330899477,
+        -1.285833330899477,
+        -1.3266666581481696,
+        -0.2041666654497385,
+        -1.3674999963492156,
+        -1.326666661798954
+      ],
+      "std": 0.4165212484130847,
+      "zero_variance": false
+    },
+    {
+      "advantages": [
+        -1.1026456414271724,
+        3.0534801071305195,
+        0.6785511762052981,
+        -0.5089133688830176,
+        -0.5089133688830176,
+        -0.5089133688830176,
+        -0.5089133157992164,
+        -0.5089133688830176,
+        0.08481890366114024,
+        -0.5089133688830176,
+        0.6785511231214969,
+        -0.5089133688830176,
+        -0.5089133688830176,
+        0.6785512292890962
+      ],
+      "group_index": 0,
+      "learner_deck_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ],
+      "matchup_index": 3,
+      "mean": -1.332499995827675,
+      "scores": [
+        -1.408333330899477,
+        -1.1225,
+        -1.2858333272486924,
+        -1.3674999963492156,
+        -1.3674999963492156,
+        -1.3674999963492156,
+        -1.367499992698431,
+        -1.3674999963492156,
+        -1.326666661798954,
+        -1.3674999963492156,
+        -1.285833330899477,
+        -1.3674999963492156,
+        -1.3674999963492156,
+        -1.285833323597908
+      ],
+      "std": 0.06877398524302837,
+      "zero_variance": false
+    }
+  ],
+  "experiment": "AR-038-C067",
+  "format": "ptcg-deck-swarm-result-v1",
+  "groups": [
+    {
+      "branch_actions": [
+        1,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.9679682080168277,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d0-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/candidates/deck_v2_anti_control_lock.json",
+      "learner_deck_content_sha256": "71c330a41fa40ed23ea38cff3b6bdf4c563194c55a018757fa00c8c2d6b26dc5",
+      "learner_deck_index": 0,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666647195816,
+        -1.245
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.7366835421416909,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d0-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/candidates/deck_v2_anti_control_lock.json",
+      "learner_deck_content_sha256": "71c330a41fa40ed23ea38cff3b6bdf4c563194c55a018757fa00c8c2d6b26dc5",
+      "learner_deck_index": 0,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.163333338201046,
+        -1.163333323597908
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.9291222081519663,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d0-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/candidates/deck_v2_anti_control_lock.json",
+      "learner_deck_content_sha256": "71c330a41fa40ed23ea38cff3b6bdf4c563194c55a018757fa00c8c2d6b26dc5",
+      "learner_deck_index": 0,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.244999985396862,
+        -1.326666654497385
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.1827562910038978,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d0-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/candidates/deck_v2_anti_control_lock.json",
+      "learner_deck_content_sha256": "71c330a41fa40ed23ea38cff3b6bdf4c563194c55a018757fa00c8c2d6b26dc5",
+      "learner_deck_index": 0,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.408333330899477
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.23277545790188015,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d1-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-001/decks/generated_turn0.json",
+      "learner_deck_content_sha256": "c31efca1a5c91de48e14ba4312dda62acc3cd48225c74fce43f6e4579784bc2c",
+      "learner_deck_index": 1,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.245,
+        -1.245
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.12195804202929139,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d1-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-001/decks/generated_turn0.json",
+      "learner_deck_content_sha256": "c31efca1a5c91de48e14ba4312dda62acc3cd48225c74fce43f6e4579784bc2c",
+      "learner_deck_index": 1,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.0,
+        -1.0
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.20196425006724894,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d1-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-001/decks/generated_turn0.json",
+      "learner_deck_content_sha256": "c31efca1a5c91de48e14ba4312dda62acc3cd48225c74fce43f6e4579784bc2c",
+      "learner_deck_index": 1,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.163333323597908,
+        -1.163333323597908
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.19192870799452066,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d1-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-001/decks/generated_turn0.json",
+      "learner_deck_content_sha256": "c31efca1a5c91de48e14ba4312dda62acc3cd48225c74fce43f6e4579784bc2c",
+      "learner_deck_index": 1,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.163333323597908,
+        -1.081666676402092
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.13748212507925928,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d2-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-054/decks/generated_turn0.json",
+      "learner_deck_content_sha256": "c62637763f12e74191f62d68d752cada2fe1430abdbe1ac8e3131b273efd82a2",
+      "learner_deck_index": 2,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.081666676402092,
+        -1.081666676402092
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.20187783404253423,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d2-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-054/decks/generated_turn0.json",
+      "learner_deck_content_sha256": "c62637763f12e74191f62d68d752cada2fe1430abdbe1ac8e3131b273efd82a2",
+      "learner_deck_index": 2,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.245,
+        -1.245
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.26969795883633196,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d2-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-054/decks/generated_turn0.json",
+      "learner_deck_content_sha256": "c62637763f12e74191f62d68d752cada2fe1430abdbe1ac8e3131b273efd82a2",
+      "learner_deck_index": 2,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.163333323597908,
+        -1.245
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.2996816250961274,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d2-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-054/decks/generated_turn0.json",
+      "learner_deck_content_sha256": "c62637763f12e74191f62d68d752cada2fe1430abdbe1ac8e3131b273efd82a2",
+      "learner_deck_index": 2,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.163333323597908
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        2,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.0377863340545446,
+      "effective_group_size": 3,
+      "group_id": "ar038c067-d3-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/001_v5_apex_omnipotent.json",
+      "learner_deck_content_sha256": "6c46537b74bca9d46b63e3cd03e0f6ddd5f76f7f0525e41f48128a907983883a",
+      "learner_deck_index": 3,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.408333330899477,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.7602319170255214,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d3-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/001_v5_apex_omnipotent.json",
+      "learner_deck_content_sha256": "6c46537b74bca9d46b63e3cd03e0f6ddd5f76f7f0525e41f48128a907983883a",
+      "learner_deck_index": 3,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        -1.326666654497385
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.8624190827831626,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d3-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/001_v5_apex_omnipotent.json",
+      "learner_deck_content_sha256": "6c46537b74bca9d46b63e3cd03e0f6ddd5f76f7f0525e41f48128a907983883a",
+      "learner_deck_index": 3,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.163333338201046,
+        -1.326666654497385
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.9494500828441232,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d3-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/001_v5_apex_omnipotent.json",
+      "learner_deck_content_sha256": "6c46537b74bca9d46b63e3cd03e0f6ddd5f76f7f0525e41f48128a907983883a",
+      "learner_deck_index": 3,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        2,
+        3,
+        5
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.9670944169629365,
+      "effective_group_size": 4,
+      "group_id": "ar038c067-d4-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/002_v4_safeguard_fortress.json",
+      "learner_deck_content_sha256": "9f340132ea333581dac59c218053f7be923106661903bfd8b1d6432a045ffe76",
+      "learner_deck_index": 4,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333323597908,
+        -1.408333323597908,
+        -1.408333323597908,
+        -1.326666647195816
+      ],
+      "returns": [
+        -1.0,
+        -1.0,
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.1199947921559215,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d4-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/002_v4_safeguard_fortress.json",
+      "learner_deck_content_sha256": "9f340132ea333581dac59c218053f7be923106661903bfd8b1d6432a045ffe76",
+      "learner_deck_index": 4,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.0265669589862227,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d4-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/002_v4_safeguard_fortress.json",
+      "learner_deck_content_sha256": "9f340132ea333581dac59c218053f7be923106661903bfd8b1d6432a045ffe76",
+      "learner_deck_index": 4,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        1.245000007301569,
+        -1.245000007301569
+      ],
+      "returns": [
+        1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.1088778330013156,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d4-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/002_v4_safeguard_fortress.json",
+      "learner_deck_content_sha256": "9f340132ea333581dac59c218053f7be923106661903bfd8b1d6432a045ffe76",
+      "learner_deck_index": 4,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        2,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.3194794580340385,
+      "effective_group_size": 3,
+      "group_id": "ar038c067-d5-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/003_v3_apex_sovereign.json",
+      "learner_deck_content_sha256": "341556f991e9718ab3537f5016344f7a0550869bb41b3a68cd38b255ecf5564b",
+      "learner_deck_index": 5,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        -1.163333338201046,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.5558803749736398,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d5-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/003_v3_apex_sovereign.json",
+      "learner_deck_content_sha256": "341556f991e9718ab3537f5016344f7a0550869bb41b3a68cd38b255ecf5564b",
+      "learner_deck_index": 5,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.49,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.1068367089610547,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d5-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/003_v3_apex_sovereign.json",
+      "learner_deck_content_sha256": "341556f991e9718ab3537f5016344f7a0550869bb41b3a68cd38b255ecf5564b",
+      "learner_deck_index": 5,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.326666654497385
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.1693089581094682,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d5-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/003_v3_apex_sovereign.json",
+      "learner_deck_content_sha256": "341556f991e9718ab3537f5016344f7a0550869bb41b3a68cd38b255ecf5564b",
+      "learner_deck_index": 5,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        2,
+        0,
+        4
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.5960209160111845,
+      "effective_group_size": 4,
+      "group_id": "ar038c067-d6-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/004_anti_lucario_specialist.json",
+      "learner_deck_content_sha256": "b99dbb2fb072a9ff515f197db4dff9b361cb1205d2e35ed1529a17e6991b3374",
+      "learner_deck_index": 6,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333323597908,
+        -1.326666647195816,
+        -1.326666647195816,
+        -1.326666647195816
+      ],
+      "returns": [
+        -1.0,
+        -1.0,
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.7113160837907344,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d6-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/004_anti_lucario_specialist.json",
+      "learner_deck_content_sha256": "b99dbb2fb072a9ff515f197db4dff9b361cb1205d2e35ed1529a17e6991b3374",
+      "learner_deck_index": 6,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.244999985396862,
+        -1.408333330899477
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.0849488750100136,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d6-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/004_anti_lucario_specialist.json",
+      "learner_deck_content_sha256": "b99dbb2fb072a9ff515f197db4dff9b361cb1205d2e35ed1529a17e6991b3374",
+      "learner_deck_index": 6,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.245000007301569,
+        -1.163333323597908
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.0048640000168234,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d6-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/004_anti_lucario_specialist.json",
+      "learner_deck_content_sha256": "b99dbb2fb072a9ff515f197db4dff9b361cb1205d2e35ed1529a17e6991b3374",
+      "learner_deck_index": 6,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666654497385,
+        -1.408333330899477
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.664359041955322,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d7-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/005_anti_ivan_specialist.json",
+      "learner_deck_content_sha256": "96da96270c18325d9441360c696a2b6d4515ab5c94bf6a7c48a96035c78152b8",
+      "learner_deck_index": 7,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        1.081666669100523
+      ],
+      "returns": [
+        -1.0,
+        1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.7315674158744514,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d7-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/005_anti_ivan_specialist.json",
+      "learner_deck_content_sha256": "96da96270c18325d9441360c696a2b6d4515ab5c94bf6a7c48a96035c78152b8",
+      "learner_deck_index": 7,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.7765834999736398,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d7-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/005_anti_ivan_specialist.json",
+      "learner_deck_content_sha256": "96da96270c18325d9441360c696a2b6d4515ab5c94bf6a7c48a96035c78152b8",
+      "learner_deck_index": 7,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.1633333308994769,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.7802260830067098,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d7-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/005_anti_ivan_specialist.json",
+      "learner_deck_content_sha256": "96da96270c18325d9441360c696a2b6d4515ab5c94bf6a7c48a96035c78152b8",
+      "learner_deck_index": 7,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        2,
+        7,
+        4
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.9308027080260217,
+      "effective_group_size": 4,
+      "group_id": "ar038c067-d8-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/006_apex_bridge_omni.json",
+      "learner_deck_content_sha256": "6eea51cb073eb6f5819e9197c9716e3f32be635af9af1778ae8f797b0620221e",
+      "learner_deck_index": 8,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666647195816,
+        -1.408333323597908,
+        -1.244999970793724,
+        -1.326666647195816
+      ],
+      "returns": [
+        -1.0,
+        -1.0,
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.6708350840490311,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d8-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/006_apex_bridge_omni.json",
+      "learner_deck_content_sha256": "6eea51cb073eb6f5819e9197c9716e3f32be635af9af1778ae8f797b0620221e",
+      "learner_deck_index": 8,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        -1.408333330899477
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.9053534578997642,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d8-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/006_apex_bridge_omni.json",
+      "learner_deck_content_sha256": "6eea51cb073eb6f5819e9197c9716e3f32be635af9af1778ae8f797b0620221e",
+      "learner_deck_index": 8,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.245000007301569,
+        -1.326666654497385
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.8159710830077529,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d8-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/006_apex_bridge_omni.json",
+      "learner_deck_content_sha256": "6eea51cb073eb6f5819e9197c9716e3f32be635af9af1778ae8f797b0620221e",
+      "learner_deck_index": 8,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.6628701249137521,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d9-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/007_anti_lucario_neutralization_fortress.json",
+      "learner_deck_content_sha256": "792fe261136ec5cb9b68aabc9b4846e981a40ecf775f43c9351cd47a159a35c5",
+      "learner_deck_index": 9,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666654497385,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.2796742080245167,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d9-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/007_anti_lucario_neutralization_fortress.json",
+      "learner_deck_content_sha256": "792fe261136ec5cb9b68aabc9b4846e981a40ecf775f43c9351cd47a159a35c5",
+      "learner_deck_index": 9,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.408333330899477
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.050206582993269,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d9-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/007_anti_lucario_neutralization_fortress.json",
+      "learner_deck_content_sha256": "792fe261136ec5cb9b68aabc9b4846e981a40ecf775f43c9351cd47a159a35c5",
+      "learner_deck_index": 9,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.1633333308994769,
+        -1.408333330899477
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.1520457500591874,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d9-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/007_anti_lucario_neutralization_fortress.json",
+      "learner_deck_content_sha256": "792fe261136ec5cb9b68aabc9b4846e981a40ecf775f43c9351cd47a159a35c5",
+      "learner_deck_index": 9,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.0163954999297857,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d10-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/008_anti_lucario_energy_denial.json",
+      "learner_deck_content_sha256": "901f6f8eb6bfd23329bf22096065a4e967f794dbc7e1c9482fff2370b08878d2",
+      "learner_deck_index": 10,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.408333330899477
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.7129664998501539,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d10-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/008_anti_lucario_energy_denial.json",
+      "learner_deck_content_sha256": "901f6f8eb6bfd23329bf22096065a4e967f794dbc7e1c9482fff2370b08878d2",
+      "learner_deck_index": 10,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.245
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.8238991249818355,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d10-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/008_anti_lucario_energy_denial.json",
+      "learner_deck_content_sha256": "901f6f8eb6bfd23329bf22096065a4e967f794dbc7e1c9482fff2370b08878d2",
+      "learner_deck_index": 10,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666654497385,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.0839059168938547,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d10-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/008_anti_lucario_energy_denial.json",
+      "learner_deck_content_sha256": "901f6f8eb6bfd23329bf22096065a4e967f794dbc7e1c9482fff2370b08878d2",
+      "learner_deck_index": 10,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.245,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        2,
+        0,
+        3
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.545367541955784,
+      "effective_group_size": 4,
+      "group_id": "ar038c067-d11-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/009_anti_ivan_non_ex_swat.json",
+      "learner_deck_content_sha256": "a471e20b2776fc3b4e66333d9efeed5a54005a633e8458c669d4e91fa9b78c67",
+      "learner_deck_index": 11,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333323597908,
+        -1.408333323597908,
+        -1.408333323597908,
+        -1.408333323597908
+      ],
+      "returns": [
+        -1.0,
+        -1.0,
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.7928895829245448,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d11-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/009_anti_ivan_non_ex_swat.json",
+      "learner_deck_content_sha256": "a471e20b2776fc3b4e66333d9efeed5a54005a633e8458c669d4e91fa9b78c67",
+      "learner_deck_index": 11,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666654497385,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.5910552500281483,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d11-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/009_anti_ivan_non_ex_swat.json",
+      "learner_deck_content_sha256": "a471e20b2776fc3b4e66333d9efeed5a54005a633e8458c669d4e91fa9b78c67",
+      "learner_deck_index": 11,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        1.0
+      ],
+      "returns": [
+        -1.0,
+        1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.9050751249305904,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d11-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/009_anti_ivan_non_ex_swat.json",
+      "learner_deck_content_sha256": "a471e20b2776fc3b4e66333d9efeed5a54005a633e8458c669d4e91fa9b78c67",
+      "learner_deck_index": 11,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.8767385000828654,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d12-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/010_apex_bridge_neutralization_v2.json",
+      "learner_deck_content_sha256": "d7b11092b23873419f0733d4dc9b368b612051c7ce7f5f88ec1754db3261dfef",
+      "learner_deck_index": 12,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666654497385,
+        -1.408333330899477
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.5276357079856098,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d12-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/010_apex_bridge_neutralization_v2.json",
+      "learner_deck_content_sha256": "d7b11092b23873419f0733d4dc9b368b612051c7ce7f5f88ec1754db3261dfef",
+      "learner_deck_index": 12,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.5849090830888599,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d12-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/010_apex_bridge_neutralization_v2.json",
+      "learner_deck_content_sha256": "d7b11092b23873419f0733d4dc9b368b612051c7ce7f5f88ec1754db3261dfef",
+      "learner_deck_index": 12,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        -1.408333330899477
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.343744833022356,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d12-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/010_apex_bridge_neutralization_v2.json",
+      "learner_deck_content_sha256": "d7b11092b23873419f0733d4dc9b368b612051c7ce7f5f88ec1754db3261dfef",
+      "learner_deck_index": 12,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        1,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.1482652919366956,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d13-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/011_dudunsparce_turbo_draw_engine.json",
+      "learner_deck_content_sha256": "9585cc40360198ba20118aa93a3165ae580a74fff352f0ed46f8d45f7d2c5f74",
+      "learner_deck_index": 13,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "opponent_deck": "public_agents/lb1009_mega_lucario_ex_islet/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666647195816,
+        -1.408333323597908
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.2735433750785887,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d13-m1-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/011_dudunsparce_turbo_draw_engine.json",
+      "learner_deck_content_sha256": "9585cc40360198ba20118aa93a3165ae580a74fff352f0ed46f8d45f7d2c5f74",
+      "learner_deck_index": 13,
+      "matchup_index": 1,
+      "opponent_agent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "opponent_deck": "public_agents/lb945_multiply_ivan/deck.csv",
+      "opponent_deck_content_sha256": "25edbd1de64860a6fda424e4ab1880a8e28bc541f71c3993d1fcae3b789846a0",
+      "opponent_deck_source_file_sha256": "2a541d7bf3d9e6b36037123f53f4dfef6348223f79fd27095dafc602a5357c19",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.408333330899477,
+        -1.408333330899477
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.9107197499834001,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d13-m2-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/011_dudunsparce_turbo_draw_engine.json",
+      "learner_deck_content_sha256": "9585cc40360198ba20118aa93a3165ae580a74fff352f0ed46f8d45f7d2c5f74",
+      "learner_deck_index": 13,
+      "matchup_index": 2,
+      "opponent_agent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "opponent_deck": "public_agents/lb826_alakazam_seok/deck.csv",
+      "opponent_deck_content_sha256": "89086cd1fed63b970f913c535edda0da8af1e15c1b120ff8d5feef85ed9d3141",
+      "opponent_deck_source_file_sha256": "7b413177e5077777f2178143839c0155b03b92bbc8b3a6607621a7d43f351141",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        -1.326666661798954
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.2012071670033038,
+      "effective_group_size": 2,
+      "group_id": "ar038c067-d13-m3-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/011_dudunsparce_turbo_draw_engine.json",
+      "learner_deck_content_sha256": "9585cc40360198ba20118aa93a3165ae580a74fff352f0ed46f8d45f7d2c5f74",
+      "learner_deck_index": 13,
+      "matchup_index": 3,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "policy_scores": [
+        -1.326666661798954,
+        -1.244999985396862
+      ],
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    }
+  ],
+  "learner_decks": [
+    {
+      "content_sha256": "71c330a41fa40ed23ea38cff3b6bdf4c563194c55a018757fa00c8c2d6b26dc5",
+      "path": "experiments/decks/candidates/deck_v2_anti_control_lock.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/000_71c330a41fa4.json",
+      "source_file_sha256": "e8b1573602f0e5e194cb123fa4f61607f2f197a37fec92e4a94fe11d60663cbb"
+    },
+    {
+      "content_sha256": "c31efca1a5c91de48e14ba4312dda62acc3cd48225c74fce43f6e4579784bc2c",
+      "path": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-001/decks/generated_turn0.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/001_c31efca1a5c9.json",
+      "source_file_sha256": "f7581579a511501bfd9b75cfdf1efc56e67c799c1bb2f4eed082bfbb36efc279"
+    },
+    {
+      "content_sha256": "c62637763f12e74191f62d68d752cada2fe1430abdbe1ac8e3131b273efd82a2",
+      "path": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-054/decks/generated_turn0.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/002_c62637763f12.json",
+      "source_file_sha256": "1e415ac606783451962ec716b0cdb41e945e62396c7060fcce230a4d70540509"
+    },
+    {
+      "content_sha256": "6c46537b74bca9d46b63e3cd03e0f6ddd5f76f7f0525e41f48128a907983883a",
+      "path": "experiments/decks/swarm/inbox/001_v5_apex_omnipotent.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/003_6c46537b74bc.json",
+      "source_file_sha256": "804e6ba2f3d322eb6ed6e829a5c2eca8c9c3b4389f363b35324acaabf8c28fbc"
+    },
+    {
+      "content_sha256": "9f340132ea333581dac59c218053f7be923106661903bfd8b1d6432a045ffe76",
+      "path": "experiments/decks/swarm/inbox/002_v4_safeguard_fortress.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/004_9f340132ea33.json",
+      "source_file_sha256": "06a5737b7ab3208a9289d2022de9f5dc8c84079836670274a816142f268d39dc"
+    },
+    {
+      "content_sha256": "341556f991e9718ab3537f5016344f7a0550869bb41b3a68cd38b255ecf5564b",
+      "path": "experiments/decks/swarm/inbox/003_v3_apex_sovereign.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/005_341556f991e9.json",
+      "source_file_sha256": "1a75c7d9a976d7d1cd768db2373aa03e667d67131a51469fee4ccd5e23aebdc9"
+    },
+    {
+      "content_sha256": "b99dbb2fb072a9ff515f197db4dff9b361cb1205d2e35ed1529a17e6991b3374",
+      "path": "experiments/decks/swarm/inbox/004_anti_lucario_specialist.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/006_b99dbb2fb072.json",
+      "source_file_sha256": "1100d08c1c4fdf48c60cdad2b969f0c908d1cebf8b8c0bd417866bb624711f1c"
+    },
+    {
+      "content_sha256": "96da96270c18325d9441360c696a2b6d4515ab5c94bf6a7c48a96035c78152b8",
+      "path": "experiments/decks/swarm/inbox/005_anti_ivan_specialist.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/007_96da96270c18.json",
+      "source_file_sha256": "0f6972a9d81cbcd4620899591ed941f96e4fd15ffd57104665f5532f89035417"
+    },
+    {
+      "content_sha256": "6eea51cb073eb6f5819e9197c9716e3f32be635af9af1778ae8f797b0620221e",
+      "path": "experiments/decks/swarm/inbox/006_apex_bridge_omni.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/008_6eea51cb073e.json",
+      "source_file_sha256": "67e7237ce1f79139bf54d6d216a2d576499defcd81fbd4413fc2df3965d92bbe"
+    },
+    {
+      "content_sha256": "792fe261136ec5cb9b68aabc9b4846e981a40ecf775f43c9351cd47a159a35c5",
+      "path": "experiments/decks/swarm/inbox/007_anti_lucario_neutralization_fortress.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/009_792fe261136e.json",
+      "source_file_sha256": "3a4b297380f166f8d90205be0238c2efca0f27541a064d369ef769b34bb09f9b"
+    },
+    {
+      "content_sha256": "901f6f8eb6bfd23329bf22096065a4e967f794dbc7e1c9482fff2370b08878d2",
+      "path": "experiments/decks/swarm/inbox/008_anti_lucario_energy_denial.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/010_901f6f8eb6bf.json",
+      "source_file_sha256": "82cd618036842987787e88a72dc1f37a1133a3ac789cbf0f516cf39f5f1452f4"
+    },
+    {
+      "content_sha256": "a471e20b2776fc3b4e66333d9efeed5a54005a633e8458c669d4e91fa9b78c67",
+      "path": "experiments/decks/swarm/inbox/009_anti_ivan_non_ex_swat.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/011_a471e20b2776.json",
+      "source_file_sha256": "e3f6365c86f90426ae709fc85bb5582d3675e29a73388467ae8d1b102006470f"
+    },
+    {
+      "content_sha256": "d7b11092b23873419f0733d4dc9b368b612051c7ce7f5f88ec1754db3261dfef",
+      "path": "experiments/decks/swarm/inbox/010_apex_bridge_neutralization_v2.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/012_d7b11092b238.json",
+      "source_file_sha256": "a35a3d55621c9f0d35141ee5d3beefb8682a6c63836965cc390f9b1c40c15b5a"
+    },
+    {
+      "content_sha256": "9585cc40360198ba20118aa93a3165ae580a74fff352f0ed46f8d45f7d2c5f74",
+      "path": "experiments/decks/swarm/inbox/011_dudunsparce_turbo_draw_engine.json",
+      "snapshot": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-067/decks/013_9585cc403601.json",
+      "source_file_sha256": "33499f28029abf48cfacf369afbfe782264c056c386c21b1dd7199e5a8301588"
+    }
+  ],
+  "parent_sha256": "b7ab038c4ae7c4788e23a216eef79218385d5c14ed31d0ea7f0460126d289b6c",
+  "throughput": {
+    "collection_seconds": 49.613786,
+    "decisions_per_second": 139.75954089704163,
+    "games": 122,
+    "games_per_second": 2.4589939413670434,
+    "logical_decisions": 6934,
+    "update_seconds": 501.24367541703396
+  },
+  "tournament": {
+    "status": "pending"
+  },
+  "training": {
+    "credited_logical_actions": 6934,
+    "deck_reconstruction": {
+      "batches": 1,
+      "examples": 56,
+      "loss": 7.407689094543457,
+      "masked_fraction": 0.2
+    },
+    "optimizer_steps": 3,
+    "prospective_auxiliary": {
+      "batches": 14,
+      "examples": 6934,
+      "ko_loss": 0.0880965068936348,
+      "loss": 0.29133502181087223,
+      "prize_loss": 0.007901606948247977,
+      "return_loss": 0.22319659058536803,
+      "terminal_loss": 0.08055750067744936
+    },
+    "zero_variance_groups": 20
+  }
+}

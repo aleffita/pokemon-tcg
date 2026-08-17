@@ -1,28 +1,40 @@
-# State Capsule 013 - AR-011 reviewed
+# State Capsule 013 - grouped dynamic-K sibling-fiber GRPO
 
-Captured: 2026-08-16 after the AR-011 reviewer gate.
+Captured 2026-08-17T02:40:39.969203+00:00.
 
-## Decision
+## Current state
 
-Stage 4 remains the frozen competitive root and only promoted policy. The
-regenerated AR-010 candidate is technically runnable, but tournament is still
-blocked until candidate-byte integrity is enforced by an explicit expected
-SHA receipt and the exact binary hashes are recorded.
+- Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `140` fibers with effective K
+  `[3, 2, 2, 2, 3, 3, 2, 4, 2, 4, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 4, 3, 2, 4, 4, 2, 2, 4, 2, 4, 2, 4, 4, 4, 2, 2, 2, 2, 2, 3, 2, 2, 2, 4, 2, 2, 2, 2, 4, 4, 2, 3]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `0ec57af31faf72ba9333c6253b305f4ca872715a058ebc671c7d7b9f3aae9ec6`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
 ## Evidence
 
-- Commit: `8bc38e5`.
-- Focused suite: 21 passed.
-- Candidate SHA:
-  `e6efe207d4b08dd458b40be14297b142ca2987b2238f97d807b6bf85320c7773`.
-- Manifest SHA:
-  `b5c273f75c8bee147a16fbde49b8ca5fed0c017fa656b5f29cf1d480db051256`.
-- Bundle SHA:
-  `f2f6ca653d752d91fc17b61298c3dfa09aac1ad5741f0d4c6b71ba065aedbbbf`.
-- Review: `experiments/autoresearch/AR-011/review.md`.
+- `experiments/autoresearch/AR-038-C013/report.md`
+- `experiments/autoresearch/AR-038-C013/manifest.json`
+- `experiments/autoresearch/AR-038-C013/metrics.json`
+- `experiments/autoresearch/AR-038-C013/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C013/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C013/candidate.pt`
 
-## Open gate
+## Metrics
 
-AR-012 must enforce the expected candidate SHA only when the opt-in path is
-used, then run a repository-local absolute-path no-sweep tournament. Do not
-package or submit this candidate.
+- Collection: `68.645423` s,
+  `119.46899868676599` decisions/s.
+- Update: `665.6389077079948` s; `3` optimizer steps.
+- Credited logical actions: `8201`.
+- Parameter L2 delta: `0.0006044805740616241`;
+  gradient norm `2.497986078262329`.
+
+## Next control point
+
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

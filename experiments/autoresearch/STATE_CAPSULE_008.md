@@ -1,33 +1,40 @@
-# State Capsule 008 - AR-006 reviewed
+# State Capsule 008 - grouped dynamic-K sibling-fiber GRPO
 
-Captured: 2026-08-16 after the AR-006 reviewer gate.
+Captured 2026-08-17T01:33:53.947109+00:00.
 
-## Decision
+## Current state
 
-Stage 4 remains the frozen competitive root and only promoted policy. Packed
-data remains opt-in infrastructure. AR-006 validates exact-root gating, valid
-identity setup, and the extracted packed loader, but is **rework** because the
-tests do not yet perform a real optimizer/scheduler micro-update or traverse
-the production packed train/validation loops.
+- Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `117` fibers with effective K
+  `[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 3, 2, 4, 2, 2, 2, 3, 2, 2, 2, 4, 2, 3, 2, 3, 2, 2, 2, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `821f02fc09e9d99b630dcfbcf0fa9596cb879ad1f37bbed968d40607ec16f71f`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
 ## Evidence
 
-- Commit: `9de4516`.
-- Focused locked suite: 47 passed in 0.64 s.
-- Review: `experiments/autoresearch/AR-006/review.md`.
-- Stage 4 root hash remains `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- `experiments/autoresearch/AR-038-C008/report.md`
+- `experiments/autoresearch/AR-038-C008/manifest.json`
+- `experiments/autoresearch/AR-038-C008/metrics.json`
+- `experiments/autoresearch/AR-038-C008/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C008/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C008/candidate.pt`
 
-## Open gates
+## Metrics
 
-AR-007 must add a bounded production-compatible optimizer/scheduler micro
-update, cover fresh/reset behavior, exercise packed train prefetch and
-validation paths with a tiny fixture, and test wrong-cwd relative-root
-rejection. No packed self-play or RL run is allowed until this gate is
-reviewed.
+- Collection: `62.385876` s,
+  `121.67818217551395` decisions/s.
+- Update: `625.799027999863` s; `3` optimizer steps.
+- Credited logical actions: `7591`.
+- Parameter L2 delta: `0.0006043813926639674`;
+  gradient norm `2.492122173309326`.
 
 ## Next control point
 
-After AR-007 review, use the frozen Stage 4 root with the default Parquet
-backend to inspect and probe the real self-play/RL trajectory and log-probability
-boundary. Packed may become an infrastructure option only after the micro-loop
-evidence is accepted.
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

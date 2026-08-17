@@ -1,52 +1,40 @@
 # State Capsule 025 - grouped dynamic-K sibling-fiber GRPO
 
-Captured 2026-08-16T18:35:57.057264+00:00.
+Captured 2026-08-17T04:54:58.244937+00:00.
 
 ## Current state
 
 - Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
-- AR-025 collected `16` exact recurrent sibling groups
-  and `43` fibers with effective K
-  `[4, 2, 4, 2, 2, 2, 2, 2, 2, 2, 3, 4, 2, 2, 4, 4]`.
-- One grouped FP32 policy-only update applied independent group-relative
-  terminal credit through future continuation with discount
-  `0.97`.
-- Candidate: `93b46cb113c917d4ea12cb25eb0bdcc7ca6ce31fbdd2ad71e6c5e2f31455bb52`; preflight passed.
-- The candidate lost the same-deck frozen-root gate `13-17-0` in 30 and the
-  six-opponent panel `10-50-0` versus frozen root `12-48-0` in 60. Candidate
-  rejected for promotion; frozen Stage 4 remains fallback.
-- No RoPE-ND, MoE, or historical ETL/Parquet/packed-data path was run.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `133` fibers with effective K
+  `[2, 2, 4, 2, 3, 2, 2, 2, 2, 2, 4, 2, 3, 2, 3, 2, 3, 2, 4, 2, 4, 2, 4, 2, 3, 2, 4, 2, 2, 2, 4, 2, 2, 2, 2, 2, 4, 2, 4, 2, 4, 2, 2, 2, 2, 2, 4, 2, 4, 2, 2, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `3c175b8e0caff4bb789e7869aa3a33ac301a3797db74c36880f95617d4cf3b22`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
 ## Evidence
 
-- `experiments/autoresearch/AR-025/report.md`
-- `experiments/autoresearch/AR-025/manifest.json`
-- `experiments/autoresearch/AR-025/metrics.json`
-- `experiments/autoresearch/AR-025/sample.manifest.json`
-- `experiments/autoresearch/AR-025/trajectory_bundle.pt.gz`
-- `experiments/autoresearch/AR-025/candidate.pt`
+- `experiments/autoresearch/AR-038-C025/report.md`
+- `experiments/autoresearch/AR-038-C025/manifest.json`
+- `experiments/autoresearch/AR-038-C025/metrics.json`
+- `experiments/autoresearch/AR-038-C025/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C025/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C025/candidate.pt`
 
 ## Metrics
 
-- Collection: `27.275887` s,
-  `106.83428855216941` decisions/s.
-- Update: `66.6324357080739` s; one optimizer step.
-- Credited logical actions: `1088`.
-- Parameter L2 delta: `0.009227449781494418`;
-  gradient norm `0.7253366112709045`.
+- Collection: `52.526018` s,
+  `149.12609677832765` decisions/s.
+- Update: `594.5954044579994` s; `3` optimizer steps.
+- Credited logical actions: `7833`.
+- Parameter L2 delta: `0.0006043574417210513`;
+  gradient norm `2.3878841400146484`.
 
 ## Next control point
 
-Do not scale this configuration further: the larger update increased compute
-but reduced field strength and left eleven of sixteen groups zero-variance.
-Test a targeted credit or branch-selection hypothesis, keeping the same panel
-as the promotion gate.
-
-## Tournament evidence
-
-- Candidate vs frozen root, same deck, 30 games: `13-17-0` (43.3%);
-  report SHA-256 `e1f456169857d0903661583baf6d59a899f427656eda72258671fb2bd1f6e4ac`.
-- Candidate panel, 60 games: `10-50-0` (16.7%);
-  report SHA-256 `e6d277a66fa3b1cfb794ffac90e2e862f61735956fe73e781d8b35e6fea2e5c3`.
-- Frozen-root panel, 60 games: `12-48-0` (20.0%);
-  report SHA-256 `816c701a72ee415cabb702f6791947b696b72bbd2b3a801f4e45b2b5a5dba740`.
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

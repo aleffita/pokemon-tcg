@@ -1,0 +1,166 @@
+{
+  "our_agent": "agent/main.py",
+  "our_deck_file": null,
+  "our_deck_files": [
+    "/Users/alefita/workdir/pokemon-tcg/experiments/decks/candidates/deck_v2_anti_control_lock.json",
+    "/Users/alefita/workdir/pokemon-tcg/experiments/decks/swarm/inbox/001_v5_apex_omnipotent.json",
+    "/Users/alefita/workdir/pokemon-tcg/experiments/autoresearch/AR-034-dense-multiepoch-grpo/decks/generated_turn0.json"
+  ],
+  "sweep": true,
+  "sweep_source": "remote",
+  "games_per_opponent": 4,
+  "note": "AR-034 dense five-epoch deck-GRPO multideck panel",
+  "rows": [
+    {
+      "opponent_label": "lb1009_mega_lucario_ex_islet",
+      "opponent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "deck_id": 951,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 4,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 3.7829749584198,
+      "error": null
+    },
+    {
+      "opponent_label": "lb945_multiply_ivan",
+      "opponent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "deck_id": 951,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 4,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 3.6438958644866943,
+      "error": null
+    },
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "deck_id": 951,
+      "opp_deck_id": 4,
+      "wins": 0,
+      "losses": 4,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 4.652750015258789,
+      "error": null
+    },
+    {
+      "opponent_label": "lb814_crustle_emre",
+      "opponent_path": "public_agents/lb814_crustle_emre/main.py",
+      "deck_id": 951,
+      "opp_deck_id": 3,
+      "wins": 2,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 50.0,
+      "elapsed_s": 4.512127876281738,
+      "error": null
+    },
+    {
+      "opponent_label": "lb1009_mega_lucario_ex_islet",
+      "opponent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "deck_id": 953,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 4,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 3.642110824584961,
+      "error": null
+    },
+    {
+      "opponent_label": "lb945_multiply_ivan",
+      "opponent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "deck_id": 953,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 4,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 3.73003888130188,
+      "error": null
+    },
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "deck_id": 953,
+      "opp_deck_id": 4,
+      "wins": 0,
+      "losses": 4,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 4.655050992965698,
+      "error": null
+    },
+    {
+      "opponent_label": "lb814_crustle_emre",
+      "opponent_path": "public_agents/lb814_crustle_emre/main.py",
+      "deck_id": 953,
+      "opp_deck_id": 3,
+      "wins": 3,
+      "losses": 1,
+      "draws": 0,
+      "wr_pct": 75.0,
+      "elapsed_s": 4.308226823806763,
+      "error": null
+    },
+    {
+      "opponent_label": "lb1009_mega_lucario_ex_islet",
+      "opponent_path": "public_agents/lb1009_mega_lucario_ex_islet/main.py",
+      "deck_id": 954,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 4,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 3.9539568424224854,
+      "error": null
+    },
+    {
+      "opponent_label": "lb945_multiply_ivan",
+      "opponent_path": "public_agents/lb945_multiply_ivan/main.py",
+      "deck_id": 954,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 4,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 3.523266077041626,
+      "error": null
+    },
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "public_agents/lb826_alakazam_seok/main.py",
+      "deck_id": 954,
+      "opp_deck_id": 4,
+      "wins": 1,
+      "losses": 3,
+      "draws": 0,
+      "wr_pct": 25.0,
+      "elapsed_s": 3.768120050430298,
+      "error": null
+    },
+    {
+      "opponent_label": "lb814_crustle_emre",
+      "opponent_path": "public_agents/lb814_crustle_emre/main.py",
+      "deck_id": 954,
+      "opp_deck_id": 3,
+      "wins": 2,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 50.0,
+      "elapsed_s": 3.6020069122314453,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 8,
+    "losses": 40,
+    "draws": 0,
+    "wr_pct": 16.666666666666664,
+    "elapsed_s": 47.845136880874634
+  }
+}

@@ -27,11 +27,14 @@ Captured: 2026-08-16
   FP32 policy scored `3-27-0` (10%) over 30 games; random `2-3`, first `0-5`,
   lb1009 `0-5`, lb945 `0-5`, lb826 `0-5`, lb814 `1-4`. It did not change the
   Lucario bottleneck and is rejected as a deck promotion.
-- Next action: benchmark the existing adaptive-compute inference modes (b1
-  latent refinement and b2 latent perturbation ensemble) on the Lucario/
-  Alakazam surface, then use the strongest valid mode/deck pair for the next
-  multi-deck GRPO collection. Preserve root fallback until absolute panel
-  strength improves.
+- Adaptive-compute diagnostic: b1 with K=3 scored `7-25-0` (21.875%) and b2
+  with K=3, epsilon 0.05 scored `6-26-0` (18.75%) over the same 32-game
+  v0/v2 × four-policy surface; both scored `0-16` against the two Lucario
+  policies. Neither mode is promoted.
+- Next action: targeted multi-deck GRPO with v3 + v2 learner decks against
+  lb1009/lb945 Lucario policies (groups=2, dynamic K, uniform branch mix),
+  then evaluate the resulting candidate on the full six-opponent panel.
+  Preserve root fallback until absolute panel strength improves.
 - AR-018 code commits: `434d3f6`, repaired by `28c2b96` and `4cfe5e8`
 - AR-018 status: corrected gate passed review; keep foundation
 - AR-019 implementation commit: `5dd6cfc`

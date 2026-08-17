@@ -1,0 +1,190 @@
+{
+  "candidate": "experiments/autoresearch/AR-030-integrated-turn0-mps-smoke/candidate.pt",
+  "candidate_sha256": "595527f6adc76c121749afd04244f0041e3931c4d43be87216bad671fceef26d",
+  "captured_at": "2026-08-16T20:49:54.691001+00:00",
+  "deck_relative_cohorts": [
+    {
+      "advantages": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "group_index": 0,
+      "learner_deck_indices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "matchup_index": 0,
+      "mean": -1.0,
+      "scores": [
+        -1.0,
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "std": 0.0,
+      "zero_variance": true
+    }
+  ],
+  "experiment": "AR-030-I",
+  "format": "ptcg-deck-swarm-result-v1",
+  "groups": [
+    {
+      "branch_actions": [
+        1,
+        0
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.3330067920032889,
+      "effective_group_size": 2,
+      "group_id": "ar030i-d0-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/candidates/deck_v2_anti_control_lock.json",
+      "learner_deck_content_sha256": "71c330a41fa40ed23ea38cff3b6bdf4c563194c55a018757fa00c8c2d6b26dc5",
+      "learner_deck_index": 0,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        3,
+        2
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.0346270841546357,
+      "effective_group_size": 2,
+      "group_id": "ar030i-d1-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/001_v5_apex_omnipotent.json",
+      "learner_deck_content_sha256": "6c46537b74bca9d46b63e3cd03e0f6ddd5f76f7f0525e41f48128a907983883a",
+      "learner_deck_index": 1,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        2,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 1.0653994579333812,
+      "effective_group_size": 2,
+      "group_id": "ar030i-d2-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/002_v4_safeguard_fortress.json",
+      "learner_deck_content_sha256": "9f340132ea333581dac59c218053f7be923106661903bfd8b1d6432a045ffe76",
+      "learner_deck_index": 2,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    },
+    {
+      "branch_actions": [
+        0,
+        1
+      ],
+      "branch_uniform_mix": 0.5,
+      "collection_seconds": 0.9126360840164125,
+      "effective_group_size": 2,
+      "group_id": "ar030i-d3-m0-g0",
+      "group_index": 0,
+      "learner_deck": "experiments/decks/swarm/inbox/003_v3_apex_sovereign.json",
+      "learner_deck_content_sha256": "341556f991e9718ab3537f5016344f7a0550869bb41b3a68cd38b255ecf5564b",
+      "learner_deck_index": 3,
+      "matchup_index": 0,
+      "opponent_agent_path": "public_agents/lb814_crustle_emre/main.py",
+      "opponent_deck": "public_agents/lb814_crustle_emre/deck.csv",
+      "opponent_deck_content_sha256": "824fe373e772453be610e01c10cbbdbe0cc6ea1de4da6ec09012366729e0dc85",
+      "opponent_deck_source_file_sha256": "9c2647bd80d51bfd9cf89c74026e6a53607903b94cae9c235fad0c2128aad3aa",
+      "opponent_mode": "current_vs_external_policy_true_recurrent",
+      "returns": [
+        -1.0,
+        -1.0
+      ]
+    }
+  ],
+  "learner_decks": [
+    {
+      "content_sha256": "71c330a41fa40ed23ea38cff3b6bdf4c563194c55a018757fa00c8c2d6b26dc5",
+      "path": "experiments/decks/candidates/deck_v2_anti_control_lock.json",
+      "snapshot": "experiments/autoresearch/AR-030-integrated-turn0-mps-smoke/decks/000_71c330a41fa4.json",
+      "source_file_sha256": "e8b1573602f0e5e194cb123fa4f61607f2f197a37fec92e4a94fe11d60663cbb"
+    },
+    {
+      "content_sha256": "6c46537b74bca9d46b63e3cd03e0f6ddd5f76f7f0525e41f48128a907983883a",
+      "path": "experiments/decks/swarm/inbox/001_v5_apex_omnipotent.json",
+      "snapshot": "experiments/autoresearch/AR-030-integrated-turn0-mps-smoke/decks/001_6c46537b74bc.json",
+      "source_file_sha256": "804e6ba2f3d322eb6ed6e829a5c2eca8c9c3b4389f363b35324acaabf8c28fbc"
+    },
+    {
+      "content_sha256": "9f340132ea333581dac59c218053f7be923106661903bfd8b1d6432a045ffe76",
+      "path": "experiments/decks/swarm/inbox/002_v4_safeguard_fortress.json",
+      "snapshot": "experiments/autoresearch/AR-030-integrated-turn0-mps-smoke/decks/002_9f340132ea33.json",
+      "source_file_sha256": "06a5737b7ab3208a9289d2022de9f5dc8c84079836670274a816142f268d39dc"
+    },
+    {
+      "content_sha256": "341556f991e9718ab3537f5016344f7a0550869bb41b3a68cd38b255ecf5564b",
+      "path": "experiments/decks/swarm/inbox/003_v3_apex_sovereign.json",
+      "snapshot": "experiments/autoresearch/AR-030-integrated-turn0-mps-smoke/decks/003_341556f991e9.json",
+      "source_file_sha256": "1a75c7d9a976d7d1cd768db2373aa03e667d67131a51469fee4ccd5e23aebdc9"
+    }
+  ],
+  "parent_sha256": "4f34b531ea6024f557ab69cfc5eb11ac069700973714ab7e6228753d81553c02",
+  "throughput": {
+    "collection_seconds": 4.345669,
+    "decisions_per_second": 146.58270998381093,
+    "games": 8,
+    "games_per_second": 1.840913155212696,
+    "logical_decisions": 637,
+    "update_seconds": 13.572289374889806
+  },
+  "tournament": {
+    "status": "pending"
+  },
+  "training": {
+    "credited_logical_actions": 0,
+    "deck_reconstruction": {
+      "batches": 1,
+      "examples": 4,
+      "loss": 7.8426947593688965,
+      "masked_fraction": 0.2
+    },
+    "optimizer_steps": 2,
+    "prospective_auxiliary": {
+      "batches": 2,
+      "examples": 637,
+      "ko_loss": 0.030304284766316414,
+      "loss": 0.4204278886318207,
+      "prize_loss": 0.005209418945014477,
+      "return_loss": 0.3871556222438812,
+      "terminal_loss": 0.062061648815870285
+    },
+    "zero_variance_groups": 4
+  }
+}

@@ -1,58 +1,40 @@
-# State Capsule 002 - AR-002 initial result
+# State Capsule 002 - grouped dynamic-K sibling-fiber GRPO
 
-Captured: 2026-08-16 after the AR-002 worker run.
+Captured 2026-08-17T00:22:15.099259+00:00.
 
-## Initial decision
+## Current state
 
-Keep the opt-in fixed-width mmap backend. Default training remains the
-Parquet/cache path. No model, loss, Stage 4 root, SQLite database, or
-inference code changed.
-
-Implementation commit: `4d0a217` (`feat(data): add opt-in mmap BC training backend`).
-
-## Contract
-
-The benchmark uses `data/bc_data/2026-08-08.parquet`, SHA-256
-`ed4b392a41dc363d7175bffcdfdca105a21450fc209c36320a561e3631a8f1f0`,
-`max_rows=2048`, `val_frac=0.1`, `seed=13971479023478`, 12 selected episodes,
-2,082 rows, 1,955 train rows, and 127 validation rows. Stage 4 has 1,302,151
-parameters and resumes from `stage4_root.pkl`, SHA-256
-`b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `142` fibers with effective K
+  `[4, 3, 2, 2, 3, 2, 2, 2, 3, 2, 2, 2, 4, 2, 2, 2, 2, 2, 4, 2, 4, 4, 3, 2, 2, 4, 4, 2, 4, 2, 4, 2, 2, 2, 4, 2, 4, 4, 2, 2, 2, 2, 2, 2, 3, 3, 4, 2, 4, 4, 4, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `3d5dfef73cc6d2c861d96b72e922a7fe48d8baea2490c7c2d1fa077a5a2125d9`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
 ## Evidence
 
-- Parity: 86 columns, dtypes/shapes/values and episode-side-order digests
-  equal, zero mismatches.
-- Candidate data digest:
-  `6d15639abce2fbe240e92c6a86c2bff32330684105a1b7f07f27e379702949c3`.
-- Clean load: baseline 1.866 s and 2,802,502,248 decoded bytes versus
-  candidate 0.162 s and 85,199,604 bytes.
-- Clean RSS: baseline 7.98 GiB versus candidate 273 MiB.
-- Integrated train: baseline 21.51 s versus candidate 20.82 s, both 9
-  microbatches, 9 optimizer steps, `val_acc=0.6693`, and identical logged
-  losses/auxiliary metrics.
-- Focused tests: 2 passed.
+- `experiments/autoresearch/AR-038-C002/report.md`
+- `experiments/autoresearch/AR-038-C002/manifest.json`
+- `experiments/autoresearch/AR-038-C002/metrics.json`
+- `experiments/autoresearch/AR-038-C002/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C002/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C002/candidate.pt`
 
-## Caveats
+## Metrics
 
-Candidate ETL took 1.60 s. One epoch including that upfront cost is slightly
-slower than an already-built Parquet source, so reuse across epochs is
-required. The fixed-probe candidate requires one source day and TBPTT. No
-tournament was run because inference behavior is unchanged. Reviewer findings
-require rework before multi-day promotion: explicit val-to-train row ordering,
-independent required-column parity, a shared `max_rows=0` split contract,
-separate-process RSS/swap telemetry, and direct 1/2/3-epoch amortization runs.
-The combined benchmark JSON is not canonical for RSS or swap because it uses
-process high-water marks and global cumulative counters.
+- Collection: `48.560617` s,
+  `163.3010548269664` decisions/s.
+- Update: `544.7986504591536` s; `3` optimizer steps.
+- Credited logical actions: `7930`.
+- Parameter L2 delta: `0.0006046269219020212`;
+  gradient norm `2.774322748184204`.
 
-## Reviewer decision
+## Next control point
 
-`REWORK` before AR-003, not discard. The fixed-probe data-path result is
-credible, but the backend contract is not yet strong enough for a larger
-corpus.
-
-## Next experiment
-
-First repair the packed backend contract and then pack a larger multi-day
-subset. Run baseline, ETL and candidate in separate processes for a bounded
-one-to-three-epoch workload, measuring ETL amortization and pressure behavior.
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

@@ -1,35 +1,40 @@
-# State Capsule 007 - AR-005 reviewed
+# State Capsule 007 - grouped dynamic-K sibling-fiber GRPO
 
-Captured: 2026-08-16 after the AR-005 reviewer gate.
+Captured 2026-08-17T01:21:04.268170+00:00.
 
-## Decision
+## Current state
 
-Stage 4 remains the frozen competitive root and only promoted policy. Packed
-data remains opt-in infrastructure. AR-005 closes exact-root warm-start gating,
-identity mismatch rejection, and reset behavior, but is **rework** because the
-production behavioral integration evidence is incomplete.
+- Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `127` fibers with effective K
+  `[2, 2, 2, 2, 3, 2, 2, 2, 4, 2, 3, 2, 2, 2, 2, 2, 4, 2, 2, 2, 4, 2, 4, 2, 4, 2, 4, 2, 4, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 4, 2, 3, 2, 2, 2, 2, 2, 4, 2, 2, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `dc972b61cfd355e0312363e2364cd0990d5641600770b1e836ea9b3c698da197`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
 ## Evidence
 
-- Commit: `0afaa49`.
-- Focused locked suite: 41 passed in 0.62 s.
-- Review: `experiments/autoresearch/AR-005/review.md`.
-- Semantic baseline suite: 4 passed, 2 failed for missing
-  `structured_weight_decay` and missing real smoke corpus.
-- Reviewer confirmed runtime `main()` calls the new resume helpers, but the
-  committed tests do not exercise the actual packed temporal loader/training
-  iterator or a positive optimizer+scheduler continuation.
+- `experiments/autoresearch/AR-038-C007/report.md`
+- `experiments/autoresearch/AR-038-C007/manifest.json`
+- `experiments/autoresearch/AR-038-C007/metrics.json`
+- `experiments/autoresearch/AR-038-C007/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C007/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C007/candidate.pt`
 
-## Open gates
+## Metrics
 
-AR-006 must add a valid-identity resume continuation test, exercise the actual
-packed temporal loader with dedup and sequential TBPTT, cover canonical,
-relative, absolute, copy, hardlink, and symlink root cases, and correct the
-seed wording/no-op test residue. No packed self-play or RL run is allowed until
-these gates are reviewed.
+- Collection: `63.51755` s,
+  `115.1492773324805` decisions/s.
+- Update: `600.3802286658902` s; `3` optimizer steps.
+- Credited logical actions: `7314`.
+- Parameter L2 delta: `0.0006044452777167687`;
+  gradient norm `2.7249300479888916`.
 
 ## Next control point
 
-After AR-006 review, inspect the existing self-play/RL implementation and run a
-small on-policy trajectory/log-probability probe from the frozen Stage 4 root,
-using default Parquet unless packed is explicitly promoted.
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

@@ -1,48 +1,40 @@
-# State Capsule 020 - sibling-fiber GRPO micro-update
+# State Capsule 020 - grouped dynamic-K sibling-fiber GRPO
 
-Captured 2026-08-16T17:47:00.052564+00:00.
+Captured 2026-08-17T03:57:41.537715+00:00.
 
 ## Current state
 
 - Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
-- AR-020 collected `7` common-base sibling fibers
-  (requested K=4) with branch actions
-  `[[2, 0, 1, 3], [0, 2, 1]]` and returns `[[-1.0, -1.0, -1.0, 1.0], [-1.0, 1.0, -1.0]]`.
-- One FP32 policy-only update applied branch-relative terminal credit through
-  the future continuation with discount `0.97`.
-- Candidate: `89a70d4eddb3c856d7c4a4e1ad520e2d23bc7230c76b4c10904c45970eeb8637`; preflight passed.
-- Controlled same-deck candidate-vs-root tournament: `11-19-0` in 30 games;
-  candidate panel `9-21-0`; frozen-root panel `6-24-0`.
-- Direct same-deck gate rejected promotion. A diagnostic public-deck route also
-  produced candidate-vs-root `2-8-0`, but it is not the artifact-deck gate.
-  Root remains fallback. No RoPE-ND, MoE, or historical ETL/Parquet/packed-data
-  work was run.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `117` fibers with effective K
+  `[2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 2, 2, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `3d0f91da9507f8b3276f704cceca1e814add784dce244a89f10efe6ce253a641`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
 ## Evidence
 
-- `experiments/autoresearch/AR-020/report.md`
-- `experiments/autoresearch/AR-020/manifest.json`
-- `experiments/autoresearch/AR-020/metrics.json`
-- `experiments/autoresearch/AR-020/sample.manifest.json`
-- `experiments/autoresearch/AR-020/trajectory_bundle.pt.gz`
-- `experiments/autoresearch/AR-020/candidate.pt`
-- `experiments/autoresearch/AR-020/tournament_candidate_vs_root_10.json`
-- `experiments/autoresearch/AR-020/tournament_candidate_panel_10.json`
-- `experiments/autoresearch/AR-020/tournament_root_panel_10.json`
-- `experiments/autoresearch/AR-020/tournament_candidate_vs_root_same_deck_30.json`
-- `experiments/autoresearch/AR-020/tournament_candidate_artifact_deck_vs_root_10.json`
-- `experiments/autoresearch/AR-020/tournament_candidate_artifact_deck_panel_10.json`
-- `experiments/autoresearch/AR-020/tournament_root_artifact_deck_panel_10.json`
+- `experiments/autoresearch/AR-038-C020/report.md`
+- `experiments/autoresearch/AR-038-C020/manifest.json`
+- `experiments/autoresearch/AR-038-C020/metrics.json`
+- `experiments/autoresearch/AR-038-C020/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C020/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C020/candidate.pt`
 
 ## Metrics
 
-- Collection: `8.839274` s, `64.3718009671044` decisions/s.
-- Update: `4.025555834174156` s; ratio mean `1.000110149383545`.
-- Credit scope: `branch_and_continuation`; credited logical actions `569`.
-- Parameter L2 delta: `0.013461024582650779`; gradient norm `0.8922091722488403`.
+- Collection: `49.597698` s,
+  `135.9538901086931` decisions/s.
+- Update: `499.52563354186714` s; `3` optimizer steps.
+- Credited logical actions: `6743`.
+- Parameter L2 delta: `0.0006044595348442313`;
+  gradient norm `2.38761830329895`.
 
 ## Next control point
 
-Keep the frozen Stage 4 root fallback. The next research control point is a
-newly bounded hypothesis with its own dynamic-K, multi-deck rollout and the
-same tournament gate.
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

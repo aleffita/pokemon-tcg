@@ -1,0 +1,98 @@
+{
+  "algorithm": "sibling_fiber_grpo_grouped",
+  "approx_kl_behavior": 0.0,
+  "auxiliary_training": true,
+  "branch_logical_decisions": 8,
+  "branch_only_credit": false,
+  "changed_parameters": 1293531,
+  "clip_fraction": 0.0,
+  "continuation_credit": true,
+  "continuation_credit_sum": 0.0,
+  "continuation_discount": 0.97,
+  "continuation_logical_decisions": 563,
+  "credit_scope": "branch_and_continuation",
+  "credited_logical_actions": 0,
+  "deck_aux_weight": 0.1,
+  "deck_group_advantages": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "deck_reconstruction": {
+    "batches": 1,
+    "examples": 4,
+    "loss": 7.770071029663086,
+    "masked_fraction": 0.2
+  },
+  "deck_relative_credit": true,
+  "deck_relative_weight": 0.5,
+  "epoch_metrics": [
+    {
+      "approx_kl_behavior_pre_step": 0.0,
+      "changed_parameters": 1293531,
+      "clip_fraction_pre_step": 0.0,
+      "deck_aux_loss": 7.770071029663086,
+      "epoch": 1,
+      "gradient_norm": 3.749363660812378,
+      "parameter_count": 1302154,
+      "parameter_l2": 0.0029680325250657975,
+      "parameter_max_abs": 3.0994415283203125e-06,
+      "policy_loss": 0.0,
+      "prospective_aux_loss": 0.6127560317516327,
+      "ratio_max_pre_step": null,
+      "ratio_mean_pre_step": null,
+      "ratio_min_pre_step": null
+    }
+  ],
+  "gradient_norm": 3.749363660812378,
+  "group_count": 4,
+  "group_sizes": [
+    2,
+    2,
+    2,
+    2
+  ],
+  "initial_ratio_max_abs_error": null,
+  "logical_decisions": 571,
+  "loss": 0.8995583093166352,
+  "optimizer_steps": 1,
+  "parameter_count": 1302154,
+  "parameter_l2": 0.0029680325250657975,
+  "parameter_max_abs": 3.0994415283203125e-06,
+  "policy_loss": 0.0,
+  "policy_only": false,
+  "precision": "FP32",
+  "prospective_aux_weight": 0.2,
+  "prospective_auxiliary": {
+    "batches": 5,
+    "examples": 571,
+    "ko_loss": 0.03427457138895988,
+    "loss": 0.6127560317516327,
+    "prize_loss": 0.02048478666692972,
+    "return_loss": 0.5691747725009918,
+    "terminal_loss": 0.06480633467435837
+  },
+  "ratio_max": null,
+  "ratio_mean": null,
+  "ratio_min": null,
+  "requested_update_epochs": 1,
+  "return_mean": -1.0,
+  "return_means": [
+    -1.0,
+    -1.0,
+    -1.0,
+    -1.0
+  ],
+  "return_std": 0.0,
+  "return_stds": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "update_seconds": 5.779233708977699,
+  "value_loss": 0.0,
+  "zero_variance_group": true,
+  "zero_variance_groups": 4
+}

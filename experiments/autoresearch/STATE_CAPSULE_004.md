@@ -1,73 +1,40 @@
-# State Capsule 004 - AR-003
+# State Capsule 004 - grouped dynamic-K sibling-fiber GRPO
 
-Captured 2026-08-16 after the AR-003 implementation, parity gate, and
-bounded multi-day amortization run.
+Captured 2026-08-17T00:44:39.289034+00:00.
 
-## Decision
+## Current state
 
-Stage 4 remains the frozen competitive root. The packed backend remains opt-in
-and is not promoted. Multi-day data parity and host materialization pressure
-improved, but one-time ETL was not amortized at every observed horizon:
-candidate source-to-ready was faster at 2 epochs and slower at 1 and 3 epochs.
-Promotion is inconclusive under the required gate.
+- Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `118` fibers with effective K
+  `[3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 3, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 3, 2, 2, 4, 2, 2, 2, 3, 2, 2, 2, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `7f6a99d4b3a861f9b05c0cc971ca5f23c05d21fd83c9f22d9b9c4b119b8328af`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
-## Frozen root
+## Evidence
 
-- Root checkpoint: `experiments/autoresearch/root/stage4_root.pkl`
-- SHA-256: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`
-- FP32 package SHA-256:
-  `32add97ad0848cc097a983a45a75a935532a807645b9e36d972bd6fee1c49751`
-- Architecture, loss, policy, inference, SQLite, and deck are unchanged.
+- `experiments/autoresearch/AR-038-C004/report.md`
+- `experiments/autoresearch/AR-038-C004/manifest.json`
+- `experiments/autoresearch/AR-038-C004/metrics.json`
+- `experiments/autoresearch/AR-038-C004/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C004/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C004/candidate.pt`
 
-## AR-003 implementation
+## Metrics
 
-- `rl/packed_data.py`: format version 2, independent 86-column trainer
-  contract, explicit row-level order digests, source-list digest, honest seed
-  semantics, and required-column/order validation.
-- `scripts/bc/build_packed_cache.py`: ordered multi-Parquet ETL, val-first then
-  train row layout, one reusable store per immutable source selection.
-- `scripts/bc/bc_train_mlx.py`: packed contract validation against all required
-  columns and multi-source digest; explicit no-fallback error for packed without
-  TBPTT.
-- `experiments/autoresearch/AR-002/parity.py`: independent Parquet reader,
-  exact `split_episode_ids()` use including `max_rows=0`, row-level parity.
-- `experiments/autoresearch/AR-002/benchmark.py`: one backend per process,
-  process RSS/peak RSS and process fault metrics; no global swap counter.
-- Focused integration test crosses `PackedArrayStore` and the trainer's
-  `_build_tbptt_decision_groups` / `_build_tbptt_plan` with action masks and
-  auxiliary targets.
-
-## Validation evidence
-
-- Sources: consecutive `2026-08-08` and `2026-08-09` Parquets.
-- Selection: `max_rows=10000`, effective 10,035 rows, 880 val, 9,155 train,
-  59 episodes, `val_frac=0.1`, seed `13971479023478`.
-- Packed logical bytes: `418,820,760`.
-- Packed data digest:
-  `332fbacd00a30cefc5446c1424f0eacae9e88fe5e2a98a9dcb82705f534474a5`.
-- Independent parity: 86/86 columns, row order, shapes, dtypes, values,
-  labels/masks, auxiliary targets, and row-order groups equal; mismatches 0.
-- Load baseline/candidate process RSS: 9,992,110,080 B versus 916,111,360 B.
-- Load decoded bytes: 2,858,248,224 B versus 418,820,760 B.
-- Training real seconds baseline/candidate: 133.02/168.50 at 1 epoch,
-  364.59/300.23 at 2 epochs, 486.99/468.52 at 3 epochs.
-- Candidate total source-to-ready including one ETL: 199.187/330.917/499.207
-  seconds at 1/2/3 epochs. Baseline source-to-ready: 134.992/366.562/488.962.
-- All runs used 15/30/45 optimizer steps and displayed matching model/loss
-  metrics within runtime numeric variation. All cache runs reported zero
-  spills.
-
-## Artifacts
-
-`experiments/autoresearch/AR-003/` contains the report, logs, parity result,
-load results, six training logs, tests log, and packed manifest. The packed
-binary store is outside Git. No tournament was needed because inference was
-unchanged.
+- Collection: `49.150486` s,
+  `142.13491185185492` decisions/s.
+- Update: `531.759851250099` s; `3` optimizer steps.
+- Credited logical actions: `6986`.
+- Parameter L2 delta: `0.0006046513530247692`;
+  gradient norm `2.7837629318237305`.
 
 ## Next control point
 
-Keep packed data opt-in. Measure per-process training RSS and isolate packed
-TBPTT gather/prefetch overhead with repeated 2-epoch runs before reconsidering
-promotion. Reviewer findings add two P1 gates: runtime must validate the full
-row-order/boundary key, and checkpoint resume must bind to source/selection/
-split/packed/backend identity.
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

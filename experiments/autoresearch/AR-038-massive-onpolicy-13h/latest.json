@@ -1,0 +1,21 @@
+{
+  "completed_cycle_count": 69,
+  "format": "ptcg-continuous-grpo-v1",
+  "generated_population": [
+    "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-001/decks/generated_turn0.json",
+    "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-054/decks/generated_turn0.json"
+  ],
+  "initial_checkpoint": "experiments/autoresearch/AR-037-expanded-eleven-cpu-b2/candidate.pt",
+  "latest": {
+    "candidate": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/candidate.pt",
+    "candidate_sha256": "6f197deaf69e81e4e8a210edb14a3abfed989d4d07fc8d564d960f5a5f09532f",
+    "cycle": 69,
+    "elapsed_seconds": 46575.451,
+    "experiment": "AR-038-C069",
+    "games": 112,
+    "generated_deck": null,
+    "logical_decisions": 6299,
+    "optimizer_steps": 3
+  },
+  "total_budget_seconds": 46800.0
+}

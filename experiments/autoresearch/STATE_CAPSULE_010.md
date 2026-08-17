@@ -1,33 +1,40 @@
-# State Capsule 010 - AR-008 reviewed
+# State Capsule 010 - grouped dynamic-K sibling-fiber GRPO
 
-Captured: 2026-08-16 after the AR-008 reviewer gate.
+Captured 2026-08-17T02:00:14.173972+00:00.
 
-## Decision
+## Current state
 
-Stage 4 remains the frozen competitive root and only promoted policy. AR-008
-establishes a real FP32 trajectory smoke contract but is **not update-ready**:
-the committed rows cannot recompute current-policy logprobs, and the root hash
-was recorded after load rather than enforced before use.
+- Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `134` fibers with effective K
+  `[2, 4, 2, 2, 2, 2, 2, 3, 2, 4, 2, 4, 2, 4, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 4, 2, 4, 2, 4, 2, 2, 2, 3, 2, 4, 2, 3, 2, 2, 2, 4, 2, 3, 2, 2, 2, 2, 2, 4, 2, 4]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `b81c52c9528857db1d274968812f95b43a0965d05fb74d5827d589e8f1fcfc1e`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
 ## Evidence
 
-- Commit: `1126f72`.
-- Probe: 233 rows, random 114, mirror_no_memory 119, one terminal reward per
-  episode, 64.45 rows/s.
-- Focused tests: 6 passed.
-- Review: `experiments/autoresearch/AR-008/review.md`.
-- Stage 4 root SHA observed:
-  `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- `experiments/autoresearch/AR-038-C010/report.md`
+- `experiments/autoresearch/AR-038-C010/manifest.json`
+- `experiments/autoresearch/AR-038-C010/metrics.json`
+- `experiments/autoresearch/AR-038-C010/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C010/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C010/candidate.pt`
 
-## Open gates
+## Metrics
 
-AR-009 must enforce the root hash before loading, reject both date-field
-conflicts, and make the trajectory update-ready by retaining observations and
-real masks in-process or in a provenance-linked artifact. Only after those
-checks may a small PPO/group-relative alternative update be attempted.
+- Collection: `69.084145` s,
+  `115.74290998150707` decisions/s.
+- Update: `659.9243497920688` s; `3` optimizer steps.
+- Credited logical actions: `7996`.
+- Parameter L2 delta: `0.0006046231788196982`;
+  gradient norm `2.7018566131591797`.
 
 ## Next control point
 
-Produce one small candidate from current-policy sampling, package its exact
-checkpoint/deck/provenance, then use a named smoke tournament against random,
-first, and one fixed public opponent before deciding keep/revert.
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

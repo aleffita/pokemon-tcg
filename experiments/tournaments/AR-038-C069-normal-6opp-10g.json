@@ -1,0 +1,95 @@
+{
+  "status": "complete",
+  "our_agent": "agent/main.py",
+  "our_deck_file": null,
+  "our_deck_files": [],
+  "sweep": false,
+  "sweep_source": null,
+  "games_per_opponent": 10,
+  "note": "AR-038-C069 normal six-opponent gate, final deck",
+  "completed_blocks": 1,
+  "total_blocks": 6,
+  "tournament_id": 190,
+  "matches_saved": 60,
+  "rows": [
+    {
+      "opponent_label": "random",
+      "opponent_path": "random",
+      "deck_id": 959,
+      "opp_deck_id": null,
+      "wins": 5,
+      "losses": 5,
+      "draws": 0,
+      "wr_pct": 50.0,
+      "elapsed_s": 13.143338918685913,
+      "error": null
+    },
+    {
+      "opponent_label": "first",
+      "opponent_path": "first",
+      "deck_id": 959,
+      "opp_deck_id": null,
+      "wins": 3,
+      "losses": 7,
+      "draws": 0,
+      "wr_pct": 30.0,
+      "elapsed_s": 12.334515810012817,
+      "error": null
+    },
+    {
+      "opponent_label": "lb1009_mega_lucario_ex_islet",
+      "opponent_path": "public_agents/lb1009_mega_lucario_ex_islet",
+      "deck_id": 959,
+      "opp_deck_id": 2,
+      "wins": 0,
+      "losses": 10,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 11.801094770431519,
+      "error": null
+    },
+    {
+      "opponent_label": "lb945_multiply_ivan",
+      "opponent_path": "public_agents/lb945_multiply_ivan",
+      "deck_id": 959,
+      "opp_deck_id": 2,
+      "wins": 2,
+      "losses": 8,
+      "draws": 0,
+      "wr_pct": 20.0,
+      "elapsed_s": 13.119879961013794,
+      "error": null
+    },
+    {
+      "opponent_label": "lb826_alakazam_seok",
+      "opponent_path": "public_agents/lb826_alakazam_seok",
+      "deck_id": 959,
+      "opp_deck_id": 4,
+      "wins": 0,
+      "losses": 10,
+      "draws": 0,
+      "wr_pct": 0.0,
+      "elapsed_s": 10.79447603225708,
+      "error": null
+    },
+    {
+      "opponent_label": "lb814_crustle_emre",
+      "opponent_path": "public_agents/lb814_crustle_emre",
+      "deck_id": 959,
+      "opp_deck_id": 3,
+      "wins": 8,
+      "losses": 2,
+      "draws": 0,
+      "wr_pct": 80.0,
+      "elapsed_s": 11.054410934448242,
+      "error": null
+    }
+  ],
+  "overall": {
+    "wins": 18,
+    "losses": 42,
+    "draws": 0,
+    "wr_pct": 30.0,
+    "elapsed_s": 72.29052996635437
+  }
+}

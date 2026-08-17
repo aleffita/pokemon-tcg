@@ -1,0 +1,40 @@
+# State Capsule 053 - grouped dynamic-K sibling-fiber GRPO
+
+Captured 2026-08-17T10:05:09.160745+00:00.
+
+## Current state
+
+- Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `137` fibers with effective K
+  `[2, 4, 2, 2, 2, 2, 2, 2, 2, 3, 2, 2, 4, 4, 2, 2, 4, 4, 2, 2, 4, 3, 2, 2, 2, 4, 2, 2, 3, 4, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 4, 4, 2, 2, 4, 2, 2, 2, 4, 4, 2, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `32e22251b40cf4641929663f1e6899ea10819222c87f0b21a4ab697796856ba6`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
+
+## Evidence
+
+- `experiments/autoresearch/AR-038-C053/report.md`
+- `experiments/autoresearch/AR-038-C053/manifest.json`
+- `experiments/autoresearch/AR-038-C053/metrics.json`
+- `experiments/autoresearch/AR-038-C053/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C053/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C053/candidate.pt`
+
+## Metrics
+
+- Collection: `47.32693` s,
+  `160.26816092893006` decisions/s.
+- Update: `508.2831271670293` s; `3` optimizer steps.
+- Credited logical actions: `7585`.
+- Parameter L2 delta: `0.0006042687620167827`;
+  gradient norm `1.582703709602356`.
+
+## Next control point
+
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

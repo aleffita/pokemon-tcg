@@ -1,0 +1,14 @@
+AR-038-C035 grouped dynamic-K sibling-fiber GRPO
+group_count=52
+effective_group_sizes=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 3, 2, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 3, 2]
+terminal_return_mean=-1.0
+policy_score_mean=-1.3503552423073695
+policy_score_std_mean=0.030115596663493376
+dense_signal_groups=30
+logical_decisions=7357
+substeps=7794
+collection_seconds=48.825104
+update_seconds=521.8447250411846
+candidate_sha256=3bfd35976cd8045656e9e19c0352190229c3472ca2fc5d88e5de72215018eef1
+candidate_preflight=passed
+tournament=pending

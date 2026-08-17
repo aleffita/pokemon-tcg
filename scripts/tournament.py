@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import gzip
 import json
 import multiprocessing as mp
 import os
@@ -19,7 +20,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from scripts._common import AGENT_DIR, load_agent, make_env
+from scripts._common import AGENT_DIR, load_agent, make_env, materialize_agent_path
 from rl.results_db import ResultsDB as ProjectResultsDB
 
 PUBLIC_AGENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -32,6 +33,133 @@ SMOKE_SUBMISSION = os.path.join(
 )
 RESULTS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "model", "eval_results.txt")
+
+
+class _Tee:
+    """Line-buffered stdout/stderr mirror used for durable tournament logs."""
+
+    def __init__(self, primary, log_file):
+        self.primary = primary
+        self.log_file = log_file
+
+    def write(self, data):
+        self.primary.write(data)
+        self.log_file.write(data)
+        self.log_file.flush()
+        return len(data)
+
+    def flush(self):
+        self.primary.flush()
+        self.log_file.flush()
+
+    def isatty(self):
+        return self.primary.isatty()
+
+    def fileno(self):
+        return self.primary.fileno()
+
+
+def _configure_durable_log(path: str | None):
+    if not path:
+        return None
+    absolute = os.path.abspath(path)
+    os.makedirs(os.path.dirname(absolute) or ".", exist_ok=True)
+    log_file = open(absolute, "a", buffering=1)
+    sys.stdout = _Tee(sys.stdout, log_file)
+    sys.stderr = _Tee(sys.stderr, log_file)
+    print(
+        f"\n[tournament] durable log session started "
+        f"{datetime.now().isoformat(timespec='seconds')} path={absolute}",
+        flush=True,
+    )
+    return absolute
+
+
+def _atomic_json(path: str, payload: dict) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as handle:
+        json.dump(payload, handle, indent=2)
+    os.replace(tmp, path)
+
+
+def _cell_checkpoint_path(
+    checkpoint_dir: str,
+    deck_index: int,
+    opponent_index: int,
+    opponent_deck_index: int,
+) -> str:
+    return os.path.join(
+        checkpoint_dir,
+        f"deck-{deck_index:03d}__opponent-{opponent_index:03d}"
+        f"__opp-deck-{opponent_deck_index:03d}.json.gz",
+    )
+
+
+def _load_cell_checkpoint(path: str, signature: dict) -> dict | None:
+    if not os.path.exists(path):
+        return None
+    with gzip.open(path, "rt") as handle:
+        payload = json.load(handle)
+    if payload.get("version") != 1 or payload.get("signature") != signature:
+        raise RuntimeError(f"incompatible tournament checkpoint: {path}")
+    return payload["result"]
+
+
+def _save_cell_checkpoint(path: str, signature: dict, result: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp"
+    with gzip.open(tmp, "wt", compresslevel=3) as handle:
+        json.dump({"version": 1, "signature": signature, "result": result}, handle)
+    os.replace(tmp, path)
+
+
+def _write_progress_report(
+    path: str | None,
+    *,
+    our_path: str,
+    custom_deck_paths: list[str],
+    do_sweep: bool,
+    sweep_source: str | None,
+    games: int,
+    note: str | None,
+    structured_rows: list[dict],
+    total_w: int,
+    total_l: int,
+    total_d: int,
+    elapsed_s: float,
+    completed_blocks: int,
+    total_blocks: int,
+    status: str,
+    tournament_id: int | None = None,
+    matches_saved: int | None = None,
+) -> None:
+    if not path:
+        return
+    overall_wr = total_w / max(total_w + total_l, 1) * 100
+    report = {
+        "status": status,
+        "our_agent": our_path,
+        "our_deck_file": custom_deck_paths[0] if len(custom_deck_paths) == 1 else None,
+        "our_deck_files": custom_deck_paths,
+        "sweep": do_sweep,
+        "sweep_source": sweep_source,
+        "games_per_opponent": games,
+        "note": note,
+        "completed_blocks": completed_blocks,
+        "total_blocks": total_blocks,
+        "tournament_id": tournament_id,
+        "matches_saved": matches_saved,
+        "rows": structured_rows,
+        "overall": {
+            "wins": total_w,
+            "losses": total_l,
+            "draws": total_d,
+            "wr_pct": overall_wr,
+            "elapsed_s": elapsed_s,
+        },
+    }
+    _atomic_json(path, report)
 
 
 def find_agents() -> list[tuple[str, str]]:
@@ -78,6 +206,22 @@ def resolve(name: str):
         from kaggle_environments.envs.cabt.cabt import agents
         return agents[name]
     return load_agent(name)
+
+
+def resolve_opponent(name: str):
+    """Load an opponent without leaking our checkpoint overrides into it."""
+    isolated_keys = ("PTCG_MODEL_PATH", "PTCG_INFERENCE_MODE")
+    saved = {key: os.environ.get(key) for key in isolated_keys}
+    for key in isolated_keys:
+        os.environ.pop(key, None)
+    try:
+        return resolve(name)
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _parse_deck_lines(lines) -> list[int] | None:
@@ -215,6 +359,12 @@ def play(env, a, b) -> tuple[int, str]:
     env.run([a, b])
     r0, r1 = (s.reward for s in env.steps[-1])
     html = env.render(mode="html")
+    if r0 is None and r1 is None:
+        return 0, html
+    if r0 is None:
+        return -1, html
+    if r1 is None:
+        return 1, html
     return (1 if r0 > r1 else (-1 if r0 < r1 else 0)), html
 
 
@@ -597,7 +747,7 @@ def _play_isolated_game(task):
         if not hasattr(our_module, "reload_deck"):
             raise TypeError("parallel deck override requires reload_deck(path)")
         our_module.reload_deck(deck_override)
-    opp_agent = resolve(opp_path)
+    opp_agent = resolve_opponent(opp_path)
     env = make_env()
     if game_index % 2 == 0:
         result, html = play(env, our_agent, opp_agent)
@@ -627,7 +777,7 @@ def run_matchup_parallel(
     """Execute independent games concurrently and preserve deterministic order."""
     if workers <= 1:
         our_agent = load_agent(our_path)
-        opp_agent = resolve(opp_path)
+        opp_agent = resolve_opponent(opp_path)
         return run_matchup(make_env(), our_agent, opp_agent, n_games)
     tasks = [
         (index, n_games, our_path, opp_path, deck_override)
@@ -691,6 +841,22 @@ def main():
                    help="Write the structured per-opponent/per-deck result "
                         "table to this JSON path, so callers can consume "
                         "results without scraping stdout.")
+    p.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Append stdout, stderr, tracebacks, and progress to a durable log file.",
+    )
+    p.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=None,
+        help=(
+            "Persist every completed matchup cell as compressed JSON. "
+            "Existing compatible cells are resumed automatically. Defaults "
+            "to <report-json>.cells when --report-json is provided."
+        ),
+    )
     p.add_argument("--txt-backup", action="store_true", default=False,
                    help="Also append results to eval_results.txt (backup)")
     p.add_argument(
@@ -702,6 +868,18 @@ def main():
         ),
     )
     args = p.parse_args()
+
+    _configure_durable_log(args.log_file)
+    if args.checkpoint_dir is None and args.report_json:
+        args.checkpoint_dir = f"{args.report_json}.cells"
+    if args.checkpoint_dir:
+        args.checkpoint_dir = os.path.abspath(args.checkpoint_dir)
+        os.makedirs(args.checkpoint_dir, exist_ok=True)
+    print(
+        "[tournament] invocation "
+        f"argv={sys.argv!r} pid={os.getpid()} checkpoint_dir={args.checkpoint_dir!r}",
+        flush=True,
+    )
 
     root_db_path = Path(__file__).resolve().parent.parent / "model" / "results.db"
     _db = ProjectResultsDB(db_path=root_db_path)
@@ -869,7 +1047,12 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
         resolved_opponents = []
         for label, opp_path in opponents:
             try:
-                opp_agent = resolve(opp_path)
+                runtime_opp_path = (
+                    opp_path
+                    if opp_path in ("random", "first")
+                    else materialize_agent_path(opp_path)
+                )
+                opp_agent = resolve_opponent(runtime_opp_path)
             except Exception as e:
                 rows.append((label, "ERROR", str(e)))
                 structured_rows.append({
@@ -889,9 +1072,14 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
             else:
                 opp_test_decks = [(None, opp_deck_ids.get(label))]
 
-            resolved_opponents.append((label, opp_path, opp_agent, opp_test_decks))
+            resolved_opponents.append(
+                (label, opp_path, runtime_opp_path, opp_agent, opp_test_decks)
+            )
 
-        total_blocks = sum(len(opp_test_decks) for _, _, _, opp_test_decks in resolved_opponents) * len(our_test_decks)
+        total_blocks = sum(
+            len(opp_test_decks)
+            for _, _, _, _, opp_test_decks in resolved_opponents
+        ) * len(our_test_decks)
         print(f"Sweep: {len(our_test_decks)} OUR decks per opponent ({total_blocks} total matchup blocks)\n", flush=True)
 
         for deck_index, (card_ids, deck_id) in enumerate(our_test_decks):
@@ -939,8 +1127,14 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
 
                 deck_w = deck_l = deck_d = 0
 
-                for label, opp_path, opp_agent, opp_test_decks in resolved_opponents:
-                    for _opp_cards, opp_d_id in opp_test_decks:
+                for opponent_index, (
+                    label,
+                    opp_path,
+                    runtime_opp_path,
+                    opp_agent,
+                    opp_test_decks,
+                ) in enumerate(resolved_opponents):
+                    for opponent_deck_index, (_opp_cards, opp_d_id) in enumerate(opp_test_decks):
                         opp_info = _resolve_deck_human_info(db, opp_d_id)
                         opp_nick = opp_info['nick']
                         if opp_d_id is None:
@@ -950,15 +1144,59 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                         else:
                             opp_deck_disp = f"Deck #{opp_d_id}"
 
-                        t0 = time.time()
-                        w, l, d, replay_html, game_results = run_matchup_parallel(
-                            our_path,
-                            opp_path,
-                            args.games,
-                            workers=args.workers,
-                            deck_override=custom_deck_path,
-                        )
-                        elapsed = time.time() - t0
+                        checkpoint_path = None
+                        checkpoint_signature = {
+                            "agent": os.path.realpath(our_path),
+                            "deck_file": custom_deck_path,
+                            "deck_id": deck_id,
+                            "opponent_label": label,
+                            "opponent_path": opp_path,
+                            "opp_deck_id": opp_d_id,
+                            "games": args.games,
+                        }
+                        checkpoint_result = None
+                        if args.checkpoint_dir:
+                            checkpoint_path = _cell_checkpoint_path(
+                                args.checkpoint_dir,
+                                deck_index,
+                                opponent_index,
+                                opponent_deck_index,
+                            )
+                            checkpoint_result = _load_cell_checkpoint(
+                                checkpoint_path,
+                                checkpoint_signature,
+                            )
+
+                        resumed = checkpoint_result is not None
+                        if resumed:
+                            w = int(checkpoint_result["wins"])
+                            l = int(checkpoint_result["losses"])
+                            d = int(checkpoint_result["draws"])
+                            elapsed = float(checkpoint_result["elapsed_s"])
+                            game_results = checkpoint_result["game_results"]
+                            replay_html = ""
+                        else:
+                            t0 = time.time()
+                            w, l, d, replay_html, game_results = run_matchup_parallel(
+                                our_path,
+                                runtime_opp_path,
+                                args.games,
+                                workers=args.workers,
+                                deck_override=custom_deck_path,
+                            )
+                            elapsed = time.time() - t0
+                            if checkpoint_path:
+                                _save_cell_checkpoint(
+                                    checkpoint_path,
+                                    checkpoint_signature,
+                                    {
+                                        "wins": w,
+                                        "losses": l,
+                                        "draws": d,
+                                        "elapsed_s": elapsed,
+                                        "game_results": game_results,
+                                    },
+                                )
 
                         wr = w / max(w + l, 1) * 100
                         total_w += w; total_l += l; total_d += d
@@ -975,9 +1213,28 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                             "wr_pct": wr,
                             "elapsed_s": elapsed,
                             "error": None,
+                            "resumed": resumed,
                         })
                         all_game_results.append((label, deck_id, game_results))
                         completed_blocks += 1
+
+                        _write_progress_report(
+                            args.report_json,
+                            our_path=our_path,
+                            custom_deck_paths=custom_deck_paths,
+                            do_sweep=do_sweep,
+                            sweep_source=args.sweep_source,
+                            games=args.games,
+                            note=args.note,
+                            structured_rows=structured_rows,
+                            total_w=total_w,
+                            total_l=total_l,
+                            total_d=total_d,
+                            elapsed_s=time.time() - start_time,
+                            completed_blocks=completed_blocks,
+                            total_blocks=total_blocks,
+                            status="running",
+                        )
 
                         elapsed_suite = time.time() - start_time
                         avg_block = elapsed_suite / completed_blocks
@@ -987,7 +1244,8 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
                         eta_h, eta_m = divmod(eta_m, 60)
                         eta_fmt = f"{eta_h}h{eta_m:02d}m" if eta_h else f"{eta_m}m{eta_s:02d}s"
 
-                        print(f"{label:28s} {opp_deck_disp:28s} {w:5d} {l:6d} {d:6d}  {wr:5.1f}%  {elapsed:5.1f}s   [{completed_blocks}/{total_blocks}] ETA: {eta_fmt}", flush=True)
+                        resume_tag = " RESUMED" if resumed else ""
+                        print(f"{label:28s} {opp_deck_disp:28s} {w:5d} {l:6d} {d:6d}  {wr:5.1f}%  {elapsed:5.1f}s   [{completed_blocks}/{total_blocks}] ETA: {eta_fmt}{resume_tag}", flush=True)
 
                 deck_wr = deck_w / max(deck_w + deck_l, 1) * 100
                 print("-" * 88, flush=True)
@@ -1003,7 +1261,7 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
     else:
         # No sweep: run with default deck only
         for label, opp_path in opponents:
-            opp_agent = resolve(opp_path)
+            opp_agent = resolve_opponent(opp_path)
             t0 = time.time()
             w, l, d, replay_html, game_results = run_matchup_parallel(
                 our_path,
@@ -1114,30 +1372,24 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
 
     # Structured report for programmatic consumers
     if args.report_json:
-        import json as _json
-        report = {
-            "our_agent": our_path,
-            "our_deck_file": custom_deck_paths[0] if len(custom_deck_paths) == 1 else None,
-            "our_deck_files": custom_deck_paths,
-            "sweep": do_sweep,
-            "sweep_source": args.sweep_source if do_sweep else None,
-            "games_per_opponent": args.games,
-            "note": args.note,
-            "rows": structured_rows,
-            "overall": {
-                "wins": total_w,
-                "losses": total_l,
-                "draws": total_d,
-                "wr_pct": overall_wr,
-                "elapsed_s": total_time,
-            },
-        }
-        os.makedirs(os.path.dirname(args.report_json) or ".", exist_ok=True)
-        tmp = f"{args.report_json}.tmp"
-        with open(tmp, "w") as f:
-            _json.dump(report, f, indent=2)
-        os.replace(tmp, args.report_json)
-        print(f"[tournament] report written: {args.report_json}", flush=True)
+        _write_progress_report(
+            args.report_json,
+            our_path=our_path,
+            custom_deck_paths=custom_deck_paths,
+            do_sweep=do_sweep,
+            sweep_source=args.sweep_source if do_sweep else None,
+            games=args.games,
+            note=args.note,
+            structured_rows=structured_rows,
+            total_w=total_w,
+            total_l=total_l,
+            total_d=total_d,
+            elapsed_s=total_time,
+            completed_blocks=completed_blocks,
+            total_blocks=total_blocks,
+            status="cells_complete",
+        )
+        print(f"[tournament] cell-complete report written: {args.report_json}", flush=True)
 
     # Deck performance summary with rich metadata
     if do_sweep and deck_stats:
@@ -1242,6 +1494,26 @@ def _run_single_tournament(our_path: str, args: argparse.Namespace, root_db_path
     if n_matches_saved > 0:
         db.compute_card_elo(source='local')
         db.compute_deck_elo(source='local')
+
+    _write_progress_report(
+        args.report_json,
+        our_path=our_path,
+        custom_deck_paths=custom_deck_paths,
+        do_sweep=do_sweep,
+        sweep_source=args.sweep_source if do_sweep else None,
+        games=args.games,
+        note=args.note,
+        structured_rows=structured_rows,
+        total_w=total_w,
+        total_l=total_l,
+        total_d=total_d,
+        elapsed_s=total_time,
+        completed_blocks=completed_blocks,
+        total_blocks=total_blocks,
+        status="complete",
+        tournament_id=tournament_id,
+        matches_saved=n_matches_saved,
+    )
 
     db.close()
     print(f"\nResults saved to model/results.db ({n_matches_saved} match replays)")

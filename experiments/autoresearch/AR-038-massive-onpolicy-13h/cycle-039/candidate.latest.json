@@ -1,0 +1,12 @@
+{
+  "bundle_sha256": "78a19faa960c4c57d9d9a49e66df1bacd3745645feca65f1b45041e3cb1d727c",
+  "candidate": "experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-039/candidate.latest.pt",
+  "candidate_sha256": "a91a69713991b88f4b9d1e21855bdd98af8ee2d732f8c12d0627f571a69bad90",
+  "captured_at": "2026-08-17T07:29:39.514650+00:00",
+  "completed_update_epochs": 3,
+  "experiment": "AR-038-C039",
+  "format": "ptcg-completed-epoch-checkpoint-v1",
+  "root_sha256": "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b",
+  "sample_manifest_sha256": "02d088babbbe830a34a21c8ce62f3cb8c8d97e03e9f5769ea6506aa87f5a6512",
+  "validated": true
+}

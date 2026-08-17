@@ -1,0 +1,12 @@
+{
+  "bundle_sha256": "227cc95003adcebe0ddc13fa2db764c0a1c8c8d6e37ad6b1347107eefafa0301",
+  "candidate": "experiments/autoresearch/AR-037-expanded-eleven-cpu-b2/candidate.latest.pt",
+  "candidate_sha256": "4ea91de0ad1f3d9fbd28cd313804358c1866ce13a42aa3b0892ea32b1ed21d9a",
+  "captured_at": "2026-08-16T23:45:28.494793+00:00",
+  "completed_update_epochs": 7,
+  "experiment": "AR-037",
+  "format": "ptcg-completed-epoch-checkpoint-v1",
+  "root_sha256": "b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b",
+  "sample_manifest_sha256": "0d4f96c9733372a5e65fd8676fcd0e532817bde11161a61229596f1ebb9ebe0e",
+  "validated": true
+}

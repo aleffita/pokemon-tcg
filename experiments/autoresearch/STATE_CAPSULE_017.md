@@ -1,39 +1,40 @@
-# State Capsule 017 - exploration closed
+# State Capsule 017 - grouped dynamic-K sibling-fiber GRPO
 
-Captured: 2026-08-16 after the final bounded PPO tournament.
+Captured 2026-08-17T03:25:44.629417+00:00.
 
-## AR-017 result
+## Current state
 
-The eight-episode candidate used four `random` and four `mirror_no_memory`
-episodes, producing 586 samples at 74.193 rows/s. Terminal returns were mixed
-(-1 to +1), and strict provenance/root checks passed.
+- Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `104` fibers with effective K
+  `[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `cc64760c5a393bef817e8774a3f4e318a0f05ed90d4983fccf94ede412bc6bb3`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
-| Opponent | W-L-D | Win rate |
-| --- | ---: | ---: |
-| lb826_alakazam_seok | 1-9-0 | 10% |
-| frozen Stage 4 root | 6-4-0 | 60% |
-| random | 3-7-0 | 30% |
-| first | 2-8-0 | 20% |
-| Total | 12-28-0 | 30% |
+## Evidence
 
-The larger collection was worse than AR-015's 17-23 (42.5%). The candidate
-is rejected for promotion and remains negative evidence, not a fallback.
+- `experiments/autoresearch/AR-038-C017/report.md`
+- `experiments/autoresearch/AR-038-C017/manifest.json`
+- `experiments/autoresearch/AR-038-C017/metrics.json`
+- `experiments/autoresearch/AR-038-C017/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C017/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C017/candidate.pt`
 
-## Final policy state
+## Metrics
 
-- Promoted policy: frozen Stage 4 root.
-- Frozen root pickle SHA:
-  `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
-- Frozen root FP32 package SHA:
-  `32add97ad0848cc097a983a45a75a935532a807645b9e36d972bd6fee1c49751`.
-- Best experimental candidate: AR-015, SHA
-  `62ea62eb7ee5f1baca1f50a5b9713ef83b96dd2f2d0ea707151739058d235ff6`.
-- AR-017 candidate SHA:
-  `37790fe1443e0e802abff0a3f252836ca0cc365c410f5e4d90c8a4bb8fa28de2`.
+- Collection: `48.029281` s,
+  `130.6286483677962` decisions/s.
+- Update: `478.33253849996254` s; `3` optimizer steps.
+- Credited logical actions: `6274`.
+- Parameter L2 delta: `0.0006045006356399151`;
+  gradient norm `2.7391409873962402`.
 
-## Termination decision
+## Next control point
 
-Stop PPO exploration for the deadline window. Package the frozen root as the
-safe fallback, retain AR-015 and AR-017 with their full manifests/bundles and
-tournament JSON as provenance, and do not submit the experimental candidate.
-RoPE-ND and MoE redesigns remain unjustified by the tournament evidence.
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

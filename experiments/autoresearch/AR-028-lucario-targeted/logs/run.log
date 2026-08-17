@@ -1,0 +1,11 @@
+AR-028-lucario-targeted grouped dynamic-K sibling-fiber GRPO
+group_count=8
+effective_group_sizes=[2, 2, 4, 3, 2, 2, 4, 2]
+returns=[[-1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0, -1.0, -1.0], [-1.0, -1.0, -1.0], [-1.0, -1.0], [-1.0, -1.0], [1.0, -1.0, -1.0, 1.0], [-1.0, -1.0]]
+logical_decisions=1322
+substeps=1389
+collection_seconds=12.972843
+update_seconds=7.34693295811303
+candidate_sha256=c197aad9937dd0f8500943631c3ceb02fa696a969a197eb7e37ebbe4f2ad1274
+candidate_preflight=passed
+tournament=pending

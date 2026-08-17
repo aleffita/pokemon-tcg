@@ -1,0 +1,11 @@
+AR-029 grouped dynamic-K sibling-fiber GRPO
+group_count=2
+effective_group_sizes=[2, 2]
+returns=[[-1.0, -1.0], [-1.0, -1.0]]
+logical_decisions=284
+substeps=303
+collection_seconds=1.885961
+update_seconds=0.0
+candidate_sha256=403687836083d2c848cee34d2e14df73df6025df797730395eba66a4327e095b
+candidate_preflight=passed
+tournament=pending

@@ -1,40 +1,40 @@
-# State Capsule 027 - superseded grouped dynamic-K sibling-fiber GRPO
+# State Capsule 027 - grouped dynamic-K sibling-fiber GRPO
 
-Captured 2026-08-16T19:02:25.577757+00:00.
+Captured 2026-08-17T05:18:33.673321+00:00.
 
 ## Current state
 
 - Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
-- AR-021 collected `16` exact recurrent sibling groups
-  and `39` fibers with effective K
-  `[4, 4, 2, 2, 2, 3, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2]`.
-- One grouped FP32 policy-only update applied independent group-relative
-  terminal credit through future continuation with discount
-  `0.97`.
-- Candidate: `e098fa1dc6747d63e85e25f4cb908001128145fe6e4b05c9aed9fa73470a5fef`; preflight passed.
-- This output is superseded as a diagnostic because its execution boundary was
-  not cleanly attributable relative to the optimization transition. No
-  promotion, RoPE-ND, MoE, or historical ETL/Parquet/packed-data path was run.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `125` fibers with effective K
+  `[2, 2, 4, 2, 2, 2, 3, 2, 4, 2, 4, 2, 4, 2, 2, 2, 2, 2, 4, 2, 4, 2, 2, 2, 4, 2, 2, 2, 2, 2, 4, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `64107761a7dddfb05858b4b12f0dccc4254b81362fd7a637566eb2983e3f8fcc`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
 ## Evidence
 
-- `experiments/autoresearch/AR-027/report.md`
-- `experiments/autoresearch/AR-027/manifest.json`
-- `experiments/autoresearch/AR-027/metrics.json`
-- `experiments/autoresearch/AR-027/sample.manifest.json`
-- `experiments/autoresearch/AR-027/trajectory_bundle.pt.gz`
-- `experiments/autoresearch/AR-027/candidate.pt`
+- `experiments/autoresearch/AR-038-C027/report.md`
+- `experiments/autoresearch/AR-038-C027/manifest.json`
+- `experiments/autoresearch/AR-038-C027/metrics.json`
+- `experiments/autoresearch/AR-038-C027/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C027/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C027/candidate.pt`
 
 ## Metrics
 
-- Collection: `22.888142` s,
-  `106.03744089183888` decisions/s.
-- Update: `9.161688708001748` s; one optimizer step.
-- Credited logical actions: `559`.
-- Parameter L2 delta: `0.009215305122152694`;
-  gradient norm `0.6900275349617004`.
+- Collection: `51.425879` s,
+  `148.91335049974734` decisions/s.
+- Update: `570.6353223330807` s; `3` optimizer steps.
+- Credited logical actions: `7658`.
+- Parameter L2 delta: `0.0006043225727744987`;
+  gradient norm `2.4899630546569824`.
 
 ## Next control point
 
-Do not run or interpret a gate from this output directory. Use `AR-027-retry`
-as the authoritative replacement and keep the root fallback.
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

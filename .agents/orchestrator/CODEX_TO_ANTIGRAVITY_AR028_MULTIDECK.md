@@ -98,3 +98,9 @@ The v3 baseline tactical screen is now complete: `3-27-0` over 30 games
 `lb814 1-4`). It did not change the Lucario bottleneck and is rejected as a
 deck promotion. Continue investigating a source-backed Lucario counter or a
 new exact-60 revision; do not assume v3 should become the GRPO learner deck.
+
+Codex also screened the existing adaptive inference modes on v0/v2 against
+the four external policy decks: b1 K=3 scored `7-25-0`, b2 K=3 epsilon 0.05
+scored `6-26-0`, and both were `0-16` against Lucario. These are diagnostics,
+not promoted paths. Continue deck analysis from the concrete Lucario failure;
+Codex is now using v3 + v2 as learner strata in a targeted Lucario GRPO run.

@@ -1,23 +1,40 @@
-# State Capsule 012 - AR-010 reviewed
+# State Capsule 012 - grouped dynamic-K sibling-fiber GRPO
 
-Captured: 2026-08-16 after the AR-010 reviewer gate.
+Captured 2026-08-17T02:26:59.267754+00:00.
 
-## Decision
+## Current state
 
-Stage 4 remains the frozen competitive root and only promoted policy. AR-010
-improves first-decision compatibility and provenance checks but is **rework**:
-artifact paths can escape the candidate directory and no regenerated candidate
-package exists under the new contract.
+- Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `129` fibers with effective K
+  `[2, 4, 4, 2, 2, 2, 3, 2, 2, 3, 3, 2, 2, 3, 4, 2, 2, 2, 4, 2, 2, 4, 4, 2, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 2, 3, 3, 2, 2, 2, 4, 2, 2, 4, 2, 2, 2, 2, 2, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `024050018a6ae082efd4b8ebeb8b404b51aa1c7578e8a5a7100923a542a5a56c`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
 ## Evidence
 
-- Commit: `c6c5695`.
-- Focused suite: 15 passed.
-- Review: `experiments/autoresearch/AR-010/review.md`.
-- The old AR-009 candidate is deliberately rejected by the new validator.
+- `experiments/autoresearch/AR-038-C012/report.md`
+- `experiments/autoresearch/AR-038-C012/manifest.json`
+- `experiments/autoresearch/AR-038-C012/metrics.json`
+- `experiments/autoresearch/AR-038-C012/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C012/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C012/candidate.pt`
 
-## Open gates
+## Metrics
 
-AR-011 must enforce candidate-directory containment and reject traversal,
-absolute, and symlink artifacts; then regenerate candidate, manifest, bundle,
-report, and logs under AR-010. No tournament may run before this gate.
+- Collection: `63.421665` s,
+  `121.45691893811255` decisions/s.
+- Update: `637.9526634169742` s; `3` optimizer steps.
+- Credited logical actions: `7703`.
+- Parameter L2 delta: `0.0006045405831674167`;
+  gradient norm `2.29616641998291`.
+
+## Next control point
+
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

@@ -1,35 +1,40 @@
-# State Capsule 009 - AR-007 reviewed
+# State Capsule 009 - grouped dynamic-K sibling-fiber GRPO
 
-Captured: 2026-08-16 after the AR-007 reviewer gate.
+Captured 2026-08-17T01:46:41.042212+00:00.
 
-## Decision
+## Current state
 
-Stage 4 remains the frozen competitive root and only promoted policy. AR-007
-keeps the packed pipeline as opt-in infrastructure, but packed is not promoted
-and is not the self-play data plane. The research loop now advances through the
-default Parquet fallback while packed promotion remains a deferred rework
-track.
+- Frozen Stage 4 root remains fallback: `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
+- AR-021 collected `52` exact recurrent sibling groups
+  and `127` fibers with effective K
+  `[2, 2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2, 2, 2, 2, 2, 2, 3, 2, 3, 2, 4, 2, 2, 2, 4, 2, 4, 2, 3, 2, 2, 2, 4, 2, 4, 2, 3, 2, 4, 2]`.
+- The grouped FP32 policy-only path applied sibling-relative and paired
+  inter-deck terminal credit through future continuation with discount
+  `0.97`, or emitted a no-op when all groups were
+  zero-variance.
+- Candidate: `eadc99ece4e0f6774bc80920830f2b9be562d73c12b0a0c15419a87eadc315d1`; preflight passed.
+- Tournament is pending; no promotion, RoPE-ND, MoE, or historical
+  ETL/Parquet/packed-data path was run.
 
 ## Evidence
 
-- Commit: `ded9f50`.
-- Focused locked suite: 51 passed in 0.64 s.
-- Review: `experiments/autoresearch/AR-007/review.md`.
-- Stage 4 root hash remains
-  `b59daeab12cd9224a14f85989b5aa5821b5f27453092f7e3f408c24a166b840b`.
-- The reviewer confirmed optimizer semantics and packed train/validation call
-  sites, with remaining coverage gaps limited to promotion-grade edge cases.
+- `experiments/autoresearch/AR-038-C009/report.md`
+- `experiments/autoresearch/AR-038-C009/manifest.json`
+- `experiments/autoresearch/AR-038-C009/metrics.json`
+- `experiments/autoresearch/AR-038-C009/sample.manifest.json`
+- `experiments/autoresearch/AR-038-C009/trajectory_bundle.pt.gz`
+- `experiments/autoresearch/AR-038-C009/candidate.pt`
 
-## Open infrastructure work
+## Metrics
 
-Before packed can become default or feed on-policy collection, add a real
-nonzero-phase optimizer continuation update and tests for empty plans,
-auxiliary targets, `zero_wouldko`, validation memory continuity, and exact
-fetched rows.
+- Collection: `64.404034` s,
+  `116.90261559575158` decisions/s.
+- Update: `621.5541926671285` s; `3` optimizer steps.
+- Credited logical actions: `7529`.
+- Parameter L2 delta: `0.0006044952309985285`;
+  gradient norm `2.6580748558044434`.
 
 ## Next control point
 
-Inspect the existing self-play/RL implementation and establish the smallest
-valid on-policy trajectory plus complete autoregressive log-probability probe
-from the frozen Stage 4 root, using default Parquet and tournament only after a
-candidate policy is produced.
+Run the controlled same-deck candidate-vs-root and multi-opponent panel gate.
+Keep the root fallback unless grouped sibling-fiber evidence wins that gate.

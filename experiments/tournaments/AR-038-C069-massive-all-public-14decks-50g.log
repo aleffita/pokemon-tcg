@@ -1,0 +1,96 @@
+
+[tournament] durable log session started 2026-08-17T12:48:18 path=/Users/alefita/workdir/pokemon-tcg/experiments/tournaments/AR-038-C069-massive-all-public-14decks-50g.log
+[tournament] invocation argv=['/Users/alefita/workdir/pokemon-tcg/scripts/tournament.py', '--agent', 'agent/main.py', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/000_71c330a41fa4.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/001_c31efca1a5c9.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/002_c62637763f12.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/003_6c46537b74bc.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/004_9f340132ea33.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/005_341556f991e9.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/006_b99dbb2fb072.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/007_96da96270c18.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/008_6eea51cb073e.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/009_792fe261136e.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/010_901f6f8eb6bf.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/011_a471e20b2776.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/012_d7b11092b238.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/013_9585cc403601.json', '--games', '50', '--workers', '8', '--note', 'AR-038-C069 massive all-public 14-deck panel, 50 games/cell, baseline inference', '--report-json', 'experiments/tournaments/AR-038-C069-massive-all-public-14decks-50g.json', '--log-file', 'experiments/tournaments/AR-038-C069-massive-all-public-14decks-50g.log'] pid=83942 checkpoint_dir='/Users/alefita/workdir/pokemon-tcg/experiments/tournaments/AR-038-C069-massive-all-public-14decks-50g.json.cells'
+✓ Synchronized official Kaggle Leaderboard ratings for 161 decks in database.
+[bc-agent] loaded PyTorch FP32 model /Users/alefita/workdir/pokemon-tcg/experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/candidate.pt (nlayers=4, scratch=32, would_ko=True, mode=baseline)
+Note: AR-038-C069 massive all-public 14-deck panel, 50 games/cell, baseline inference
+[bc-agent] loaded MLX model /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_7935c_7l/model/bc_model/bc_best_mlx_final.pkl (val_acc=0.7160379226694391)
+[bc-agent] loaded MLX model /Users/alefita/workdir/pokemon-tcg/public_agents/submissions/first_sub_kaggle_2707/submission/model/bc_model/bc_best_mlx_final.pkl (val_acc=0.7160379226694391)
+[bc-agent] loaded /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_tftf0776/model/bc_best_final.pt (val_acc=0.6882261633872986)
+[bc-agent] loaded PyTorch model /Users/alefita/workdir/pokemon-tcg/public_agents/submissions/latest-submission-300elo/model/bc_model/bc_best_torch_fp16.pt (nlayers=4, scratch=32, dtype=torch.float16, would_ko=True, prospective=True)
+[bc-agent] loaded /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_0qgqejbl/model/bc_best_final.pt (val_acc=0.6816301941871643)
+[bc-agent] loaded /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_d6nw0gsm/model/bc_best_final.pt (val_acc=0.7192652225494385)
+[bc-agent] loaded MLX model /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_01ncwr4e/model/bc_model/bc_best_mlx_final.pkl (val_acc=0.7160379226694391)
+Sweep: 14 OUR decks per opponent (252 total matchup blocks)
+
+=========================================================================================================
+OUR AGENT DECK [NATIVO]: Submission Deck
+Local Elo: 682.1 (158 partidas) | Origem: Baralho Nativo da Submissao
+=========================================================================================================
+OPONENTE                     BARALHO OPONENTE               WIN   LOSS   DRAW    WIN%     TIME   PROGRESS
+---------------------------------------------------------------------------------------------------------
+multiprocessing.pool.RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/Users/alefita/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+                    ^^^^^^^^^^^^^^^^^^^
+  File "/Users/alefita/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/multiprocessing/pool.py", line 48, in mapstar
+    return list(map(*args))
+           ^^^^^^^^^^^^^^^^
+  File "/Users/alefita/workdir/pokemon-tcg/scripts/tournament.py", line 745, in _play_isolated_game
+    our_agent, our_module = load_agent(our_path, return_module=True)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alefita/workdir/pokemon-tcg/scripts/_common.py", line 134, in load_agent
+    spec.loader.exec_module(module)
+  File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "/Users/alefita/workdir/pokemon-tcg/agent/main.py", line 58, in <module>
+    from rl.policy_infer_torch import load_inference_checkpoint
+ImportError: cannot import name 'load_inference_checkpoint' from 'rl.policy_infer_torch' (/var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_01ncwr4e/rl/policy_infer_torch.py)
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/alefita/workdir/pokemon-tcg/scripts/tournament.py", line 1543, in <module>
+    main()
+  File "/Users/alefita/workdir/pokemon-tcg/scripts/tournament.py", line 938, in main
+    _run_single_tournament(our_path, args, root_db_path)
+  File "/Users/alefita/workdir/pokemon-tcg/scripts/tournament.py", line 1180, in _run_single_tournament
+    w, l, d, replay_html, game_results = run_matchup_parallel(
+                                         ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alefita/workdir/pokemon-tcg/scripts/tournament.py", line 788, in run_matchup_parallel
+    results = pool.map(_play_isolated_game, tasks)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alefita/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/multiprocessing/pool.py", line 367, in map
+    return self._map_async(func, iterable, mapstar, chunksize).get()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alefita/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/multiprocessing/pool.py", line 774, in get
+    raise self._value
+ImportError: cannot import name 'load_inference_checkpoint' from 'rl.policy_infer_torch' (/var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_01ncwr4e/rl/policy_infer_torch.py)
+
+[tournament] durable log session started 2026-08-17T12:49:07 path=/Users/alefita/workdir/pokemon-tcg/experiments/tournaments/AR-038-C069-massive-all-public-14decks-50g.log
+[tournament] invocation argv=['/Users/alefita/workdir/pokemon-tcg/scripts/tournament.py', '--agent', 'agent/main.py', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/000_71c330a41fa4.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/001_c31efca1a5c9.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/002_c62637763f12.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/003_6c46537b74bc.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/004_9f340132ea33.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/005_341556f991e9.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/006_b99dbb2fb072.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/007_96da96270c18.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/008_6eea51cb073e.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/009_792fe261136e.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/010_901f6f8eb6bf.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/011_a471e20b2776.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/012_d7b11092b238.json', '--deck-file', 'experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/decks/013_9585cc403601.json', '--games', '50', '--workers', '8', '--note', 'AR-038-C069 massive all-public 14-deck panel, 50 games/cell, baseline inference', '--report-json', 'experiments/tournaments/AR-038-C069-massive-all-public-14decks-50g.json', '--log-file', 'experiments/tournaments/AR-038-C069-massive-all-public-14decks-50g.log'] pid=84068 checkpoint_dir='/Users/alefita/workdir/pokemon-tcg/experiments/tournaments/AR-038-C069-massive-all-public-14decks-50g.json.cells'
+✓ Synchronized official Kaggle Leaderboard ratings for 161 decks in database.
+[bc-agent] loaded PyTorch FP32 model /Users/alefita/workdir/pokemon-tcg/experiments/autoresearch/AR-038-massive-onpolicy-13h/cycle-069/candidate.pt (nlayers=4, scratch=32, would_ko=True, mode=baseline)
+Note: AR-038-C069 massive all-public 14-deck panel, 50 games/cell, baseline inference
+[bc-agent] loaded MLX model /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_4xirk1lp/model/bc_model/bc_best_mlx_final.pkl (val_acc=0.7160379226694391)
+[bc-agent] loaded MLX model /Users/alefita/workdir/pokemon-tcg/public_agents/submissions/first_sub_kaggle_2707/submission/model/bc_model/bc_best_mlx_final.pkl (val_acc=0.7160379226694391)
+[bc-agent] loaded /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_p44_t341/model/bc_best_final.pt (val_acc=0.6882261633872986)
+[bc-agent] loaded PyTorch model /Users/alefita/workdir/pokemon-tcg/public_agents/submissions/latest-submission-300elo/model/bc_model/bc_best_torch_fp16.pt (nlayers=4, scratch=32, dtype=torch.float16, would_ko=True, prospective=True)
+[bc-agent] loaded /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_0s1osv_n/model/bc_best_final.pt (val_acc=0.6816301941871643)
+[bc-agent] loaded /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_efb753a8/model/bc_best_final.pt (val_acc=0.7192652225494385)
+[bc-agent] loaded MLX model /var/folders/p6/jtw811bs5dq7flb2xd3vrb_nmzznjl/T/ptcg_sub_ojxsocek/model/bc_model/bc_best_mlx_final.pkl (val_acc=0.7160379226694391)
+Sweep: 14 OUR decks per opponent (252 total matchup blocks)
+
+=========================================================================================================
+OUR AGENT DECK [NATIVO]: Submission Deck
+Local Elo: 681.3 (158 partidas) | Origem: Baralho Nativo da Submissao
+=========================================================================================================
+OPONENTE                     BARALHO OPONENTE               WIN   LOSS   DRAW    WIN%     TIME   PROGRESS
+---------------------------------------------------------------------------------------------------------
+random                       Nativo (Tarball)                21     29      0   42.0%   19.5s   [1/252] ETA: 2h22m
+first                        Nativo (Tarball)                10     40      0   20.0%   20.4s   [2/252] ETA: 2h16m
+lb1009_mega_lucario_ex_islet Deck #2 (OceanMix)               0     50      0    0.0%   18.2s   [3/252] ETA: 2h08m
+lb945_multiply_ivan          Deck #2 (OceanMix)               3     47      0    6.0%   19.2s   [4/252] ETA: 2h05m
+lb826_alakazam_seok          Deck #4 (KatR)                   5     45      0   10.0%   19.6s   [5/252] ETA: 2h05m
+lb814_crustle_emre           Deck #3                         24     26      0   48.0%   21.1s   [6/252] ETA: 2h07m
+lb798_lucario_pilkwang       Deck #2 (OceanMix)               0     50      0    0.0%   16.0s   [7/252] ETA: 2h02m
+starters/lb600_mega_lucario_ex Deck #8 (Cauã Macedo)            7     43      0   14.0%   20.8s   [8/252] ETA: 2h02m
+starters/lb526_iono          Deck #6 (Gayathri Rajeev77)      0     50      0    0.0%   24.8s   [9/252] ETA: 2h07m
+starters/lb510_mega_abomasnow_ex Deck #5 (starter_lb510_mega_abomasnow_ex)     4     46      0    8.0%   17.8s   [10/252] ETA: 2h04m
+starters/lb600_dragapult_ex  Deck #7 (Thai)                   1     49      0    2.0%   25.2s   [11/252] ETA: 2h05m
+sub/first_sub_kaggle_2707    Deck #1 (Majkel1337)             1     49      0    2.0%   24.4s   [12/252] ETA: 2h06m
