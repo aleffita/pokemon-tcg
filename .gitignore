@@ -27,6 +27,10 @@ model/
 *.db-shm
 *.db-wal
 
+experiments/autoresearch/**/sample.manifest.json
+experiments/autoresearch/**/trajectory_bundle.pt.gz
+experiments/autoresearch/**/*.pt
+
 # === RL ===
 data/
 model/results.db
